@@ -191,3 +191,60 @@ pub fn codec_roundtrip() -> Duration {
     let _back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
     start.elapsed()
 }
+
+// --- M1 samples (trace writer off critical path, §12; CPU crop, §10) -------
+
+/// §15.1 `trace_write_amplification`: the UI-thread cost of recording ONE
+/// frame's worth of trace records (1 event + 1 dedup-checked 4 KiB frame +
+/// 1 tree diff) through the bounded ring. The writer thread is off the
+/// critical path — this is the pure `try_send` cost the app feels.
+pub fn trace_write_amplification() -> Duration {
+    use guiwright_trace::schema::AdapterRecord;
+    use guiwright_trace::{TraceOptions, TraceRecorder};
+    use std::time::Instant;
+
+    let dir = std::env::temp_dir().join(format!("gw-bench-trace-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let options = TraceOptions {
+        output_path: dir.join("amplification.zip"),
+        test: "bench".into(),
+        app: "bench".into(),
+        adapter: AdapterRecord {
+            name: "bench".into(),
+            framework: "fixture".into(),
+            framework_version: "0".into(),
+        },
+        seed: None,
+        resolution: (1280, 800),
+        scale: 1.0,
+        frame_budget_bytes: 64 * 1024 * 1024,
+        ring_capacity: 8192,
+    };
+    let mut recorder = TraceRecorder::start(options);
+    let png = vec![7u8; 4096];
+
+    let started = Instant::now();
+    const FRAMES: u64 = 256;
+    for i in 0..FRAMES {
+        recorder.event(i, "action", "click @ (12, 8)");
+        recorder.frame(i, 0x1000 + i, png.clone());
+        recorder.tree_diff(i, vec![i], vec![], vec![], false);
+    }
+    let per_frame = started.elapsed() / u32::try_from(FRAMES).unwrap_or(u32::MAX);
+    let _ = recorder.stop();
+    let _ = std::fs::remove_dir_all(&dir);
+    per_frame
+}
+
+/// §15.1 `element_screenshot_crop`: crop a 240×160 element rect from a
+/// 1280×800 frame buffer (CPU path — no re-render, no GPU, §10).
+pub fn element_screenshot_crop() -> Duration {
+    use guiwright_shot::Image;
+    use std::time::Instant;
+
+    let frame = Image::solid(1280, 800, [40, 80, 120, 255]);
+    let started = Instant::now();
+    let region = guiwright_shot::crop(&frame, 100, 80, 340, 240).expect("crop");
+    let _ = (region.width, region.height);
+    started.elapsed()
+}
