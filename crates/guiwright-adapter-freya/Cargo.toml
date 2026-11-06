@@ -1,0 +1,22 @@
+[package]
+name = "guiwright-adapter-freya"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Guiwright Level-1 adapter for Freya (architecture §4.3): AccessibilityId bridge, key sequences with modifiers, frame-quantized event ordering; TestingRunner glue behind the `freya` feature"
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+thiserror.workspace = true
+
+# Framework-facing glue (§18: adapters are thin & feature-gated).
+freya-testing = { version = "0.5.0", optional = true }
+
+[features]
+freya = ["dep:freya-testing"]
+
+[lints]
+workspace = true
