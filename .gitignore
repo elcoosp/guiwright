@@ -1,0 +1,14 @@
+# Build artifacts
+target/
+bench-results/
+*.pprof
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local env / credentials — never commit
+.env
+.env.*
