@@ -1,0 +1,18 @@
+[package]
+name = "guiwright-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Proc macros for Guiwright: #[test] attribute that launches the embedded harness (architecture §5.2 guiwright-kit)"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0.111", features = ["full"] }
+quote = "1.0.42"
+proc-macro2 = "1.0.104"
+
+[lints]
+workspace = true
