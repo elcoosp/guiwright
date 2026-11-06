@@ -1,0 +1,25 @@
+[package]
+name = "guiwright-kit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "User-facing Guiwright kit (architecture §5.2/§6.3): App, Locators, #[test], fixtures, traces, screenshot baselines; embedded mode"
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+guiwright-shot.workspace = true
+guiwright-trace.workspace = true
+guiwright-macros = { path = "../guiwright-macros", version = "0.1.0" }
+accesskit.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zip = { version = "9.4.1", default-features = false, features = ["time"] }
+serde_json = "1.0.154"
+
+[lints]
+workspace = true
