@@ -61,6 +61,24 @@ jobs:
         env:
           WGPU_BACKEND: ${{ matrix.os == 'ubuntu-latest' && 'vulkan' || '' }}
 
+  adapter-features:
+    # §18 "adapters are thin & feature-gated": the default build carries no
+    # framework stack; these jobs compile-verify the feature-gated harness
+    # glue (M1: iced via iced_test/wgpu, freya via software Skia).
+    name: features (${{ matrix.adapter }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter:
+          - { crate: guiwright-adapter-iced, feature: iced }
+          - { crate: guiwright-adapter-freya, feature: freya }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --locked
+
   bench-guard:
     name: perf budgets (§15.7)
     runs-on: ubuntu-latest
