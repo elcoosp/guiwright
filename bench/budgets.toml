@@ -9,9 +9,11 @@
 # Enforced by `check_budgets` (guiwright-bench) in CI: every row with
 # `m0_measurable = true` is bound to a sample function in
 # `crates/guiwright-bench/src/budgets.rs` and p95 regressions fail the
-# build. Rows marked `false` are design targets that need a GPU, a trace
-# writer or remote-mode plumbing; they are recorded here so the targets
-# stay visible and get bound in later milestones.
+# build. Rows marked `false` are design targets that need a GPU or
+# remote-mode plumbing; they are recorded here so the targets stay
+# visible and get bound in later milestones. (The flag name predates the
+# milestone scheme; it means "measurable without a GPU" — M1 bound the
+# trace-write and crop rows.)
 #
 # Targets are design p50/p95 for a 1280x800, ~1 000-node tree on a dev
 # host. The CI guard multiplies them by `CI_HEADROOM` (= 3) because
@@ -84,8 +86,9 @@ id = "element_screenshot_crop"
 name = "Element screenshot (crop)"
 p50_us = 500
 p95_us = 2000
-notes = "crop, no re-render; needs a GPU device"
-m0_measurable = false
+notes = "crop from the last frame buffer, no re-render; bound at M1 (CPU crop, guiwright-shot::crop)"
+m0_measurable = true
+sample = "element_screenshot_crop"
 
 [[budget]]
 id = "auto_wait_settled_frame"
@@ -108,8 +111,9 @@ id = "trace_write_amplification"
 name = "Trace write amplification"
 p50_us = 1000
 p95_us = 1000
-notes = "< 1 ms/frame amortized; writer-thread off critical path (M1)"
-m0_measurable = false
+notes = "< 1 ms/frame amortized; UI-thread ring push measured, writer thread off critical path (bound at M1)"
+m0_measurable = true
+sample = "trace_write_amplification"
 
 # --- micro-suite guards (§15.7 micro: hash throughput, codec round-trips) ---
 [[budget]]
