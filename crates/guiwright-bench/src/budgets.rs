@@ -78,6 +78,14 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("diff_blob_lz4", crate::samples::diff_blob_lz4),
     ("frame_digest", crate::samples::frame_digest),
     ("codec_roundtrip", crate::samples::codec_roundtrip),
+    (
+        "trace_write_amplification",
+        crate::samples::trace_write_amplification,
+    ),
+    (
+        "element_screenshot_crop",
+        crate::samples::element_screenshot_crop,
+    ),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
