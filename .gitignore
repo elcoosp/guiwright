@@ -12,3 +12,9 @@ bench-results/
 # Local env / credentials — never commit
 .env
 .env.*
+
+# Guiwright per-test artifacts (§10/§12): failing-run screenshot artifacts
+# and trace archives never belong in version control.
+**/tests/screenshots/**/*.new.png
+**/tests/screenshots/**/*.diff.png
+target/guiwright/
