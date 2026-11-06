@@ -1,0 +1,25 @@
+[package]
+name = "guiwright-proto"
+description = "Guiwright Protocol (GWP): postcard codec, framing, blob side-channel, UDS transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+guiwright-core.workspace = true
+accesskit.workspace = true
+uuid = { version = "1.18.1", features = ["v4"] }
+serde.workspace = true
+postcard.workspace = true
+lz4_flex.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "sync", "time", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "test-util"] }
+tempfile.workspace = true

@@ -1,0 +1,46 @@
+//! Guiwright Protocol (GWP) — the wire between apps and clients (§7).
+//!
+//! * [`schema`] — versioned postcard schema (`GwpRequest::V1`, …)
+//! * [`framing`] — 4-byte LE length prefix + postcard body, size-guarded
+//! * [`blob`] — LZ4 side-channel for large payloads (frames/trees/traces)
+//! * [`uds`] — default transport: server loop + client
+//!
+//! Anything larger than a frame rides the blob side-channel so command
+//! latency stays independent of payload size (§15.6).
+
+#![forbid(unsafe_code)]
+
+pub mod blob;
+pub mod convert;
+pub mod framing;
+pub mod schema;
+pub mod uds;
+
+pub use schema::{
+    AdapterInfoV1, CapsV1, ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, InputEventV1,
+    NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1,
+    SemActionV1, TextMatchV1,
+};
+pub use uds::Client;
+
+use thiserror::Error;
+
+/// Transport and protocol errors.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum GwpError {
+    #[error("postcard codec: {0}")]
+    Codec(#[from] postcard::Error),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("frame body of {0} bytes exceeds the guard")]
+    FrameTooLarge(usize),
+    #[error("blob: {0}")]
+    Blob(String),
+    #[error("handshake failed: {0}")]
+    Handshake(&'static str),
+    #[error("driver rejected the request ({code:?}): {message}")]
+    Rejected { code: ErrorCode, message: String },
+    #[error("protocol misuse: {0}")]
+    Protocol(String),
+}
