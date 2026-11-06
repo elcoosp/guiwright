@@ -188,15 +188,28 @@ pub struct FrameRef {
     pub pixels: Option<std::sync::Arc<[u8]>>,
 }
 
-/// Level-2 logical-tree diff (§6.1 `logical_snapshot`). Populated by
-/// adapters without an AccessKit tree (iced, floem). Level-1 adapters
-/// return `None` from `logical_snapshot`.
-#[derive(Clone, Debug, Default)]
+/// Level-2 logical-tree diff (§6.1 `logical_snapshot`). The adapter
+/// synthesizes an **AccessKit-shaped** [`accesskit::TreeUpdate`] from its
+/// framework tree (roles from the widget-kind registry, labels from text,
+/// bounds from visible rects, test ids): the consumer tree, selectors,
+/// actionability and `expect` then run unchanged (§4.6 "adds role
+/// semantics via a contributed widget-kind registry"). The adapter mints
+/// the `NodeId`s, so [`FrameworkAdapter::act`] receives exactly those ids
+/// back (§6.1 NodeKey normalization). Level-1 adapters return `None` from
+/// `logical_snapshot`.
+#[derive(Clone, Debug)]
 pub struct LogicalTreeDiff {
-    /// Adapter-minted logical ids that left the tree.
+    /// Owning adapter's static name — the [`guiwright_core::NodeKey::Logical`]
+    /// vocabulary (e.g. `"iced"`).
+    pub adapter: &'static str,
+    /// The synthesized tree update (full update, carries `TreeInfo`).
+    pub update: accesskit::TreeUpdate,
+    /// Adapter-minted ids that left the tree since the last diff.
     pub removed: Vec<u64>,
-    /// `true` when anything was added/updated (adapter-specific payload
-    /// lands with the iced/floem adapters, M1).
+    /// `(minted node id, test id)` — registered into the O(1) hash on the
+    /// driver side after the update applies (§8.1 `getByTestId`).
+    pub test_ids: Vec<(u64, String)>,
+    /// `true` when anything was added/updated.
     pub changed: bool,
 }
 
