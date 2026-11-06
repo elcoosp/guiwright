@@ -1,0 +1,31 @@
+[package]
+name = "guiwright-bench"
+description = "Criterion benchmark suites and CI perf-budget guards (architecture §15.7)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+include = ["src/**", "benches/**"]
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-proto.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+postcard.workspace = true
+toml.workspace = true
+serde.workspace = true
+twox-hash.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "tree_service"
+harness = false
+
+[[bench]]
+name = "codec"
+harness = false

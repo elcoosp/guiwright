@@ -1,0 +1,131 @@
+# Performance budgets — architecture §15.1, stored here per §15.7
+# ("budgets from §15.1 stored in bench/budgets.toml").
+#
+# This file (bench/budgets.toml) is canonical. A byte-identical copy lives
+# in crates/guiwright-bench/src/budgets.toml because cargo packaging cannot
+# include files outside the crate directory; drift is caught by
+# guiwright-bench::budgets::tests::crate_copy_matches_canonical.
+#
+# Enforced by `check_budgets` (guiwright-bench) in CI: every row with
+# `m0_measurable = true` is bound to a sample function in
+# `crates/guiwright-bench/src/budgets.rs` and p95 regressions fail the
+# build. Rows marked `false` are design targets that need a GPU, a trace
+# writer or remote-mode plumbing; they are recorded here so the targets
+# stay visible and get bound in later milestones.
+#
+# Targets are design p50/p95 for a 1280x800, ~1 000-node tree on a dev
+# host. The CI guard multiplies them by `CI_HEADROOM` (= 3) because
+# shared runners are noisy; the guard exists to catch
+# order-of-magnitude regressions, not to benchmark hardware.
+schema = "gw-budgets/v1"
+
+[[budget]]
+id = "resolve_cached_index"
+name = "Resolve locator, cached index, embedded"
+p50_us = 50
+p95_us = 300
+notes = "hash/trie hit"
+m0_measurable = true
+sample = "resolve_cached_index"
+
+[[budget]]
+id = "resolve_remote_uds"
+name = "Resolve locator, remote (UDS round-trip)"
+p50_us = 600
+p95_us = 3000
+notes = "incl. marshalling; bound at M1 when remote benching lands"
+m0_measurable = false
+
+[[budget]]
+id = "apply_semantic_action"
+name = "Apply semantic action -> frame applied"
+p50_us = 16700
+p95_us = 33400
+notes = "1-2 frames; rendezvous-bound, not CPU-bound"
+m0_measurable = false
+
+[[budget]]
+id = "tree_diff_apply"
+name = "Tree diff apply (1k nodes)"
+p50_us = 100
+p95_us = 400
+notes = "consumer ChangeHandler"
+m0_measurable = true
+sample = "tree_diff_apply_1k"
+
+[[budget]]
+id = "snapshot_serialize"
+name = "Full tree snapshot serialize (postcard)"
+p50_us = 700
+p95_us = 2000
+notes = "~1k nodes, ~200 B/node"
+m0_measurable = true
+sample = "snapshot_serialize"
+
+[[budget]]
+id = "diff_blob_lz4"
+name = "TreeChanged diff blob (LZ4)"
+p50_us = 50
+p95_us = 300
+notes = "typ. < 2% nodes changed"
+m0_measurable = true
+sample = "diff_blob_lz4"
+
+[[budget]]
+id = "screenshot_readback"
+name = "Screenshot readback (warm, wgpu)"
+p50_us = 8000
+p95_us = 16000
+notes = "async map, ring of 3 buffers; needs a GPU device"
+m0_measurable = false
+
+[[budget]]
+id = "element_screenshot_crop"
+name = "Element screenshot (crop)"
+p50_us = 500
+p95_us = 2000
+notes = "crop, no re-render; needs a GPU device"
+m0_measurable = false
+
+[[budget]]
+id = "auto_wait_settled_frame"
+name = "Auto-wait wait per settled frame"
+p50_us = 0
+p95_us = 0
+notes = "~0 CPU by design (zero polling, 15.3); verified by zero-alloc assertions, not a timing guard"
+m0_measurable = false
+
+[[budget]]
+id = "driver_memory"
+name = "Driver memory (steady state)"
+p50_us = 0
+p95_us = 0
+notes = "< 32 MB + trace ring <= 256 MB cap; memory budget, not timing"
+m0_measurable = false
+
+[[budget]]
+id = "trace_write_amplification"
+name = "Trace write amplification"
+p50_us = 1000
+p95_us = 1000
+notes = "< 1 ms/frame amortized; writer-thread off critical path (M1)"
+m0_measurable = false
+
+# --- micro-suite guards (§15.7 micro: hash throughput, codec round-trips) ---
+[[budget]]
+id = "frame_digest_xxh3"
+name = "Frame digest (xxh3, strided samples)"
+p50_us = 50
+p95_us = 300
+notes = "15.5 hash-dedup hot path; M0 micro-suite guard"
+m0_measurable = true
+sample = "frame_digest"
+
+[[budget]]
+id = "codec_roundtrip"
+name = "Codec round-trip (postcard)"
+p50_us = 10
+p95_us = 100
+notes = "GWP command envelope; M0 micro-suite guard"
+m0_measurable = true
+sample = "codec_roundtrip"
