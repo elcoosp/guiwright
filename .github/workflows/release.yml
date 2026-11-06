@@ -1,0 +1,72 @@
+name: Release
+
+# git-cliff driven releases: pushing a `v*.*.*` tag regenerates the
+# changelog, packages the crates and publishes a GitHub Release whose
+# notes come from git-cliff (§15.7-adjacent release flow).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  release:
+    name: changelog + package + publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history + tags: git-cliff walks the whole log.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.14.2
+
+      # Gate the release on the full suite (GPU-less hosts still pass:
+      # the masonry pixel test degrades to a clean `Unsupported`).
+      - name: Test suite (--locked)
+        run: cargo test --workspace --locked
+
+      - name: Release notes for this tag
+        run: git-cliff --latest --strip header > RELEASE_NOTES.md
+
+      - name: Package crates
+        run: |
+          cargo package --workspace --locked --no-verify
+          mkdir -p dist
+          cp target/package/*.crate dist/
+
+      - name: Refresh CHANGELOG.md and commit if changed
+        run: |
+          git-cliff --output CHANGELOG.md
+          if ! git diff --quiet -- CHANGELOG.md; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add CHANGELOG.md
+            git commit -m "chore(release): refresh changelog for ${GITHUB_REF_NAME} [skip ci]"
+            git push
+          fi
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: RELEASE_NOTES.md
+          files: dist/*.crate
+          fail_on_unmatched_files: true
