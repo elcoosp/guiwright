@@ -1,0 +1,27 @@
+[package]
+name = "guiwright-adapter-masonry"
+description = "Guiwright FrameworkAdapter for Masonry/Xilem: embedded, windowless, AccessKit-tree driven"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+# masonry pins the previous accesskit major; the adapter normalizes both
+# dialects (see src/normalize.rs) and reads the harness consumer tree from
+# the matching consumer version.
+accesskit_consumer = "0.31.0"
+masonry_core.workspace = true
+masonry_testing.workspace = true
+twox-hash.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+masonry = "0.4.0"
