@@ -1,0 +1,24 @@
+[package]
+name = "guiwright-trace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "gwtrace/v1 zip trace recorder for Guiwright (architecture §12): bounded SPSC channel -> writer thread, postcard+LZ4 trees, hash-deduped frames"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = "1.0.154"
+postcard.workspace = true
+lz4_flex.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+zip = { version = "9.4.1", default-features = false, features = ["time"] }
+twox-hash.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
