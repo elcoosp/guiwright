@@ -13,7 +13,7 @@ use accesskit::NodeId;
 
 use crate::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
-    FrameworkAdapter, PumpOutcome, SemAction,
+    FrameworkAdapter, LogicalTreeDiff, PumpOutcome, SemAction,
 };
 use guiwright_core::test_util::Fixture;
 
@@ -22,12 +22,15 @@ use guiwright_core::test_util::Fixture;
 pub struct MockAdapter {
     meta: AdapterMeta,
     updates: VecDeque<accesskit::TreeUpdate>,
+    logical: VecDeque<LogicalTreeDiff>,
     frames: VecDeque<u64>,
     seq: u64,
     /// Actions recorded for assertions.
     actions: Vec<(NodeId, SemAction)>,
     /// Scripted action results (popped in order; default = success).
     action_results: VecDeque<Result<(u64, String), AdapterError>>,
+    /// Scripted pixels for `render_frame` (M1 capture pipeline tests, §10).
+    pixels: Option<(u32, u32, std::sync::Arc<[u8]>)>,
     clock: ClockState,
     /// Number of pumps before the adapter reports no repaint requested
     /// (quiescence model). Zero = settled immediately.
@@ -59,10 +62,12 @@ impl MockAdapter {
                 },
             },
             updates: VecDeque::new(),
+            logical: VecDeque::new(),
             frames: VecDeque::new(),
             seq: 0,
             actions: Vec::new(),
             action_results: VecDeque::new(),
+            pixels: None,
             clock: ClockState {
                 virtual_time: None,
                 paused: false,
@@ -77,6 +82,21 @@ impl MockAdapter {
         self.repaints_left += 1;
     }
 
+    /// Switch the mock to the Level-2 persona (an iced/floem-shaped
+    /// adapter: no AccessKit tree of its own, synthesized logical diffs).
+    pub fn as_logical(mut self) -> Self {
+        self.meta.name = "mock-logical";
+        self.meta.caps.logical_snapshot = true;
+        self.meta.caps.tree_update = false;
+        self
+    }
+
+    /// Queue a logical diff (Level-2 persona) for the next pump.
+    pub fn push_logical(&mut self, diff: LogicalTreeDiff) {
+        self.logical.push_back(diff);
+        self.repaints_left += 1;
+    }
+
     /// Queue a presented frame (hash) to be delivered on the next pump.
     pub fn push_frame(&mut self, hash: u64) {
         self.frames.push_back(hash);
@@ -86,6 +106,16 @@ impl MockAdapter {
     /// Script the result of the next `act` call.
     pub fn push_action_result(&mut self, result: Result<(u64, String), AdapterError>) {
         self.action_results.push_back(result);
+    }
+
+    /// Script RGBA8 pixels for `render_frame`/`last_frame` — also flips
+    /// the capability row, so capture-pipeline tests exercise the same
+    /// contract real adapters do (§10, M1).
+    pub fn with_frame_pixels(mut self, width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        self.meta.caps.render_frame = true;
+        self.meta.caps.last_frame = true;
+        self.pixels = Some((width, height, rgba.into()));
+        self
     }
 
     pub fn actions(&self) -> &[(NodeId, SemAction)] {
@@ -109,8 +139,10 @@ impl FrameworkAdapter for MockAdapter {
     fn pump(&mut self, _deadline: FrameDeadline) -> PumpOutcome {
         self.seq += 1;
         // Repaint requested while scripted work remains.
-        let repaint_requested =
-            !self.updates.is_empty() || !self.frames.is_empty() || self.repaints_left > 0;
+        let repaint_requested = !self.updates.is_empty()
+            || !self.logical.is_empty()
+            || !self.frames.is_empty()
+            || self.repaints_left > 0;
         // Every pump presents one pass (harness-driven adapters run a full
         // pass per pump).
         let hash = self.frames.pop_front().unwrap_or(0);
@@ -127,6 +159,10 @@ impl FrameworkAdapter for MockAdapter {
 
     fn tree_update(&mut self) -> Option<accesskit::TreeUpdate> {
         self.updates.pop_front()
+    }
+
+    fn logical_snapshot(&mut self) -> Option<LogicalTreeDiff> {
+        self.logical.pop_front()
     }
 
     fn act(&mut self, node: NodeId, action: SemAction) -> Result<ActionOutcome, AdapterError> {
@@ -161,6 +197,41 @@ impl FrameworkAdapter for MockAdapter {
             ClockCmd::Resume => self.clock.paused = false,
         }
         Ok(self.clock)
+    }
+
+    fn last_frame(&mut self) -> Option<crate::adapter::FrameRef> {
+        self.render_frame(None).ok()
+    }
+
+    fn render_frame(
+        &mut self,
+        size: Option<(u32, u32)>,
+    ) -> Result<crate::adapter::FrameRef, AdapterError> {
+        let (w, h, pixels) = self.pixels.as_ref().ok_or(AdapterError::Unsupported(
+            "render_frame (script pixels via with_frame_pixels)",
+        ))?;
+        // A size override re-renders at the requested viewport (§6.1) — the
+        // mock stretches by repeating (tests use matching sizes).
+        let (w, h, pixels) = match size {
+            Some((sw, sh)) if (sw, sh) != (*w, *h) => {
+                let count = (sw as usize) * (sh as usize) * 4;
+                let mut scaled = Vec::with_capacity(count);
+                while scaled.len() < count {
+                    let take = (count - scaled.len()).min(pixels.len());
+                    scaled.extend_from_slice(&pixels[..take]);
+                }
+                (sw, sh, std::sync::Arc::from(scaled.into_boxed_slice()))
+            }
+            _ => (*w, *h, std::sync::Arc::clone(pixels)),
+        };
+        Ok(crate::adapter::FrameRef {
+            stamp: crate::adapter::FrameStamp {
+                seq: self.seq,
+                hash: 0,
+            },
+            size: (w, h),
+            pixels: Some(pixels),
+        })
     }
 }
 
