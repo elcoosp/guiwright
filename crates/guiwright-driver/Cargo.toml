@@ -1,0 +1,28 @@
+[package]
+name = "guiwright-driver"
+description = "In-app host: FrameworkAdapter trait, session, action scheduler, tree service wiring, GWP server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["mock"]
+# Scriptable in-process adapter used by driver/bench/kit tests and examples.
+mock = []
+
+[dependencies]
+guiwright-core.workspace = true
+accesskit.workspace = true
+guiwright-proto.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time", "macros"] }
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "test-util"] }
+tempfile.workspace = true
