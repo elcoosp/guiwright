@@ -1,0 +1,20 @@
+[package]
+name = "guiwright-core"
+description = "Framework-agnostic brain of Guiwright: tree service, selectors, actionability, expect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+accesskit.workspace = true
+accesskit_consumer.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+twox-hash.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
