@@ -116,9 +116,20 @@ impl<A: FrameworkAdapter> Session<A> {
             summary.tree_changed = true;
         }
         if let Some(diff) = self.adapter.logical_snapshot() {
-            // Level-2 adapters fold logical diffs into bounds bookkeeping;
-            // their payload lands with the iced/floem adapters (M1).
-            let _ = diff;
+            // Level-2 adapters synthesize an AccessKit-shaped update
+            // (§6.1): selectors, actionability and expect run unchanged on
+            // the consumer tree; actions come back with the adapter-minted
+            // NodeIds (session.rs `node_id`).
+            let _diff = self.tree.apply_update(diff.update);
+            for (node, test_id) in diff.test_ids {
+                self.tree.register_test_id(
+                    guiwright_core::NodeKey::AccessKit {
+                        tree: accesskit::TreeId::ROOT,
+                        node: NodeId(node),
+                    },
+                    test_id,
+                );
+            }
             self.tree_seq += 1;
             summary.tree_changed = true;
         }
@@ -605,6 +616,43 @@ mod tests {
             .expect_err("four buttons");
         assert!(matches!(err, CoreError::Other(_)), "{err}");
         assert!(err.to_string().contains("resolved to"), "{err}");
+    }
+
+    /// Level-2 (M1): an iced-shaped adapter synthesizes an AccessKit
+    /// update through `logical_snapshot`; selectors, actionability and
+    /// actions must run unchanged, and the adapter-minted NodeId routes
+    /// back to the adapter (§6.1).
+    #[test]
+    fn logical_snapshot_resolves_and_routes_actions() {
+        let fixture = Fixture::buttons();
+        let mut adapter = MockAdapter::bare().as_logical();
+        adapter.push_logical(crate::adapter::LogicalTreeDiff {
+            adapter: "mock-logical",
+            update: fixture.initial_update(),
+            removed: vec![],
+            test_ids: vec![],
+            changed: true,
+        });
+        adapter.push_frame(1);
+        adapter.push_frame(1);
+        let mut session = Session::new(adapter);
+        session.settle(Instant::now() + Duration::from_secs(1));
+
+        let outcome = session.click(&save_selector()).expect("logical click");
+        assert_eq!(outcome.detail, "clicked");
+        let actions = session.adapter().actions();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].1, SemAction::Click);
+        assert_eq!(
+            actions[0].0, fixture.save_button,
+            "the adapter-minted id routes back unchanged"
+        );
+
+        // ...and expect() assertions work on the synthesized tree too.
+        session
+            .expect(Selector::role_named(accesskit::Role::Button, "Confirm"))
+            .to_be_disabled()
+            .expect("logical tree carries semantics");
     }
 
     #[test]
