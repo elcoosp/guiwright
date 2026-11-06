@@ -1,0 +1,19 @@
+[package]
+name = "guiwright-adapter-egui"
+description = "Guiwright FrameworkAdapter for egui: embedded pump, AccessKit tree, semantic actions, virtual clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+egui.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+twox-hash.workspace = true
