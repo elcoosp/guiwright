@@ -29,8 +29,9 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 }
 
 /// The request table, in wire order (§7). Append-only: `Video` follows
-/// `Bye` (M3) and `Window` follows `Video` (M6, §16 v0.4 multi-window);
-/// the pinning tests enforce the order.
+/// `Bye` (M3), `Window` follows `Video` (M6, §16 v0.4 multi-window) and
+/// `Gesture` follows `Window` (M7, §9 input pipeline); the pinning tests
+/// enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -45,17 +46,19 @@ const REQUESTS: &[Variant] = &[
         "Action",
         "{ node: NodeKeyV1, generation: u32 varint, action: SemActionV1, force: bool, timeout_ms: u64 varint }",
     ),
-    v(5, "Input", "{ events: seq<InputEventV1> }"),
+    v(5, "Input", "{ events: seq<InputEventV1> } — injected into the sending connection's active window target (M7) → InputQueued"),
     v(6, "Clock", "ClockV1 (see domains.clock)"),
     v(7, "Mock", "MockV1 (see domains.mock)"),
     v(8, "Inspect", "InspectV1 (see domains.inspect)"),
     v(9, "Bye", "—"),
     v(10, "Video", "VideoV1 (see domains.video)"),
     v(11, "Window", "WindowV1 (see domains.window)"),
+    v(12, "Gesture", "GestureV1 (see domains.gesture)"),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
-/// `Bye` (M3); the M6 window replies append at 12–13.
+/// `Bye` (M3), the M6 window replies append at 12–13 and the M7
+/// `GestureDone` reply at 14.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -91,6 +94,11 @@ const RESPONSES: &[Variant] = &[
     ),
     v(12, "Windows", "{ windows: seq<WindowInfoV1> }"),
     v(13, "WindowUsed", "{ handle: string }"),
+    v(
+        14,
+        "GestureDone",
+        "{ frame_seq: u64 varint, detail: string }",
+    ),
 ];
 
 /// Server-push events (multiplexed by `seq` per topic, §7).
@@ -215,6 +223,13 @@ pub fn gwp_schema_json() -> serde_json::Value {
             "window": domain_table("WindowV1", &[
                 (0, "List", "— → Windows"),
                 (1, "Use", "{ handle: string (WindowInfoV1.handle) } → WindowUsed | Error { UnknownWindow }; aims the CALLING connection at the target — subsequent Resolves only see that window's subtree (per-connection state, §16 v0.4)"),
+            ]),
+            "gesture": domain_table("GestureV1", &[
+                (0, "Click", "{ x: f64, y: f64, button: PointerButtonV1, count: u32 varint (Playwright clickCount: 1 = click, 2 = double-click) } → GestureDone; synthesized as move→down→up ×count (§9)"),
+                (1, "Drag", "{ from_x: f64, from_y: f64, to_x: f64, to_y: f64, button: PointerButtonV1 } → GestureDone; down→ratchet-interpolated moves (adapter pacing, ~5 px/tick)→up (§9)"),
+                (2, "Wheel", "{ dx: f64, dy: f64 } → GestureDone; logical-px deltas"),
+                (3, "Key", "{ key: string, modifiers: seq<string> } → GestureDone; synthesized as down→up (§8.4 key-name vocabulary)"),
+                (4, "Type", "{ text: string } → GestureDone; one TextInput commit — adapters translate to IME or per-key events (§4.2)"),
             ]),
         },
         "window_info": {
