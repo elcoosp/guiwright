@@ -23,6 +23,7 @@
 
 mod frame_digest;
 mod input;
+pub mod overlay;
 
 pub use input::translate_input;
 
@@ -262,8 +263,12 @@ impl FrameworkAdapter for EguiAdapter {
             ClockCmd::RunFor(dt) => {
                 self.time += dt.as_secs_f64();
             }
+            ClockCmd::SetTime(t) => {
+                self.time = t.as_secs_f64();
+            }
             ClockCmd::Pause => self.clock_paused = true,
             ClockCmd::Resume => self.clock_paused = false,
+            ClockCmd::Probe => {}
         }
         Ok(ClockState {
             virtual_time: Some(Duration::from_secs_f64(self.time.max(0.0))),
