@@ -20,6 +20,7 @@ use guiwright_core::{CoreError, NodeKey, Selector};
 
 use crate::adapter::{ActionOutcome, FrameDeadline, FrameworkAdapter, InputEvent, SemAction};
 use crate::clock::{ClockReport, ClockService, LedgerCommand};
+use crate::gesture::{Gesture, synthesize};
 use crate::seams::SeamRegistry;
 use guiwright_trace::video::{VideoOptions, VideoRecorder, VideoSummary};
 
@@ -37,6 +38,62 @@ impl Default for ActionOpts {
             timeout: DEFAULT_TIMEOUT,
             force: false,
         }
+    }
+}
+
+/// Result of a synthesized gesture (§9, M7) — the `GestureDone` reply's
+/// payload in embedded form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GestureOutcome {
+    /// The frame the batch was applied at (rendezvous, §15.4).
+    pub applied_at_frame: u64,
+    /// How many raw events the synthesis produced.
+    pub events: usize,
+    /// Human-readable summary (positions, key names, event count).
+    pub detail: String,
+}
+
+/// The `GestureDone` detail line: positions and event count, matching the
+/// golden-vector wording ("clicked at (12.5, 30) — 3 events").
+fn gesture_detail(gesture: &Gesture, events: usize) -> String {
+    let n = if events == 1 {
+        "1 event".to_string()
+    } else {
+        format!("{events} events")
+    };
+    match gesture {
+        Gesture::Click {
+            x,
+            y,
+            count: 1,
+            ..
+        } => format!("clicked at ({x}, {y}) — {n}"),
+        Gesture::Click {
+            x,
+            y,
+            count: 2,
+            ..
+        } => format!("double-clicked at ({x}, {y}) — {n}"),
+        Gesture::Click { x, y, count, .. } => {
+            format!("clicked ×{count} at ({x}, {y}) — {n}")
+        }
+        Gesture::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            ..
+        } => format!(
+            "dragged ({from_x}, {from_y}) → ({to_x}, {to_y}) — {n}"
+        ),
+        Gesture::Wheel { dx, dy } => format!("wheeled ({dx}, {dy}) — {n}"),
+        Gesture::Key { key, modifiers } if modifiers.is_empty() => {
+            format!("pressed {key} — {n}")
+        }
+        Gesture::Key { key, modifiers } => {
+            format!("pressed {}+{key} — {n}", modifiers.join("+"))
+        }
+        Gesture::Type { text } => format!("typed {} chars — {n}", text.chars().count()),
     }
 }
 
@@ -404,6 +461,87 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Drop the window scope (back to the unscoped, whole-tree surface).
     pub fn clear_resolve_scope(&mut self) {
         self.tree.set_scope(None);
+    }
+
+    // --- Raw input & gestures (§9 pipeline, M7) -------------------------
+
+    /// The session's default window target (§9): the first target the
+    /// adapter reports — a single-window adapter's `main`, a multi-window
+    /// adapter's primary window. Unscoped injections land here.
+    pub fn default_window(&mut self) -> Result<String, CoreError> {
+        self.windows()
+            .into_iter()
+            .next()
+            .map(|w| w.handle)
+            .ok_or_else(|| CoreError::Other("session has no window targets".into()))
+    }
+
+    /// Resolve the input target (§9 coordinates are window-relative):
+    /// an explicit handle is validated against the tree (the source of
+    /// truth, §16 v0.4); `None` (or empty) selects the session default.
+    fn input_target(&mut self, window: Option<&str>) -> Result<String, CoreError> {
+        match window {
+            Some(handle) if !handle.is_empty() => {
+                self.window_scope(handle)?;
+                Ok(handle.to_string())
+            }
+            _ => self.default_window(),
+        }
+    }
+
+    /// Inject a batch of raw input events into a window's pipeline (§9).
+    /// Coordinates are logical px relative to that window; the batch
+    /// applies inside the next frame (one rendezvous pump, §15.4) and the
+    /// returned frame seq is the `InputQueued` reply's. An empty batch is
+    /// an honest no-op that still pumps.
+    pub fn send_input(
+        &mut self,
+        events: Vec<InputEvent>,
+        window: Option<&str>,
+    ) -> Result<u64, CoreError> {
+        let target = self.input_target(window)?;
+        self.inject(events, &target)?;
+        self.pump();
+        Ok(self.frame_seq)
+    }
+
+    /// Synthesize and apply a high-level gesture (§9): the adapter's
+    /// pacing table drives the synthesis (§18 "per-adapter gesture pacing
+    /// tables"), the batch rides the same per-window injection as
+    /// [`Session::send_input`], one rendezvous pump applies it.
+    pub fn perform_gesture(
+        &mut self,
+        gesture: Gesture,
+        window: Option<&str>,
+    ) -> Result<GestureOutcome, CoreError> {
+        let pacing = self.adapter.gesture_pacing();
+        let events = synthesize(&gesture, &pacing);
+        if events.is_empty() {
+            return Err(CoreError::Other(
+                "gesture synthesizes no events (click count 0?)".into(),
+            ));
+        }
+        let target = self.input_target(window)?;
+        let count = events.len();
+        self.inject(events, &target)?;
+        self.pump();
+        Ok(GestureOutcome {
+            applied_at_frame: self.frame_seq,
+            events: count,
+            detail: gesture_detail(&gesture, count),
+        })
+    }
+
+    /// Forward a synthesized/raw batch through the adapter's window-aware
+    /// hook (§9 fidelity rule: synthetic events enter at the same choke
+    /// point as OS events).
+    fn inject(&mut self, events: Vec<InputEvent>, target: &str) -> Result<(), CoreError> {
+        for ev in &events {
+            self.adapter
+                .input_window(target, ev.clone())
+                .map_err(|e| CoreError::Other(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// The event-driven wait loop (§15.3): pump → feed events → re-check.
