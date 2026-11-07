@@ -83,6 +83,12 @@ pub enum RequestV1 {
     /// them — Playwright's "targets per window". Wire discipline: appended
     /// after `Video` (discriminant 11); see [`RequestV1::Video`].
     Window(WindowV1),
+    /// Gesture domain (§9 input pipeline, M7): high-level synthetic
+    /// gestures — the session synthesizes the raw event sequence
+    /// (per-adapter pacing, §18) and injects it through the target
+    /// window's real pipeline. Wire discipline: appended after `Window`
+    /// (discriminant 12); see [`RequestV1::Video`].
+    Gesture(GestureV1),
 }
 
 /// `Clock { InstallVirtual | FastForward(ms) | RunFor(ms) | Pause | Resume |
@@ -203,6 +209,46 @@ pub struct WindowInfoV1 {
     pub focused: bool,
 }
 
+/// `Gesture { Click | Drag | Wheel | Key | Type }` (§9 synthesis, M7): the
+/// wire-level gesture vocabulary. The **driver** synthesizes the raw
+/// `InputEventV1` sequence (click = move→down→up; drag = down→
+/// ratchet-interpolated moves→up, §9 "ratchet ~5 px/tick"; key = down→up;
+/// type = one text commit) from its adapter's pacing table — synthesis is
+/// driver-side so each framework's quirks stay encoded at one place
+/// (§18 "per-adapter gesture pacing tables"). Coordinates are logical px
+/// **relative to the target window** (the sending connection's active
+/// target, defaulting to `main`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum GestureV1 {
+    /// Press and release at a window-relative position. `count` follows
+    /// Playwright's clickCount: 1 = click, 2 = double-click (down/up
+    /// repeated at the same point).
+    Click {
+        x: f64,
+        y: f64,
+        button: PointerButtonV1,
+        count: u32,
+    },
+    /// Drag from one window-relative position to another; the driver
+    /// interpolates the moves (§9 ratchet pacing) so hover/drag state
+    /// machines see a real pointer path.
+    Drag {
+        from_x: f64,
+        from_y: f64,
+        to_x: f64,
+        to_y: f64,
+        button: PointerButtonV1,
+    },
+    /// Wheel scroll by logical-px deltas.
+    Wheel { dx: f64, dy: f64 },
+    /// Press and release a key with modifiers (key names are the §8.4
+    /// `Press` vocabulary, e.g. "Enter", "a").
+    Key { key: String, modifiers: Vec<String> },
+    /// Commit text in one step (adapters translate to IME or per-key
+    /// events per §4.2 keyboard fidelity).
+    Type { text: String },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ResponseV1 {
     /// Handshake reply (§7 `Welcome`).
@@ -279,6 +325,16 @@ pub enum ResponseV1 {
     /// stamps subsequent requests with it.
     WindowUsed {
         handle: String,
+    },
+    /// Gesture domain reply (§9, M7): the synthesized event batch was
+    /// injected through the target window's pipeline and applied inside
+    /// the next frame. Append-only wire discipline — see
+    /// [`RequestV1::Video`].
+    GestureDone {
+        /// The frame the gesture was applied at (rendezvous, §15.4).
+        frame_seq: u64,
+        /// Human-readable synthesis summary (event count, positions).
+        detail: String,
     },
 }
 
@@ -771,12 +827,62 @@ mod tests {
         }
     }
 
+    /// §7 `Gesture` domain round-trip (M7, §9 input pipeline): the
+    /// high-level synthetic gestures and the `GestureDone` reply.
+    #[test]
+    fn gesture_domain_roundtrip() {
+        let requests = [
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Click {
+                x: 12.5,
+                y: 30.0,
+                button: PointerButtonV1::Primary,
+                count: 1,
+            })),
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Click {
+                x: 4.0,
+                y: 8.0,
+                button: PointerButtonV1::Secondary,
+                count: 2,
+            })),
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Drag {
+                from_x: 10.0,
+                from_y: 10.0,
+                to_x: 110.0,
+                to_y: 60.0,
+                button: PointerButtonV1::Primary,
+            })),
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Wheel { dx: 0.0, dy: -120.0 })),
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Key {
+                key: "Enter".into(),
+                modifiers: vec!["Shift".into()],
+            })),
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Type {
+                text: "héllo wörld".into(),
+            })),
+        ];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [GwpResponse::V1(ResponseV1::GestureDone {
+            frame_seq: 20,
+            detail: "clicked at (12.5, 30) — 3 events".into(),
+        })];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
     /// postcard encodes enum variants as a varint of the variant index, so
     /// **variant order is the wire format**. §7 "old clients get clean
     /// errors" → within a `V1` envelope variants are append-only: pre-M3
     /// requests keep discriminants 0–9 (`Bye` = 9), `Video` appends at
-    /// 10 and the M6 `Window` domain at 11; responses keep 0–10 (`Bye` =
-    /// 10), `VideoFile` appends at 11 and the M6 window replies at 12–13.
+    /// 10, the M6 `Window` domain at 11 and the M7 `Gesture` domain at 12;
+    /// responses keep 0–10 (`Bye` = 10), `VideoFile` appends at 11, the
+    /// M6 window replies at 12–13 and the M7 `GestureDone` reply at 14.
     /// Reordering or inserting mid-enum fails this test — add new variants
     /// at the end and extend the pin list instead.
     #[test]
@@ -831,6 +937,11 @@ mod tests {
         assert_eq!(discriminant(&RequestV1::Bye), 9);
         assert_eq!(discriminant(&RequestV1::Video(VideoV1::Stop)), 10);
         assert_eq!(discriminant(&RequestV1::Window(WindowV1::List)), 11);
+        // M7 (§9): the gesture domain appends after Window.
+        assert_eq!(
+            discriminant(&RequestV1::Gesture(GestureV1::Wheel { dx: 0.0, dy: 0.0 })),
+            12
+        );
 
         // Responses.
         assert_eq!(
@@ -926,6 +1037,13 @@ mod tests {
             }),
             13
         );
+        assert_eq!(
+            discriminant(&ResponseV1::GestureDone {
+                frame_seq: 0,
+                detail: String::new()
+            }),
+            14
+        );
 
         // Nested domain enums are pinned too — other-language clients
         // hard-code these tables (clients/typescript).
@@ -956,6 +1074,34 @@ mod tests {
             }),
             1
         );
+        assert_eq!(
+            discriminant(&GestureV1::Click {
+                x: 0.0,
+                y: 0.0,
+                button: PointerButtonV1::Primary,
+                count: 1
+            }),
+            0
+        );
+        assert_eq!(
+            discriminant(&GestureV1::Drag {
+                from_x: 0.0,
+                from_y: 0.0,
+                to_x: 0.0,
+                to_y: 0.0,
+                button: PointerButtonV1::Primary
+            }),
+            1
+        );
+        assert_eq!(discriminant(&GestureV1::Wheel { dx: 0.0, dy: 0.0 }), 2);
+        assert_eq!(
+            discriminant(&GestureV1::Key {
+                key: String::new(),
+                modifiers: Vec::new()
+            }),
+            3
+        );
+        assert_eq!(discriminant(&GestureV1::Type { text: String::new() }), 4);
         // ErrorCode is flat on the wire (u8 in Error payloads) — appending
         // UnknownWindow keeps the pre-M6 codes byte-identical.
         assert_eq!(discriminant(&ErrorCode::Internal), 7);
