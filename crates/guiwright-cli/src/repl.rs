@@ -106,6 +106,12 @@ impl Repl {
         self.timeout_ms
     }
 
+    /// Override the resolve/action deadline (the runner injects the
+    /// spec's `timeout_ms` here; client-side only, no wire change).
+    pub fn set_timeout_ms(&mut self, ms: u64) {
+        self.timeout_ms = ms;
+    }
+
     /// Execute one input line. Blank lines and `#` comments produce no
     /// output; unknown or malformed commands produce exactly one error
     /// line; every failure leaves the session usable.
@@ -173,6 +179,17 @@ impl Repl {
                 None => Line::Info("no node resolved — run `get …` first".into()),
             }]),
             "get" => self.get_command(tokens).await,
+            "expect" => {
+                // The runner's assertion wording over the same resolve
+                // path (M5): like `get`, stores the current node, but
+                // failures read as expectation failures.
+                let mut get_tokens = vec!["get".to_string()];
+                get_tokens.extend_from_slice(&tokens[1..]);
+                match self.get_command(&get_tokens).await {
+                    Ok(lines) => Ok(lines),
+                    Err(err) => Err(format!("expectation failed: {err}")),
+                }
+            }
             "click" => self.simple_action(tokens, SemActionV1::Click).await,
             "dblclick" => self.simple_action(tokens, SemActionV1::DoubleClick).await,
             "hover" => self.simple_action(tokens, SemActionV1::Hover).await,
@@ -485,6 +502,7 @@ impl Repl {
             "  get role <Role> [name]      resolve a locator (strict mode)",
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
+            "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
             "  press <key> [modifiers…]    e.g. `press Enter`, `press a Ctrl`",
