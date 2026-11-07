@@ -17,7 +17,7 @@ use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InputEventV1, InspectV1, MockV1, NodeKeyV1,
     PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1, SemActionV1, TextMatchV1,
-    VideoOptsV1, VideoV1,
+    VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -145,6 +145,14 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         })),
     );
     push("video_stop", RequestV1::Video(VideoV1::Stop));
+    // M6 (§16 v0.4): the Window domain appends after Video.
+    push("window_list", RequestV1::Window(WindowV1::List));
+    push(
+        "window_use",
+        RequestV1::Window(WindowV1::Use {
+            handle: "a6000000-0000-0000-0000-000000000001".into(),
+        }),
+    );
     push("bye", RequestV1::Bye);
     out
 }
@@ -304,6 +312,41 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
             "frames": 42,
             "dropped": 7,
             "duration_ms": 1680,
+        }),
+    );
+    // M6 (§16 v0.4): the window replies append after VideoFile.
+    push(
+        "windows",
+        ResponseV1::Windows {
+            windows: vec![
+                WindowInfoV1 {
+                    handle: "a6000000-0000-0000-0000-000000000001".into(),
+                    title: "Editor".into(),
+                    focused: true,
+                },
+                WindowInfoV1 {
+                    handle: "a6000000-0000-0000-0000-000000000002".into(),
+                    title: "Preview".into(),
+                    focused: false,
+                },
+            ],
+        },
+        serde_json::json!({
+            "kind": "windows",
+            "windows": [
+                {"handle": "a6000000-0000-0000-0000-000000000001", "title": "Editor", "focused": true},
+                {"handle": "a6000000-0000-0000-0000-000000000002", "title": "Preview", "focused": false},
+            ],
+        }),
+    );
+    push(
+        "window_used",
+        ResponseV1::WindowUsed {
+            handle: "a6000000-0000-0000-0000-000000000001".into(),
+        },
+        serde_json::json!({
+            "kind": "window_used",
+            "handle": "a6000000-0000-0000-0000-000000000001",
         }),
     );
     out
