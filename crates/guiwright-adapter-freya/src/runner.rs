@@ -53,7 +53,7 @@ pub struct FreyaAdapter<S: TestingSeam> {
 impl<S: TestingSeam> FreyaAdapter<S> {
     /// Capability row for freya (§6.2): Level-1 tree diffs, real input,
     /// software-Skia headless rendering, ticker-driven clock.
-    pub fn new(seam: S, screen: (f64, f64)) -> Self {
+    pub fn new(seam: S) -> Self {
         Self {
             meta: AdapterMeta {
                 name: "freya",
@@ -76,12 +76,16 @@ impl<S: TestingSeam> FreyaAdapter<S> {
                 virtual_time: None,
                 paused: false,
             },
-            screen,
         }
     }
 
     pub fn ids(&self) -> &AccessibilityMap {
         &self.ids
+    }
+
+    /// Mutate the id bridge (tests bind nodes before acting on them).
+    pub fn ids_mut(&mut self) -> &mut AccessibilityMap {
+        &mut self.ids
     }
 
     /// Queue input through the frame-quantized buffer (§4.3 ordering).
@@ -114,7 +118,17 @@ impl<S: TestingSeam> FreyaAdapter<S> {
     }
 }
 
-impl<S: TestingSeam> FrameworkAdapter for FreyaAdapter<S> {
+impl<S: TestingSeam> std::fmt::Debug for FreyaAdapter<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FreyaAdapter")
+            .field("meta", &self.meta)
+            .field("pass_seq", &self.pass_seq)
+            .field("clock", &self.clock)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
     fn meta(&self) -> &AdapterMeta {
         &self.meta
     }
@@ -195,6 +209,10 @@ impl<S: TestingSeam> FrameworkAdapter for FreyaAdapter<S> {
             }
             ClockCmd::Pause => self.clock.paused = true,
             ClockCmd::Resume => self.clock.paused = false,
+            // Absolute time: the ticker jumps to the target (§14 freya row).
+            ClockCmd::SetTime(t) => self.clock.virtual_time = Some(t),
+            // State read; the ticker state lives in the runner seam.
+            ClockCmd::Probe => {}
         }
         Ok(self.clock)
     }
@@ -270,7 +288,7 @@ mod tests {
 
     fn logging_adapter() -> (FreyaAdapter<LoggingRunner>, SharedLog) {
         let (seam, log) = LoggingRunner::new();
-        (FreyaAdapter::new(seam, (400.0, 300.0)), log)
+        (FreyaAdapter::new(seam), log)
     }
 
     #[test]
@@ -333,7 +351,7 @@ mod tests {
     #[test]
     fn actions_map_back_to_freya_ids() {
         let (mut adapter, log) = logging_adapter();
-        let node = adapter.ids().bind(11);
+        let node = adapter.ids_mut().bind(11);
         let outcome = adapter
             .act(node, SemAction::Click)
             .expect("click through the seam");
