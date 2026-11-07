@@ -1,0 +1,205 @@
+{
+  "generator": "guiwright-proto tests/golden_vectors.rs (bless: GUIWRIGHT_BLESS=1)",
+  "requests": [
+    {
+      "frame_hex": "1600000000000112406775697772696768742f6777702f302e33",
+      "name": "hello"
+    },
+    {
+      "frame_hex": "020000000001",
+      "name": "ping"
+    },
+    {
+      "frame_hex": "020000000002",
+      "name": "tree_snapshot"
+    },
+    {
+      "frame_hex": "1400000000030006427574746f6e01045361766500018827",
+      "name": "resolve_role_named"
+    },
+    {
+      "frame_hex": "0d0000000003030862746e2d7361766500",
+      "name": "resolve_test_id"
+    },
+    {
+      "frame_hex": "1900000000040000000000000000000000000000000000020000008827",
+      "name": "action_click"
+    },
+    {
+      "frame_hex": "1c00000000040105666c6f656d07030605456e7465720105536869667401e807",
+      "name": "action_press"
+    },
+    {
+      "frame_hex": "380000000005030200000000000029400000000000003e400000000000000029400000000000003e40000100000000000029400000000000003e4000",
+      "name": "input_pointer"
+    },
+    {
+      "frame_hex": "06000000000601b0ea01",
+      "name": "clock_fast_forward"
+    },
+    {
+      "frame_hex": "03000000000606",
+      "name": "clock_state"
+    },
+    {
+      "frame_hex": "140000000007000872657365745f6462010663616e6e6564",
+      "name": "mock_install_seam"
+    },
+    {
+      "frame_hex": "140000000007030a736565645f757365727305736d6f6b65",
+      "name": "mock_call"
+    },
+    {
+      "frame_hex": "03000000000800",
+      "name": "inspect_start"
+    },
+    {
+      "frame_hex": "19000000000a001e0113746573742d726573756c74732f766964656f73",
+      "name": "video_start"
+    },
+    {
+      "frame_hex": "03000000000a01",
+      "name": "video_stop"
+    },
+    {
+      "frame_hex": "020000000009",
+      "name": "bye"
+    }
+  ],
+  "responses": [
+    {
+      "decoded": {
+        "adapter": {
+          "caps": {
+            "clock": true,
+            "input": true,
+            "last_frame": false,
+            "logical_snapshot": false,
+            "render_frame": false,
+            "tree_update": true
+          },
+          "framework": "fixture",
+          "framework_version": "0.1",
+          "name": "mock"
+        },
+        "frame_seq": 17,
+        "kind": "welcome",
+        "proto_version": 1,
+        "session_id": "mock-4242",
+        "tree_seq": 3
+      },
+      "frame_hex": "26000000000001096d6f636b2d343234320311046d6f636b076669787475726503302e31010001000001",
+      "name": "welcome"
+    },
+    {
+      "decoded": {
+        "kind": "pong"
+      },
+      "frame_hex": "020000000001",
+      "name": "pong"
+    },
+    {
+      "decoded": {
+        "kind": "tree_snapshot",
+        "node_count": 8,
+        "tree_seq": 3
+      },
+      "frame_hex": "0400000000020308",
+      "name": "tree_snapshot"
+    },
+    {
+      "decoded": {
+        "generation": 0,
+        "kind": "resolved",
+        "node": {
+          "kind": "accesskit",
+          "node": 2,
+          "tree": "01010101010101010101010101010101"
+        },
+        "rect": [
+          0.0,
+          0.0,
+          120.0,
+          32.0
+        ]
+      },
+      "frame_hex": "3600000000030001010101010101010101010101010101020001000000000000000000000000000000000000000000005e400000000000004040",
+      "name": "resolved"
+    },
+    {
+      "decoded": {
+        "detail": "clicked",
+        "frame_seq": 18,
+        "kind": "action_done"
+      },
+      "frame_hex": "0b00000000041207636c69636b6564",
+      "name": "action_done"
+    },
+    {
+      "decoded": {
+        "frame_seq": 19,
+        "kind": "input_queued"
+      },
+      "frame_hex": "03000000000513",
+      "name": "input_queued"
+    },
+    {
+      "decoded": {
+        "kind": "clock_state",
+        "paused": false,
+        "steps": 60,
+        "virtual_time_ms": 30000
+      },
+      "frame_hex": "08000000000601b0ea01003c",
+      "name": "clock_state"
+    },
+    {
+      "decoded": {
+        "detail": "state reset to seed-42",
+        "id": "reset_db",
+        "kind": "mock_done"
+      },
+      "frame_hex": "2200000000070872657365745f646216737461746520726573657420746f20736565642d3432",
+      "name": "mock_done"
+    },
+    {
+      "decoded": {
+        "code": "app.get_by_test_id(\"save\").click()",
+        "kind": "codegen",
+        "warnings": [
+          "ambiguous text"
+        ]
+      },
+      "frame_hex": "350000000008226170702e6765745f62795f746573745f696428227361766522292e636c69636b2829010e616d626967756f75732074657874",
+      "name": "codegen"
+    },
+    {
+      "decoded": {
+        "code": 4,
+        "kind": "error",
+        "message": "strict mode violation"
+      },
+      "frame_hex": "1900000000090415737472696374206d6f64652076696f6c6174696f6e",
+      "name": "error"
+    },
+    {
+      "decoded": {
+        "kind": "bye"
+      },
+      "frame_hex": "02000000000a",
+      "name": "bye"
+    },
+    {
+      "decoded": {
+        "dropped": 7,
+        "duration_ms": 1680,
+        "frames": 42,
+        "kind": "video_file",
+        "path": "test-results/videos/guiwright-smoke.webm"
+      },
+      "frame_hex": "2f000000000b28746573742d726573756c74732f766964656f732f6775697772696768742d736d6f6b652e7765626d2a07900d",
+      "name": "video_file"
+    }
+  ],
+  "schema": "gwp-golden/v1"
+}
