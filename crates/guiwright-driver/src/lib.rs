@@ -28,7 +28,7 @@ pub mod mock;
 pub use adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
     FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PointerButton, PumpOutcome,
-    SemAction,
+    SemAction, WindowInfo,
 };
 pub use clock::{ClockLedgerEntry, ClockReport, ClockService, FRAME_STEP, LedgerCommand};
 pub use seams::{SeamFn, SeamRegistry, SeamTask};
