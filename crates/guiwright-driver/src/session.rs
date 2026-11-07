@@ -372,6 +372,40 @@ impl<A: FrameworkAdapter> Session<A> {
         self.tree.resolve_all(selector)
     }
 
+    // --- Window targets (§16 v0.4 multi-window, M6) -----------------------
+
+    /// The session's window targets (§16 v0.4): adapter-reported metadata
+    /// (handle / title / focus). Single-window adapters report exactly one
+    /// `main` target.
+    pub fn windows(&mut self) -> Vec<crate::adapter::WindowInfo> {
+        self.adapter.windows()
+    }
+
+    /// Validate a window handle and map it to its scope root (§16 v0.4
+    /// "targets per window"): `Ok(None)` = the whole tree (the `main`
+    /// target of a graft-free app, or an empty handle); `Ok(Some(root))` =
+    /// resolve only inside that window's subtree; `Err(UnknownWindow)` =
+    /// the handle is not a live target. The **tree** is the source of
+    /// truth — an adapter metadata entry without tree content is not a
+    /// usable target.
+    pub fn window_scope(&self, handle: &str) -> Result<Option<NodeKey>, CoreError> {
+        self.tree.window_scope(handle)
+    }
+
+    /// Narrow every resolution path (resolve, waiters, `expect`) to a
+    /// window subtree until [`Session::clear_resolve_scope`]. The GWP
+    /// server sets this around a scoped request and clears it after — the
+    /// rendezvous model keeps the session single-threaded, so no request
+    /// can observe a half-applied scope.
+    pub fn set_resolve_scope(&mut self, scope: Option<NodeKey>) {
+        self.tree.set_scope(scope);
+    }
+
+    /// Drop the window scope (back to the unscoped, whole-tree surface).
+    pub fn clear_resolve_scope(&mut self) {
+        self.tree.set_scope(None);
+    }
+
     /// The event-driven wait loop (§15.3): pump → feed events → re-check.
     ///
     /// Waiters only progress on events; each pump feeds at most one event
