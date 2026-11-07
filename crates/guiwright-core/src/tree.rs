@@ -126,6 +126,25 @@ pub struct FrameInfo {
     pub hash: u64,
 }
 
+/// One window target (§16 v0.4 "multi-window / tabs — targets per window",
+/// M6). AccessKit models multi-window apps as **grafted subtrees**: a window
+/// node in the root tree carries a `tree_id` property naming the subtree
+/// that holds the window's content. The handle is that subtree's [`TreeId`]
+/// string — the same identity [`crate::NodeKey::AccessKit`] already carries,
+/// so keys never collide across windows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowScope {
+    /// Stable handle: the subtree [`TreeId`] (uuid string), or `"main"` for
+    /// a graft-free (single-window) tree.
+    pub handle: String,
+    /// The window node itself (the graft node in the root tree; the tree
+    /// root for `"main"`). Scoped resolution matches this node and its
+    /// descendants.
+    pub root: NodeKey,
+    /// The window title (the window node's accessible name).
+    pub title: Option<String>,
+}
+
 /// The framework-agnostic tree brain (§5.2 `guiwright-core`).
 #[derive(Debug)]
 pub struct TreeService {
@@ -139,6 +158,11 @@ pub struct TreeService {
     last_diff: TreeDiffSummary,
     frame_seq: u64,
     last_frame: Option<FrameInfo>,
+    /// Active window scope (§16 v0.4, M6): when set, resolution only sees
+    /// the scope subtree. Session-owned transient state — set around a
+    /// scoped request, cleared after (the session is the only writer, the
+    /// rendezvous model keeps this single-threaded).
+    scope: Option<NodeKey>,
 }
 
 impl Default for TreeService {
@@ -157,6 +181,7 @@ impl TreeService {
             last_diff: TreeDiffSummary::default(),
             frame_seq: 0,
             last_frame: None,
+            scope: None,
         }
     }
 
@@ -331,11 +356,121 @@ impl TreeService {
     }
 
     // ------------------------------------------------------------------
-    // Resolution pipeline (§8.2)
+    // Windows (§16 v0.4 multi-window, M6)
 
-    /// Resolve with the strict-mode uniqueness policy: exactly one match.
-    pub fn resolve(&self, selector: &Selector) -> Result<Resolved, CoreError> {
-        let matches = self.resolve_all(selector)?;
+    /// Enumerate the window targets of the current tree (§16 v0.4 "targets
+    /// per window"). Grafted subtrees are the windows; a graft-free tree is
+    /// one `main` window rooted at the tree root. An uninitialized tree has
+    /// no windows yet.
+    pub fn windows(&self) -> Vec<WindowScope> {
+        let Some(tree) = self.tree.as_ref() else {
+            return Vec::new();
+        };
+        let state = tree.state();
+        let mut windows = Vec::new();
+        walk(state.root(), &mut |key, node| {
+            if !node.is_graft() {
+                return;
+            }
+            if let Some(subtree) = node.data().tree_id() {
+                windows.push(WindowScope {
+                    handle: subtree.0.to_string(),
+                    root: key,
+                    title: node.label(),
+                });
+            }
+        });
+        if windows.is_empty() {
+            // Graft-free (single-window) app: the whole tree is one window.
+            let root = state.root();
+            return vec![WindowScope {
+                handle: crate::key::MAIN_WINDOW.to_string(),
+                root: node_key(&root),
+                title: root.label(),
+            }];
+        }
+        windows
+    }
+
+    /// Map a window handle to its scope root (the GWP `Window::Use`
+    /// validation, §7). `Ok(None)` = no filter (the `main` window of a
+    /// graft-free tree IS the whole tree); `Err(UnknownWindow)` for handles
+    /// the tree does not know.
+    pub fn window_scope(&self, handle: &str) -> Result<Option<NodeKey>, CoreError> {
+        if handle.is_empty() {
+            return Ok(None);
+        }
+        for window in self.windows() {
+            if window.handle == handle {
+                return Ok(if window.handle == crate::key::MAIN_WINDOW {
+                    None
+                } else {
+                    Some(window.root)
+                });
+            }
+        }
+        Err(CoreError::UnknownWindow {
+            handle: handle.to_string(),
+        })
+    }
+
+    /// Is `key` the scope root or one of its descendants?
+    fn is_within(&self, key: &NodeKey, root: &NodeKey) -> bool {
+        if key == root {
+            return true;
+        }
+        match (self.node(key), self.node(root)) {
+            (Some(node), Some(scope_root)) => node.is_descendant_of(&scope_root),
+            _ => false,
+        }
+    }
+
+    /// Narrow resolution to a window subtree: session-owned transient state
+    /// set around a scoped request and cleared after (§16 v0.4). Every
+    /// resolve path — including waiters and `expect`, which re-resolve on
+    /// world events — honors the scope until it is cleared.
+    pub fn set_scope(&mut self, scope: Option<NodeKey>) {
+        self.scope = scope;
+    }
+
+    /// The active resolution scope, if one is set.
+    pub fn scope(&self) -> Option<&NodeKey> {
+        self.scope.as_ref()
+    }
+
+    /// Resolve with the strict-mode policy inside an explicit scope —
+    /// `resolve` with the session's window filter applied for one call
+    /// (§16 v0.4). `None` scope = unscoped.
+    pub fn resolve_scoped(
+        &self,
+        selector: &Selector,
+        scope: Option<&NodeKey>,
+    ) -> Result<Resolved, CoreError> {
+        let matches = self.resolve_all_scoped(selector, scope)?;
+        self.strict(selector, matches)
+    }
+
+    /// [`Self::resolve_all`] restricted to an explicit scope.
+    pub fn resolve_all_scoped(
+        &self,
+        selector: &Selector,
+        scope: Option<&NodeKey>,
+    ) -> Result<Vec<Resolved>, CoreError> {
+        let keys = self.candidate_keys(selector)?;
+        Ok(keys
+            .into_iter()
+            .filter(|key| scope.is_none_or(|root| self.is_within(key, root)))
+            .map(|key| Resolved {
+                key,
+                generation: self.generation(&key),
+                bounds: self.node(&key).and_then(|n| n.bounding_box()),
+            })
+            .collect())
+    }
+
+    /// The strict-mode uniqueness policy shared by [`Self::resolve`] and
+    /// [`Self::resolve_scoped`].
+    fn strict(&self, selector: &Selector, matches: Vec<Resolved>) -> Result<Resolved, CoreError> {
         match matches.len() {
             0 => Err(CoreError::NoMatch {
                 selector: selector.render(),
@@ -352,12 +487,29 @@ impl TreeService {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Resolution pipeline (§8.2)
+
+    /// Resolve with the strict-mode uniqueness policy: exactly one match.
+    /// Honors the session's window scope when one is set (§16 v0.4) — the
+    /// same filter the waiters and `expect` see.
+    pub fn resolve(&self, selector: &Selector) -> Result<Resolved, CoreError> {
+        let matches = self.resolve_all(selector)?;
+        self.strict(selector, matches)
+    }
+
     /// Resolve returning *all* matches in document order (no strict check).
     /// Used by filters, waiters and the codegen uniqueness probe (§13).
+    /// Honors the session's window scope when one is set (§16 v0.4, M6).
     pub fn resolve_all(&self, selector: &Selector) -> Result<Vec<Resolved>, CoreError> {
         let keys = self.candidate_keys(selector)?;
         Ok(keys
             .into_iter()
+            .filter(|key| {
+                self.scope
+                    .as_ref()
+                    .is_none_or(|root| self.is_within(key, root))
+            })
             .map(|key| Resolved {
                 key,
                 generation: self.generation(&key),
