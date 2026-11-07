@@ -22,12 +22,15 @@ import {
   type ClockCmd,
   type GwpRequest,
   type GwpResponse,
+  type GestureCmd,
+  type InputEvent,
   type MockCmd,
   type Selector,
   type SemAction,
   type NodeKey,
   type VideoCmd,
   type Welcome,
+  PointerButtonV1,
   PROTO_VERSION,
 } from "./schema.ts";
 
@@ -289,6 +292,104 @@ export class GwpClient {
     const resp = await this.request({ kind: "window", cmd: { kind: "use", handle } });
     if (resp.kind !== "window_used") throw new Error(`expected WindowUsed, got ${resp.kind}`);
   }
+
+  // --- raw input & gestures (§9, M7) -----------------------------------------
+
+  /**
+   * Inject raw primitive events yourself (§9 over the wire). Coordinates
+   * are logical px relative to this connection's active window target;
+   * the batch applies inside the next frame.
+   */
+  async input(events: InputEvent[]): Promise<{ frame_seq: number }> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "input", events });
+    if (resp.kind !== "input_queued") throw new Error(`expected InputQueued, got ${resp.kind}`);
+    return { frame_seq: resp.frame_seq };
+  }
+
+  /**
+   * Send a gesture from the §9 vocabulary — the driver synthesizes the
+   * raw batch from its adapter's pacing table and applies it in one
+   * frame. Prefer the [`mouse`]/[`keyboard`] helpers.
+   */
+  async gesture(cmd: GestureCmd): Promise<{ frame_seq: number; detail: string }> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "gesture", cmd });
+    if (resp.kind !== "gesture_done") throw new Error(`expected GestureDone, got ${resp.kind}`);
+    return { frame_seq: resp.frame_seq, detail: resp.detail };
+  }
+
+  /** The optional button name on the mouse helpers (default primary). */
+  static buttonIndex(name?: "left" | "right" | "middle"): number {
+    switch (name) {
+      case "right":
+        return PointerButtonV1.Secondary;
+      case "middle":
+        return PointerButtonV1.Middle;
+      default:
+        return PointerButtonV1.Primary;
+    }
+  }
+
+  /**
+   * Playwright-shaped pointer surface (§9, M7): window-relative logical
+   * px, synthesized driver-side (click = move→down→up ×clickCount; drag
+   * = ratchet-interpolated moves; wheel = one event).
+   */
+  readonly mouse = {
+    click: (
+      x: number,
+      y: number,
+      opts?: { button?: "left" | "right" | "middle"; clickCount?: number },
+    ): Promise<{ frame_seq: number; detail: string }> =>
+      this.gesture({
+        kind: "click",
+        x,
+        y,
+        button: GwpClient.buttonIndex(opts?.button),
+        count: opts?.clickCount ?? 1,
+      }),
+    dblclick: (
+      x: number,
+      y: number,
+      opts?: { button?: "left" | "right" | "middle" },
+    ): Promise<{ frame_seq: number; detail: string }> =>
+      this.gesture({
+        kind: "click",
+        x,
+        y,
+        button: GwpClient.buttonIndex(opts?.button),
+        count: 2,
+      }),
+    drag: (
+      fromX: number,
+      fromY: number,
+      toX: number,
+      toY: number,
+      opts?: { button?: "left" | "right" | "middle" },
+    ): Promise<{ frame_seq: number; detail: string }> =>
+      this.gesture({
+        kind: "drag",
+        from_x: fromX,
+        from_y: fromY,
+        to_x: toX,
+        to_y: toY,
+        button: GwpClient.buttonIndex(opts?.button),
+      }),
+    wheel: (dx: number, dy: number): Promise<{ frame_seq: number; detail: string }> =>
+      this.gesture({ kind: "wheel", dx, dy }),
+  };
+
+  /** Playwright-shaped keyboard surface (§9, M7). */
+  readonly keyboard = {
+    press: (
+      key: string,
+      modifiers: string[] = [],
+    ): Promise<{ frame_seq: number; detail: string }> =>
+      this.gesture({ kind: "key", key, modifiers }),
+    type: (text: string): Promise<{ frame_seq: number; detail: string }> =>
+      this.gesture({ kind: "type", text }),
+  };
 
   /** Convenience: `clock.fast_forward` (the common test verb). */
   async fastForward(ms: number): Promise<void> {
