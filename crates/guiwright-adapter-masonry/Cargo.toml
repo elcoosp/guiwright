@@ -20,6 +20,7 @@ accesskit_consumer = "0.31.0"
 masonry_core.workspace = true
 masonry_testing.workspace = true
 twox-hash.workspace = true
+guiwright-inspect.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
