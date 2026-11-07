@@ -62,8 +62,65 @@ pub enum RequestV1 {
     },
     /// Inject synthetic input through the real pipeline (§9).
     Input { events: Vec<InputEventV1> },
+    /// Virtual clock domain (§7 `Clock` + §14): install/fast-forward/pause.
+    Clock(ClockV1),
+    /// Mock domain (§7 `Mock` + §14 state seams): install/clear/reset.
+    Mock(MockV1),
+    /// Inspector domain (§7 `Inspect` + §13): overlay + codegen recording.
+    Inspect(InspectV1),
     /// Close the session cleanly.
     Bye,
+}
+
+/// `Clock { InstallVirtual | FastForward(ms) | RunFor(ms) | Pause | Resume |
+/// SetTime(t) }` (§7) plus the state probe the kit needs.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ClockV1 {
+    InstallVirtual,
+    FastForward {
+        ms: u64,
+    },
+    RunFor {
+        ms: u64,
+    },
+    Pause,
+    Resume,
+    /// Absolute virtual time (§7 `SetTime(t)`), milliseconds.
+    SetTime {
+        ms: u64,
+    },
+    /// Read the current clock state without mutating it.
+    State,
+}
+
+/// `Mock { InstallSeam { id, response } | Clear(id) | ResetState { scope } }`
+/// (§7) plus `Call` — run a registered seam once from the test side.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MockV1 {
+    /// Install (or re-aim) a seam by its registered id. `response` presets a
+    /// canned result for the mock domain (None = run the real hook).
+    InstallSeam {
+        id: String,
+        response: Option<String>,
+    },
+    /// Remove a seam override; the real hook (if any) runs again.
+    Clear { id: String },
+    /// Reset app state to a fixture scope (§14 "fixture parity with
+    /// Playwright contexts") — runs the session's reset seam.
+    ResetState { scope: String },
+    /// Execute a registered seam once (arg = scope/fixture tag).
+    Call { id: String, scope: String },
+}
+
+/// `Inspect { EnableOverlay | Highlight(handle) | StartRecording |
+/// StopRecording }` (§7). M2 ships the codegen recorder half (§13); the
+/// live highlight handles land with the interactive overlay session.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InspectV1 {
+    /// Start the interaction → code recorder (§13).
+    StartRecording,
+    /// Stop and fetch the generated kit code.
+    StopRecording,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -95,6 +152,25 @@ pub enum ResponseV1 {
     },
     InputQueued {
         frame_seq: u64,
+    },
+    /// Clock state reply (§14 `ClockState`), milliseconds on the wire.
+    ClockState {
+        virtual_time_ms: Option<u64>,
+        paused: bool,
+        /// Jumps applied by the servicing command (frame-sized steps).
+        steps: u64,
+    },
+    /// Mock domain reply — seam executed or bookkeeping applied.
+    MockDone {
+        id: String,
+        /// Seam result detail (or the canned override response).
+        detail: String,
+    },
+    /// Inspector reply — the generated kit code (§13).
+    Codegen {
+        code: String,
+        /// Strict-mode warnings collected while recording (§13).
+        warnings: Vec<String>,
     },
     /// Rejected request: unknown version, bad sequence, adapter error…
     Error {
@@ -393,6 +469,15 @@ mod tests {
                     button: PointerButtonV1::Primary,
                 }],
             }),
+            GwpRequest::V1(RequestV1::Clock(ClockV1::FastForward { ms: 30_000 })),
+            GwpRequest::V1(RequestV1::Mock(MockV1::ResetState {
+                scope: "seed-42".into(),
+            })),
+            GwpRequest::V1(RequestV1::Mock(MockV1::InstallSeam {
+                id: "reset_db".into(),
+                response: None,
+            })),
+            GwpRequest::V1(RequestV1::Inspect(InspectV1::StartRecording)),
             GwpRequest::V1(RequestV1::Bye),
         ];
         let seen: HashSet<String> = HashSet::new();
@@ -437,6 +522,19 @@ mod tests {
                 frame_seq: 18,
                 detail: "clicked".into(),
             }),
+            GwpResponse::V1(ResponseV1::ClockState {
+                virtual_time_ms: Some(30_000),
+                paused: false,
+                steps: 2,
+            }),
+            GwpResponse::V1(ResponseV1::MockDone {
+                id: "reset_db".into(),
+                detail: "reset to seed-42".into(),
+            }),
+            GwpResponse::V1(ResponseV1::Codegen {
+                code: "app.get_by_test_id(\"save\").click()".into(),
+                warnings: vec![],
+            }),
             GwpResponse::V1(ResponseV1::Error {
                 code: ErrorCode::UnsupportedVersion,
                 message: "client sent proto 0".into(),
@@ -465,6 +563,46 @@ mod tests {
             let bytes = postcard::to_allocvec(&ev).expect("encode");
             let back: GwpEvent = postcard::from_bytes(&bytes).expect("decode");
             assert_eq!(ev, back);
+        }
+    }
+
+    /// §7 clock & mock domains round-trip (M2).
+    #[test]
+    fn clock_and_mock_domains_roundtrip() {
+        let clocks = [
+            ClockV1::InstallVirtual,
+            ClockV1::FastForward { ms: 16 },
+            ClockV1::RunFor { ms: 500 },
+            ClockV1::Pause,
+            ClockV1::Resume,
+            ClockV1::SetTime { ms: 120_000 },
+            ClockV1::State,
+        ];
+        for cmd in clocks {
+            let bytes = postcard::to_allocvec(&cmd).expect("encode");
+            let back: ClockV1 = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(cmd, back);
+        }
+        let mocks = [
+            MockV1::InstallSeam {
+                id: "reset_db".into(),
+                response: Some("fixture-ok".into()),
+            },
+            MockV1::Clear {
+                id: "reset_db".into(),
+            },
+            MockV1::ResetState {
+                scope: "seed-42".into(),
+            },
+            MockV1::Call {
+                id: "seed_users".into(),
+                scope: "smoke".into(),
+            },
+        ];
+        for cmd in mocks {
+            let bytes = postcard::to_allocvec(&cmd).expect("encode");
+            let back: MockV1 = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(cmd, back);
         }
     }
 }
