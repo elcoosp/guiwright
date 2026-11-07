@@ -9,6 +9,19 @@ Commits](https://www.conventionalcommits.org).
 ## Unreleased
 
 ### Documentation
+- Add the M7 input/gestures doc (docs/m7-input-gestures.md): the §9 pipeline's wire half — driver-side gesture synthesis under the adapter's pacing table, per-window coordinate routing (the M6 handoff), the append-only `Gesture` revision over the woken-up `Input` domain, and the one-vocabulary client story
+
+### Features
+- **driver:** gesture synthesis and per-window input routing (§9, M7) — `guiwright-driver::gesture` turns the wire's high-level `Gesture` vocabulary into raw `InputEvent` batches (click = move→down→up ×count, drag = down→ratchet-interpolated moves→up with the last move landing exactly on target, key = down→up, type = one `TextInput` commit, wheel = one event), paced by the new `FrameworkAdapter::gesture_pacing()` table (default 5 px/tick, §18's per-adapter hook); `FrameworkAdapter::input_window(window, ev)` adds the window dimension with a delegating default so every existing adapter compiles unchanged, the session validates handles against the tree first (`UnknownWindow` for dead targets) and resolves unscoped requests to the session's default window, and `Session::send_input` / `Session::perform_gesture` apply each batch inside one rendezvous pump, returning the applied frame
+- **driver:** the GWP input/gesture domains over the wire — `RequestV1::Input` stopped being rejected (the M0 `Unsupported` hole closed): the connection's active window stamp (M6) steers the raw batch and the long-defined `InputQueued { frame_seq }` is the reply; the append-only `Gesture` request (discriminant 12 after `Window`) with `Click | Drag | Wheel | Key | Type` and the `GestureDone { frame_seq, detail }` reply (14) whose detail is the synthesis summary ("clicked at (12.5, 30) — 3 events"); the mock adapter records both hooks (`events()` untagged, `window_events()` window-tagged, plus the shared input log for socket e2e observation)
+- **cli:** `mouse click|dblclick|drag|wheel`, `mouse move|down|up`, `key <key> [modifiers…]` and `text <string>` in the REPL — the raw-input and gesture vocabulary over the active window target with synthesis-detail replies; usage errors are single error lines and every command works verbatim as a `gwtest/v1` spec step (the runner drives the same `Repl::step` core — no spec-format change)
+- **proto:** the append-only `Gesture` domain (§9, M7) — `RequestV1::Gesture(GestureV1)` at discriminant 12, `ResponseV1::GestureDone` at 14, the five-variant `GestureV1` table in the schemadoc (with the `Input` row annotated for its per-window routing); discriminant pins, schema golden and the vendored TypeScript copy move together, and the golden vectors gain `gesture_click`/`gesture_drag`/`gesture_key`/`gesture_done`
+- **clients:** `@guiwright/gwp` — the Playwright-shaped `client.mouse.click/dblclick/drag/wheel` and `client.keyboard.press/type` over the typed `GestureCmd`, the low-level `client.input(events)` for raw batches, codec paths pinned byte-for-byte against the Rust golden frames, and the cross-language e2e drives the demo app's whole input surface over TCP
+
+### Benchmarks
+- **bench:** Bind the M7 §9 row — gesture synthesis (one 200 px drag at the 5 px/tick ratchet + one double-click per measurement; measured ≈1 µs against the 50 µs p95 budget) — and enforce it in the release guard
+
+### Documentation
 - Add the M6 multi-window doc (docs/m6-multi-window.md): the §16 v0.4 row's scope, the grafted-subtree window model (handles = subtree TreeIds), the per-connection target semantics over the one shared session (§11), the adapter windows() contract and the recorded accesskit_consumer subtree-root restatement finding
 
 ### Features
