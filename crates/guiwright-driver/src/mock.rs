@@ -13,7 +13,7 @@ use accesskit::{NodeId, TreeId};
 
 use crate::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
-    FrameworkAdapter, LogicalTreeDiff, PumpOutcome, SemAction, WindowInfo,
+    FrameworkAdapter, InputEvent, LogicalTreeDiff, PumpOutcome, SemAction, WindowInfo,
 };
 use guiwright_core::MAIN_WINDOW;
 use guiwright_core::test_util::{Fixture, MultiWindowFixture};
@@ -46,7 +46,21 @@ pub struct MockAdapter {
     /// while the session runs — the next pump delivers them, exactly like
     /// app-side changes arriving mid-session.
     shared: Option<std::sync::Arc<std::sync::Mutex<Vec<accesskit::TreeUpdate>>>>,
+    /// Raw input events injected through the single-window hook (§9, M7):
+    /// the untagged log (semantic Hover/Scroll ride this path).
+    events: Vec<InputEvent>,
+    /// Window-tagged input events (§9 per-window routing, M7): what the
+    /// window-aware hook received, in order.
+    window_events: Vec<(String, InputEvent)>,
+    /// Shared input log (e2e tests): window-tagged events mirrored out so
+    /// a test can observe what landed without owning the session (the
+    /// `with_shared_scripts` pattern).
+    shared_input_log: Option<InputLog>,
 }
+
+/// A window-tagged input log shared between the mock and e2e tests (M7):
+/// `(window handle, event)` pairs in arrival order.
+pub type InputLog = std::sync::Arc<std::sync::Mutex<Vec<(String, InputEvent)>>>;
 
 /// A scripted window target: the handle is the subtree [`TreeId`] the
 /// adapter pushes updates for — the same identity the tree scopes with.
@@ -111,6 +125,9 @@ impl MockAdapter {
             state: None,
             windows: Vec::new(),
             shared: None,
+            events: Vec::new(),
+            window_events: Vec::new(),
+            shared_input_log: None,
         }
     }
 
@@ -178,6 +195,14 @@ impl MockAdapter {
         self
     }
 
+    /// Mirror window-tagged input events into a shared log (e2e tests):
+    /// the test observes what landed in which window without owning the
+    /// session (the `with_shared_scripts` pattern, M7).
+    pub fn with_input_log(mut self, log: InputLog) -> Self {
+        self.shared_input_log = Some(log);
+        self
+    }
+
     /// Read back the runner context (test-side assertions).
     pub fn state<T: 'static>(&self) -> Option<&T> {
         self.state.as_ref().and_then(|s| s.downcast_ref::<T>())
@@ -232,6 +257,17 @@ impl MockAdapter {
 
     pub fn actions(&self) -> &[(NodeId, SemAction)] {
         &self.actions
+    }
+
+    /// The raw events injected through the single-window hook (§9).
+    pub fn events(&self) -> &[InputEvent] {
+        &self.events
+    }
+
+    /// The window-tagged events injected through the window-aware hook
+    /// (§9 per-window routing, M7): `(handle, event)` in arrival order.
+    pub fn window_events(&self) -> &[(String, InputEvent)] {
+        &self.window_events
     }
 
     pub fn pump_count(&self) -> u64 {
@@ -320,6 +356,27 @@ impl FrameworkAdapter for MockAdapter {
                 detail: default_detail(&action),
             }),
         }
+    }
+
+    /// Raw input (§9, M7): recorded in the untagged log. The mock honestly
+    /// advertises the `input` capability, so semantic Hover/Scroll (which
+    /// ride the single-window hook) apply too.
+    fn input(&mut self, ev: InputEvent) -> Result<(), AdapterError> {
+        self.events.push(ev);
+        Ok(())
+    }
+
+    /// Window-tagged input (§9 per-window routing, M7): the default would
+    /// drop the handle; the mock records it so tests can assert which
+    /// window received what.
+    fn input_window(&mut self, window: &str, ev: InputEvent) -> Result<(), AdapterError> {
+        if let Some(log) = &self.shared_input_log {
+            if let Ok(mut guard) = log.lock() {
+                guard.push((window.to_string(), ev.clone()));
+            }
+        }
+        self.window_events.push((window.to_string(), ev));
+        Ok(())
     }
 
     fn clock(&mut self, cmd: ClockCmd) -> Result<ClockState, AdapterError> {
