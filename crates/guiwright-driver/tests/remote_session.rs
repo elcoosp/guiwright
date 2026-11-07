@@ -7,10 +7,12 @@ use std::time::Duration;
 
 use guiwright_core::test_util::Fixture;
 use guiwright_driver::mock::MockAdapter;
+use guiwright_driver::server::GwpServerHandle;
 use guiwright_driver::spawn_session_server;
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    CapsV1, ErrorCode, NodeKeyV1, RequestV1, ResponseV1, SelectorV1, SemActionV1, TextMatchV1,
+    CapsV1, ClockV1, ErrorCode, MockV1, NodeKeyV1, RequestV1, ResponseV1, SelectorV1, SemActionV1,
+    TextMatchV1,
 };
 use guiwright_proto::uds::Client;
 
@@ -245,6 +247,136 @@ async fn resolve_auto_waits_over_the_wire() {
             assert_eq!(id, 8, "the late Export button");
         }
         other => panic!("expected Resolved, got {other:?}"),
+    }
+
+    handle.shutdown();
+}
+
+// --- M2: clock & mock domains over a real socket (§7, §14) ------------------
+
+/// The spike's harness: a remote session with app-boot seams, driven end
+/// to end. This is the same surface a GPUI remote session will use (§17
+/// "remote-mode GPUI spike"): the GPUI adapter is M3, but the *remote*
+/// contract — handshake → resolve → act → clock → mock — is fully
+/// exercised here against the mock adapter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clock_and_mock_domains_over_the_wire() {
+    #[derive(Debug, Default)]
+    struct SpikeState {
+        fixture: Option<String>,
+        rows: usize,
+    }
+
+    let mut seams = guiwright_driver::SeamRegistry::new();
+    seams.register("reset_state", |ctx, scope| {
+        let state = ctx
+            .downcast_mut::<SpikeState>()
+            .ok_or("wrong runner context type")?;
+        state.rows = 0;
+        state.fixture = Some(scope.to_string());
+        Ok(format!("state reset to {scope}"))
+    });
+    seams.register("seed_users", |ctx, _scope| {
+        let state = ctx
+            .downcast_mut::<SpikeState>()
+            .ok_or("wrong runner context type")?;
+        state.rows = 3;
+        Ok("3 users seeded".into())
+    });
+
+    let path = socket_path("remote-clock-mock.sock");
+    let handle = GwpServerHandle::spawn_with_seams(
+        path.clone(),
+        || {
+            MockAdapter::with_fixture(&Fixture::buttons()).with_state(SpikeState {
+                rows: 9,
+                fixture: None,
+            })
+        },
+        seams,
+    )
+    .expect("server binds");
+
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("m2-spike/0.1").await.unwrap();
+
+    // Clock: install + stepped fast-forward (§14), reported in ms.
+    let state = client
+        .request(RequestV1::Clock(ClockV1::InstallVirtual))
+        .await
+        .unwrap();
+    match state {
+        ResponseV1::ClockState {
+            virtual_time_ms, ..
+        } => {
+            assert_eq!(virtual_time_ms, Some(0));
+        }
+        other => panic!("expected ClockState, got {other:?}"),
+    }
+    let state = client
+        .request(RequestV1::Clock(ClockV1::FastForward { ms: 50 }))
+        .await
+        .unwrap();
+    match state {
+        ResponseV1::ClockState {
+            virtual_time_ms,
+            steps,
+            ..
+        } => {
+            assert_eq!(virtual_time_ms, Some(50));
+            assert_eq!(steps, 3, "50 ms = 3 frame-sized steps");
+        }
+        other => panic!("expected ClockState, got {other:?}"),
+    }
+
+    // Mock: canned override wins, then clear runs the real hook in the
+    // runner context (§14 state seams over the wire).
+    client
+        .request(RequestV1::Mock(MockV1::InstallSeam {
+            id: "reset_state".into(),
+            response: Some("canned".into()),
+        }))
+        .await
+        .unwrap();
+    let done = client
+        .request(RequestV1::Mock(MockV1::ResetState {
+            scope: "seed-42".into(),
+        }))
+        .await
+        .unwrap();
+    match done {
+        ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "canned"),
+        other => panic!("expected MockDone, got {other:?}"),
+    }
+
+    client
+        .request(RequestV1::Mock(MockV1::Clear {
+            id: "reset_state".into(),
+        }))
+        .await
+        .unwrap();
+    let done = client
+        .request(RequestV1::Mock(MockV1::ResetState {
+            scope: "seed-42".into(),
+        }))
+        .await
+        .unwrap();
+    match done {
+        ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "state reset to seed-42"),
+        other => panic!("expected MockDone, got {other:?}"),
+    }
+
+    // A second seam, called directly.
+    let done = client
+        .request(RequestV1::Mock(MockV1::Call {
+            id: "seed_users".into(),
+            scope: "smoke".into(),
+        }))
+        .await
+        .unwrap();
+    match done {
+        ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "3 users seeded"),
+        other => panic!("expected MockDone, got {other:?}"),
     }
 
     handle.shutdown();
