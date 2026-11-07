@@ -47,16 +47,19 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(domains["inspect"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["video"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["window"]["variants"].as_array().unwrap().len(), 2);
+    assert_eq!(domains["gesture"]["variants"].as_array().unwrap().len(), 5);
 
     // Wire indices are exactly the enum positions: spot-check the ends of
     // both request/response tables (the append-only frontier).
     assert_eq!(doc["requests"][9]["name"], "Bye");
     assert_eq!(doc["requests"][10]["name"], "Video");
     assert_eq!(doc["requests"][11]["name"], "Window");
+    assert_eq!(doc["requests"][12]["name"], "Gesture");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
     assert_eq!(doc["responses"][12]["name"], "Windows");
     assert_eq!(doc["responses"][13]["name"], "WindowUsed");
+    assert_eq!(doc["responses"][14]["name"], "GestureDone");
 
     // The error-code table is flat on the wire: appending UnknownWindow
     // keeps the pre-M6 codes byte-identical.
@@ -74,23 +77,6 @@ fn published_schema_matches_the_wire_enums() {
 
 /// Exhaustive matches: adding a variant anywhere below fails compilation
 /// here and forces the schemadoc tables + golden to move with the wire.
-fn request_variants() -> usize {
-    12 + match RequestV1::Ping {
-        RequestV1::Hello { .. }
-        | RequestV1::Ping
-        | RequestV1::TreeSnapshot
-        | RequestV1::Resolve { .. }
-        | RequestV1::Action { .. }
-        | RequestV1::Input { .. }
-        | RequestV1::Clock(_)
-        | RequestV1::Mock(_)
-        | RequestV1::Inspect(_)
-        | RequestV1::Bye
-        | RequestV1::Video(_)
-        | RequestV1::Window(_) => 0,
-    }
-}
-
 fn response_variants() -> usize {
     let probe = |r: ResponseV1| match r {
         ResponseV1::Welcome { .. }
@@ -106,9 +92,28 @@ fn response_variants() -> usize {
         | ResponseV1::Bye
         | ResponseV1::VideoFile { .. }
         | ResponseV1::Windows { .. }
-        | ResponseV1::WindowUsed { .. } => 14usize,
+        | ResponseV1::WindowUsed { .. }
+        | ResponseV1::GestureDone { .. } => 15usize,
     };
     probe(ResponseV1::Pong)
+}
+
+fn request_variants() -> usize {
+    13 + match RequestV1::Ping {
+        RequestV1::Hello { .. }
+        | RequestV1::Ping
+        | RequestV1::TreeSnapshot
+        | RequestV1::Resolve { .. }
+        | RequestV1::Action { .. }
+        | RequestV1::Input { .. }
+        | RequestV1::Clock(_)
+        | RequestV1::Mock(_)
+        | RequestV1::Inspect(_)
+        | RequestV1::Bye
+        | RequestV1::Video(_)
+        | RequestV1::Window(_)
+        | RequestV1::Gesture(_) => 0,
+    }
 }
 
 fn clock_variants() -> usize {
