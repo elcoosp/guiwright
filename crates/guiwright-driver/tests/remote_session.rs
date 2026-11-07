@@ -381,3 +381,183 @@ async fn clock_and_mock_domains_over_the_wire() {
 
     handle.shutdown();
 }
+
+// --- M3: the same remote session over TCP (§7 "TCP for CI containers") ------
+
+/// Byte-identical remote session, TCP transport: the M3 other-language
+/// clients (clients/typescript) drive exactly this conversation. The
+/// handshake → resolve → act → clock sequence below is the TS e2e's Rust
+/// twin; `spawn_tcp` on an ephemeral port reports the bound address on the
+/// handle endpoint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_remote_session_over_tcp() {
+    use guiwright_proto::tcp::Client as TcpClient;
+
+    let handle = GwpServerHandle::spawn_tcp(
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("tcp server binds");
+    let addr = match handle.endpoint() {
+        guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
+        other => panic!("expected TCP endpoint, got {other:?}"),
+    };
+    assert_ne!(addr.port(), 0, "ephemeral bind reported");
+
+    let mut client = TcpClient::connect(&addr.to_string())
+        .await
+        .expect("client connects");
+    let adapter = client.handshake("ts-client/0.1").await.unwrap();
+    assert_eq!(adapter.name, "mock");
+    assert!(adapter.caps.tree_update);
+    client.ping().await.unwrap();
+
+    // Resolve + act (the TS client's core two round-trips).
+    let resolved = client
+        .request(RequestV1::Resolve {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: Some(TextMatchV1 {
+                    text: "Save".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+            },
+            timeout_ms: 2000,
+        })
+        .await
+        .unwrap();
+    let (node, generation) = match resolved {
+        ResponseV1::Resolved {
+            node, generation, ..
+        } => (node, generation),
+        other => panic!("expected Resolved, got {other:?}"),
+    };
+    let done = client
+        .request(RequestV1::Action {
+            node,
+            generation,
+            action: SemActionV1::Click,
+            force: false,
+            timeout_ms: 2000,
+        })
+        .await
+        .unwrap();
+    match done {
+        ResponseV1::ActionDone { detail, .. } => assert_eq!(detail, "clicked"),
+        other => panic!("expected ActionDone, got {other:?}"),
+    }
+
+    // Clock vocabulary rides the same transport.
+    let state = client
+        .request(RequestV1::Clock(ClockV1::FastForward { ms: 32 }))
+        .await
+        .unwrap();
+    match state {
+        ResponseV1::ClockState {
+            virtual_time_ms, ..
+        } => assert_eq!(virtual_time_ms, Some(32)),
+        other => panic!("expected ClockState, got {other:?}"),
+    }
+
+    let bye = client.request(RequestV1::Bye).await.unwrap();
+    assert_eq!(bye, ResponseV1::Bye);
+
+    handle.shutdown();
+}
+
+/// §7 `Video` domain over the wire (§10, M3): Start → drive (pumps
+/// present frames) → Stop returns a finalized artifact path. The session
+/// records into `GUIWRIGHT_VIDEO_DIR` (test override) because the reply's
+/// path is how clients learn where the file landed; the dir rides the
+/// Start options (Playwright-style client-owned artifact dir).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn video_domain_over_the_wire() {
+    let dir = tempfile::tempdir().expect("tmpdir");
+
+    let handle = GwpServerHandle::spawn_tcp(
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        || {
+            MockAdapter::with_fixture(&Fixture::buttons()).with_frame_pixels(
+                24,
+                12,
+                vec![64; 24 * 12 * 4],
+            )
+        },
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("tcp server binds");
+    let addr = match handle.endpoint() {
+        guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
+        other => panic!("expected TCP endpoint, got {other:?}"),
+    };
+
+    let mut client = guiwright_proto::tcp::Client::connect(&addr.to_string())
+        .await
+        .expect("client connects");
+    client.handshake("video-client/0.1").await.unwrap();
+
+    // Start: Pong (§7 video domain acknowledges control commands). The
+    // client names the artifact dir (Playwright-style ownership).
+    let resp = client
+        .request(RequestV1::Video(guiwright_proto::schema::VideoV1::Start(
+            guiwright_proto::schema::VideoOptsV1 {
+                fps: 25,
+                dir: Some(dir.path().display().to_string()),
+            },
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp, ResponseV1::Pong);
+
+    // Drive the session: each request batch pumps the adapter once and
+    // the presented frames feed the recorder (hash-0 frames; the first
+    // lands, the static span dedups).
+    let _ = client
+        .request(RequestV1::Resolve {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: Some(TextMatchV1 {
+                    text: "Save".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+            },
+            timeout_ms: 2000,
+        })
+        .await
+        .unwrap();
+
+    // Stop: the finalized artifact summary rides the reply.
+    let resp = client
+        .request(RequestV1::Video(guiwright_proto::schema::VideoV1::Stop))
+        .await
+        .unwrap();
+    let (path, frames) = match resp {
+        ResponseV1::VideoFile {
+            path,
+            frames,
+            dropped: _,
+            duration_ms: _,
+        } => (path, frames),
+        other => panic!("expected VideoFile, got {other:?}"),
+    };
+    assert!(frames >= 1, "at least the first presented frame recorded");
+    assert!(
+        std::path::Path::new(&path).exists(),
+        "artifact exists at {path}"
+    );
+
+    // Stop without a running recording is a clean error (session rules).
+    let err = client
+        .request(RequestV1::Video(guiwright_proto::schema::VideoV1::Stop))
+        .await
+        .expect_err("no recording running");
+    assert!(
+        matches!(err, GwpError::Rejected { .. }),
+        "clean rejected error: {err:?}"
+    );
+
+    handle.shutdown();
+}
