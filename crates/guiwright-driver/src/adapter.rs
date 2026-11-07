@@ -189,6 +189,26 @@ pub enum PointerButton {
     Middle,
 }
 
+/// Per-adapter gesture pacing (§9 synthesis; §18 "per-adapter gesture
+/// pacing tables, validated by cross-framework gesture tests"). Adapters
+/// override [`FrameworkAdapter::gesture_pacing`] to encode their
+/// framework's input quirks; the session's synthesis reads it per gesture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GesturePacing {
+    /// Maximum pointer travel per synthesized drag move (logical px) —
+    /// §9 "ratchet ~5 px/tick, mirroring slint's flickable-aware drag
+    /// pacing". Non-positive values collapse to a single move.
+    pub drag_ratchet_px: f64,
+}
+
+impl Default for GesturePacing {
+    fn default() -> Self {
+        Self {
+            drag_ratchet_px: 5.0,
+        }
+    }
+}
+
 /// A captured frame (§6.1 `FrameRef`). M0 adapters ship hash-only frames;
 /// pixel buffers arrive with the capture pipeline (§15.5, M1).
 #[derive(Clone, Debug)]
@@ -296,9 +316,30 @@ pub trait FrameworkAdapter: 'static {
     ) -> Result<ActionOutcome, AdapterError>;
 
     /// Inject synthetic input through the framework's REAL pipeline (§9).
+    /// The single-window hook: coordinates are logical px relative to the
+    /// adapter's only window.
     fn input(&mut self, ev: InputEvent) -> Result<(), AdapterError> {
         let _ = ev;
         Err(AdapterError::Unsupported("input"))
+    }
+
+    /// Window-targeted input injection (§9 coordinates, M7): `window` is
+    /// the target handle as reported by [`FrameworkAdapter::windows`] and
+    /// coordinates are logical px **relative to that window**. Default
+    /// ignores the handle — a single-window adapter has exactly one
+    /// coordinate space, so every existing adapter keeps compiling and
+    /// stays honest (the M6 `windows()` pattern). Multi-window adapters
+    /// override to route; the session validates the handle against the
+    /// tree first, so the handle is always live.
+    fn input_window(&mut self, window: &str, ev: InputEvent) -> Result<(), AdapterError> {
+        let _ = window;
+        self.input(ev)
+    }
+
+    /// This adapter's gesture pacing table (§9 synthesis; §18). The
+    /// default is the §9 ratchet (5 px/tick).
+    fn gesture_pacing(&self) -> GesturePacing {
+        GesturePacing::default()
     }
 
     /// Last presented frame — no re-render (§10).
