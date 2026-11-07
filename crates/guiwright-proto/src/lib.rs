@@ -4,6 +4,9 @@
 //! * [`framing`] — 4-byte LE length prefix + postcard body, size-guarded
 //! * [`blob`] — LZ4 side-channel for large payloads (frames/trees/traces)
 //! * [`uds`] — default transport: server loop + client
+//! * [`tcp`] — loopback/container transport for other-language clients
+//! * [`conn`] — the transport-agnostic connection state machine both share
+//! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
 //! latency stays independent of payload size (§15.6).
@@ -11,17 +14,22 @@
 #![forbid(unsafe_code)]
 
 pub mod blob;
+pub mod conn;
 pub mod convert;
 pub mod framing;
 pub mod schema;
+pub mod schemadoc;
+pub mod tcp;
 pub mod uds;
 
 pub use schema::{
     AdapterInfoV1, CapsV1, ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, InputEventV1,
     NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1,
-    SemActionV1, TextMatchV1,
+    SemActionV1, TextMatchV1, VIDEO_DEFAULT_FPS, VideoOptsV1, VideoV1,
 };
+pub use tcp::Client as TcpClient;
 pub use uds::Client;
+pub use uds::Client as UdsClient;
 
 use thiserror::Error;
 
