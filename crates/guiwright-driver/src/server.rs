@@ -13,13 +13,15 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ErrorCode, NodeKeyV1, PROTO_VERSION, RequestV1, ResponseV1, SemActionV1,
+    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
+    RequestV1, ResponseV1, SemActionV1,
 };
 use guiwright_proto::uds::{self, Handler};
 
@@ -116,36 +118,58 @@ where
     A: FrameworkAdapter,
     F: FnOnce() -> A + Send + 'static,
 {
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
+    GwpServerHandle::spawn_with_seams(path, make_adapter, crate::seams::SeamRegistry::new())
+}
 
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(64);
-    let session_thread = std::thread::Builder::new()
-        .name("guiwright-session".into())
-        .spawn(move || run_session_thread(cmd_rx, make_adapter()))
-        .expect("spawn session thread");
+impl GwpServerHandle {
+    /// Like [`spawn_session_server`], plus the app's boot seam registry
+    /// (§14): the hooks `Mock::Call`/`ResetState` may run over the wire.
+    pub fn spawn_with_seams<A, F>(
+        path: PathBuf,
+        make_adapter: F,
+        seams: crate::seams::SeamRegistry,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path)?;
 
-    let bridge_tx = cmd_tx.clone();
-    let serve_task = tokio::spawn(async move {
-        uds::serve(listener, move || GwpBridge {
-            cmd_tx: bridge_tx.clone(),
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(64);
+        let session_thread = std::thread::Builder::new()
+            .name("guiwright-session".into())
+            .spawn(move || run_session_thread(cmd_rx, make_adapter(), seams))
+            .expect("spawn session thread");
+
+        let bridge_tx = cmd_tx.clone();
+        let serve_task = tokio::spawn(async move {
+            uds::serve(listener, move || GwpBridge {
+                cmd_tx: bridge_tx.clone(),
+            })
+            .await;
+        });
+
+        Ok(GwpServerHandle {
+            cmd_tx,
+            serve_task,
+            session_thread,
+            path,
         })
-        .await;
-    });
-
-    Ok(GwpServerHandle {
-        cmd_tx,
-        serve_task,
-        session_thread,
-        path,
-    })
+    }
 }
 
 /// The session thread event loop: drain the command queue, process each
 /// request against the session, pump once per batch (frame-boundary
 /// rendezvous, §15.4).
-fn run_session_thread<A: FrameworkAdapter>(mut cmd_rx: mpsc::Receiver<Internal>, adapter: A) {
+fn run_session_thread<A: FrameworkAdapter>(
+    mut cmd_rx: mpsc::Receiver<Internal>,
+    adapter: A,
+    seams: crate::seams::SeamRegistry,
+) {
     let mut session = Session::new(adapter);
+    // App-boot seams are available to the whole session (§14).
+    session.register_seams(&seams);
     // Attach: settle the app so the initial tree is visible (§6.3
     // "app.wait_for_settle()").
     session.settle(std::time::Instant::now() + std::time::Duration::from_secs(5));
@@ -257,7 +281,79 @@ fn handle_request<A: FrameworkAdapter>(session: &mut Session<A>, request: Reques
             code: ErrorCode::Unsupported,
             message: "raw input over GWP lands with the gesture synthesis milestone (§9)".into(),
         },
+        RequestV1::Clock(cmd) => clock_response(session, cmd),
+        RequestV1::Mock(cmd) => mock_response(session, cmd),
+        RequestV1::Inspect(cmd) => inspect_response(session, cmd),
         RequestV1::Bye => ResponseV1::Bye,
+    }
+}
+
+/// §7 clock domain (§14 service): millisecond wire vocabulary → session
+/// `Duration` surface.
+fn clock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: ClockV1) -> ResponseV1 {
+    use guiwright_core::CoreError;
+    let adapter_cmd = match cmd {
+        ClockV1::InstallVirtual => crate::adapter::ClockCmd::InstallVirtual,
+        ClockV1::FastForward { ms } => {
+            crate::adapter::ClockCmd::FastForward(Duration::from_millis(ms))
+        }
+        ClockV1::RunFor { ms } => crate::adapter::ClockCmd::RunFor(Duration::from_millis(ms)),
+        ClockV1::Pause => crate::adapter::ClockCmd::Pause,
+        ClockV1::Resume => crate::adapter::ClockCmd::Resume,
+        ClockV1::SetTime { ms } => crate::adapter::ClockCmd::SetTime(Duration::from_millis(ms)),
+        ClockV1::State => crate::adapter::ClockCmd::Probe,
+    };
+    match session.clock(adapter_cmd) {
+        Ok(report) => ResponseV1::ClockState {
+            virtual_time_ms: report.state.virtual_time.map(|t| t.as_millis() as u64),
+            paused: report.state.paused,
+            steps: report.steps,
+        },
+        Err(CoreError::Other(msg)) if msg.contains("paused") => ResponseV1::Error {
+            code: ErrorCode::Unsupported,
+            message: msg,
+        },
+        Err(err) => error_response(err),
+    }
+}
+
+/// §7 mock domain (§14 state seams).
+fn mock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: MockV1) -> ResponseV1 {
+    match cmd {
+        MockV1::InstallSeam { id, response } => {
+            session.set_seam_response(id.clone(), response);
+            ResponseV1::MockDone {
+                id,
+                detail: "seam override installed".into(),
+            }
+        }
+        MockV1::Clear { id } => {
+            session.clear_seam(&id);
+            ResponseV1::MockDone {
+                id,
+                detail: "seam override cleared".into(),
+            }
+        }
+        MockV1::ResetState { scope } => match session.reset_state(&scope) {
+            Ok(detail) => ResponseV1::MockDone { id: scope, detail },
+            Err(err) => error_response(err),
+        },
+        MockV1::Call { id, scope } => match session.run_seam(&id, &scope) {
+            Ok(detail) => ResponseV1::MockDone { id, detail },
+            Err(err) => error_response(err),
+        },
+    }
+}
+
+/// §7 inspect domain (§13): recording control. The session-side recorder
+/// is the kit's `CodegenRecorder` (guiwright-inspect); over the wire the
+/// interactive highlight handles land with the overlay session.
+fn inspect_response<A: FrameworkAdapter>(_session: &mut Session<A>, cmd: InspectV1) -> ResponseV1 {
+    match cmd {
+        InspectV1::StartRecording | InspectV1::StopRecording => ResponseV1::Error {
+            code: ErrorCode::Unsupported,
+            message: "remote codegen recording lands with the interactive inspector session (§13); embedded mode records via guiwright-kit::App::codegen".into(),
+        },
     }
 }
 
@@ -334,7 +430,11 @@ mod tests {
     async fn session_thread_answers_handshake_and_snapshot() {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(8);
         let handle = std::thread::spawn(move || {
-            run_session_thread(cmd_rx, MockAdapter::with_fixture(&Fixture::buttons()));
+            run_session_thread(
+                cmd_rx,
+                MockAdapter::with_fixture(&Fixture::buttons()),
+                crate::seams::SeamRegistry::new(),
+            );
         });
 
         let resp = send(
@@ -370,7 +470,11 @@ mod tests {
     async fn resolve_and_action_roundtrip() {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(8);
         let handle = std::thread::spawn(move || {
-            run_session_thread(cmd_rx, MockAdapter::with_fixture(&Fixture::buttons()));
+            run_session_thread(
+                cmd_rx,
+                MockAdapter::with_fixture(&Fixture::buttons()),
+                crate::seams::SeamRegistry::new(),
+            );
         });
 
         // Resolve the Save button (fuzzy role+name).
@@ -422,7 +526,11 @@ mod tests {
     async fn stale_generation_is_rejected() {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(8);
         let handle = std::thread::spawn(move || {
-            run_session_thread(cmd_rx, MockAdapter::with_fixture(&Fixture::buttons()));
+            run_session_thread(
+                cmd_rx,
+                MockAdapter::with_fixture(&Fixture::buttons()),
+                crate::seams::SeamRegistry::new(),
+            );
         });
 
         let resp = send(
@@ -446,5 +554,179 @@ mod tests {
 
         drop(cmd_tx);
         handle.join().unwrap();
+    }
+
+    // --- M2: clock & mock domains over the session thread ----------------
+
+    #[tokio::test]
+    async fn clock_domain_steps_over_the_session() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(8);
+        let handle = std::thread::spawn(move || {
+            run_session_thread(
+                cmd_rx,
+                MockAdapter::with_fixture(&Fixture::buttons()),
+                crate::seams::SeamRegistry::new(),
+            );
+        });
+
+        let resp = send(&cmd_tx, RequestV1::Clock(ClockV1::InstallVirtual)).await;
+        match resp {
+            ResponseV1::ClockState {
+                virtual_time_ms, ..
+            } => assert_eq!(virtual_time_ms, Some(0)),
+            other => panic!("expected ClockState, got {other:?}"),
+        }
+
+        // 50 ms fast-forward = 3 frame steps (16.67 ms each).
+        let resp = send(&cmd_tx, RequestV1::Clock(ClockV1::FastForward { ms: 50 })).await;
+        match resp {
+            ResponseV1::ClockState {
+                virtual_time_ms,
+                steps,
+                ..
+            } => {
+                assert_eq!(virtual_time_ms, Some(50));
+                assert_eq!(steps, 3);
+            }
+            other => panic!("expected ClockState, got {other:?}"),
+        }
+
+        let resp = send(&cmd_tx, RequestV1::Clock(ClockV1::State)).await;
+        match resp {
+            ResponseV1::ClockState { steps, .. } => assert_eq!(steps, 0, "state probe"),
+            other => panic!("expected ClockState, got {other:?}"),
+        }
+
+        drop(cmd_tx);
+        handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn mock_domain_runs_seams_and_overrides() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(8);
+        let handle = std::thread::spawn(move || {
+            let mut adapter = MockAdapter::with_fixture(&Fixture::buttons());
+            adapter = adapter.with_state(AppDb { rows: 7 });
+            run_session_thread(cmd_rx, adapter, app_seams());
+        });
+
+        // Canned override wins (§7 InstallSeam).
+        let resp = send(
+            &cmd_tx,
+            RequestV1::Mock(MockV1::InstallSeam {
+                id: "reset_state".into(),
+                response: Some("canned-ok".into()),
+            }),
+        )
+        .await;
+        match resp {
+            ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "seam override installed"),
+            other => panic!("expected MockDone, got {other:?}"),
+        }
+
+        let resp = send(
+            &cmd_tx,
+            RequestV1::Mock(MockV1::ResetState {
+                scope: "seed-42".into(),
+            }),
+        )
+        .await;
+        match resp {
+            ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "canned-ok"),
+            other => panic!("expected MockDone, got {other:?}"),
+        }
+
+        // Clear → the real hook runs inside the runner context (§14).
+        let resp = send(
+            &cmd_tx,
+            RequestV1::Mock(MockV1::Clear {
+                id: "reset_state".into(),
+            }),
+        )
+        .await;
+        match resp {
+            ResponseV1::MockDone { .. } => {}
+            other => panic!("expected MockDone, got {other:?}"),
+        }
+        let resp = send(
+            &cmd_tx,
+            RequestV1::Mock(MockV1::ResetState {
+                scope: "seed-42".into(),
+            }),
+        )
+        .await;
+        match resp {
+            ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "db reset to seed-42"),
+            other => panic!("expected MockDone, got {other:?}"),
+        }
+
+        // Direct Call on a second seam.
+        let resp = send(
+            &cmd_tx,
+            RequestV1::Mock(MockV1::Call {
+                id: "seed_users".into(),
+                scope: "smoke".into(),
+            }),
+        )
+        .await;
+        match resp {
+            ResponseV1::MockDone { detail, .. } => assert_eq!(detail, "3 users seeded"),
+            other => panic!("expected MockDone, got {other:?}"),
+        }
+
+        drop(cmd_tx);
+        handle.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn mock_unknown_seam_reports_clean_error() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(8);
+        let handle = std::thread::spawn(move || {
+            run_session_thread(
+                cmd_rx,
+                MockAdapter::with_fixture(&Fixture::buttons()),
+                crate::seams::SeamRegistry::new(),
+            );
+        });
+        let resp = send(
+            &cmd_tx,
+            RequestV1::Mock(MockV1::Call {
+                id: "missing".into(),
+                scope: String::new(),
+            }),
+        )
+        .await;
+        match resp {
+            ResponseV1::Error { message, .. } => {
+                assert!(message.contains("no seam registered"), "{message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        drop(cmd_tx);
+        handle.join().unwrap();
+    }
+
+    #[derive(Debug, Default)]
+    struct AppDb {
+        rows: usize,
+    }
+
+    fn app_seams() -> crate::seams::SeamRegistry {
+        let mut reg = crate::seams::SeamRegistry::new();
+        reg.register("reset_state", |ctx, scope| {
+            let db = ctx
+                .downcast_mut::<AppDb>()
+                .ok_or("wrong runner context type")?;
+            db.rows = 0;
+            Ok(format!("db reset to {scope}"))
+        });
+        reg.register("seed_users", |ctx, _scope| {
+            let db = ctx
+                .downcast_mut::<AppDb>()
+                .ok_or("wrong runner context type")?;
+            db.rows = 3;
+            Ok("3 users seeded".into())
+        });
+        reg
     }
 }
