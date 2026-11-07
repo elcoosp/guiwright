@@ -144,6 +144,13 @@ try {
   assert.ok(existsSync(video.path), "the finalized artifact exists");
   console.log("✓ video:", video.frames, "frames,", video.dropped, "dropped →", video.path);
 
+  // --- window domain: single-window apps report one "main" target (M6) ---
+  const windows = await client.windowList();
+  assert.equal(windows.length, 1, "the demo app is single-window");
+  assert.equal(windows[0].handle, "main");
+  await client.windowUse("main"); // a no-op scope on single-window apps
+  console.log("✓ window: listed", windows.length, "target, aimed at main");
+
   // --- strict-mode rejection is a typed error (§8.2) ---
   await assert.rejects(
     () =>
