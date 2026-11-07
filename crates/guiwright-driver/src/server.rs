@@ -407,10 +407,33 @@ fn handle_request<A: FrameworkAdapter>(
                 Err(err) => error_response(err),
             }
         }
-        RequestV1::Input { .. } => ResponseV1::Error {
-            code: ErrorCode::Unsupported,
-            message: "raw input over GWP lands with the gesture synthesis milestone (§9)".into(),
-        },
+        RequestV1::Input { events } => {
+            // Raw input over the wire (§9, M7): the connection's active
+            // window target steers the coordinates (the M6 handoff —
+            // "the gesture milestone will take the target window from
+            // the connection's active handle"); an unscoped connection
+            // targets the session's default window. The batch applies
+            // inside the next frame (one rendezvous pump).
+            match session.send_input(
+                events.into_iter().map(Into::into).collect(),
+                window.as_deref(),
+            ) {
+                Ok(frame_seq) => ResponseV1::InputQueued { frame_seq },
+                Err(err) => error_response(err),
+            }
+        }
+        RequestV1::Gesture(gesture) => {
+            // Gesture synthesis (§9, M7): the session synthesizes the raw
+            // batch from its adapter's pacing table and injects it through
+            // the same per-window path as `Input`.
+            match session.perform_gesture(gesture.into(), window.as_deref()) {
+                Ok(outcome) => ResponseV1::GestureDone {
+                    frame_seq: outcome.applied_at_frame,
+                    detail: outcome.detail,
+                },
+                Err(err) => error_response(err),
+            }
+        }
         RequestV1::Clock(cmd) => clock_response(session, cmd),
         RequestV1::Mock(cmd) => mock_response(session, cmd),
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
