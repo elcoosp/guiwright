@@ -32,6 +32,17 @@ pub struct Caps {
     pub clock: bool,
 }
 
+/// One window target as reported by an adapter (§16 v0.4 multi-window, M6).
+/// The handle is the stable target id clients address windows by: the
+/// AccessKit subtree `TreeId` string for grafted (multi-window) adapters,
+/// [`guiwright_core::MAIN_WINDOW`] for single-window ones.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowInfo {
+    pub handle: String,
+    pub title: String,
+    pub focused: bool,
+}
+
 /// Bounded pump: how long the adapter may spin its loop before returning.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameDeadline {
@@ -249,6 +260,22 @@ pub enum AdapterError {
 /// so adapters implement exactly what their capability matrix advertises.
 pub trait FrameworkAdapter: 'static {
     fn meta(&self) -> &AdapterMeta;
+
+    /// The session's window targets (§16 v0.4, M6). Default: one `main`
+    /// window — every single-window adapter inherits it unchanged.
+    /// Multi-window adapters return one entry per window; **handles MUST
+    /// equal the AccessKit subtree `TreeId` strings the adapter pushes** —
+    /// the tree is the scoping source of truth
+    /// ([`Session::window_scope`](crate::session::Session::window_scope)
+    /// validates against it), `Window::Use` fails with `UnknownWindow` for
+    /// handles the tree does not know.
+    fn windows(&mut self) -> Vec<WindowInfo> {
+        vec![WindowInfo {
+            handle: guiwright_core::MAIN_WINDOW.to_string(),
+            title: self.meta().framework.to_string(),
+            focused: true,
+        }]
+    }
 
     /// Pump frames until the app is quiescent or `deadline` hits (§6.1).
     fn pump(&mut self, deadline: FrameDeadline) -> PumpOutcome;
