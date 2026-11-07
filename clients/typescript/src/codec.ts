@@ -27,6 +27,9 @@ import {
   type TextMatchV1,
   type VideoCmd,
   VideoV1,
+  type WindowCmd,
+  type WindowInfoV1,
+  WindowV1,
 } from "./schema.ts";
 import { Decoder, Encoder } from "./postcard.ts";
 
@@ -98,6 +101,10 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
     case "video":
       enc.u32(RequestV1.Video);
       encodeVideoCmd(enc, req.cmd);
+      break;
+    case "window":
+      enc.u32(RequestV1.Window);
+      encodeWindowCmd(enc, req.cmd);
       break;
     case "bye":
       enc.u32(RequestV1.Bye);
@@ -279,6 +286,17 @@ function encodeVideoCmd(enc: Encoder, cmd: VideoCmd): void {
   }
 }
 
+function encodeWindowCmd(enc: Encoder, cmd: WindowCmd): void {
+  switch (cmd.kind) {
+    case "list":
+      enc.u32(WindowV1.List);
+      break;
+    case "use":
+      enc.u32(WindowV1.Use).str(cmd.handle);
+      break;
+  }
+}
+
 // --- Decoding ----------------------------------------------------------------
 
 export function decodeResponse(bytes: Uint8Array): GwpResponseT {
@@ -356,6 +374,18 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       const dropped = dec.u64n();
       const duration_ms = dec.u64n();
       return { kind: "video_file", path, frames, dropped, duration_ms };
+    }
+    case 12: {
+      const n = dec.varint();
+      const windows: WindowInfoV1[] = [];
+      for (let i = 0; i < n; i += 1) {
+        windows.push({ handle: dec.str(), title: dec.str(), focused: dec.bool() });
+      }
+      return { kind: "windows", windows };
+    }
+    case 13: {
+      const handle = dec.str();
+      return { kind: "window_used", handle };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
