@@ -91,19 +91,13 @@ pub struct IcedAdapter<S: SimulatorSeam> {
     sim: S,
     pass_seq: u64,
     last_frame_hash: u64,
-    clock: ClockState,
 }
 
 impl<S: SimulatorSeam> IcedAdapter<S> {
     /// Capability row for iced (§6.2): no AccessKit tree (Level-2), input
     /// through the real pipeline, frames via the backend's screenshot
     /// path, clock best-effort via Emulator modes.
-    pub fn new(
-        report: ReportFn,
-        sim: S,
-        registry: crate::registry::RoleRegistry,
-        screen: (f64, f64),
-    ) -> Self {
+    pub fn new(report: ReportFn, sim: S, registry: crate::registry::RoleRegistry) -> Self {
         Self {
             meta: AdapterMeta {
                 name: "iced",
@@ -124,11 +118,6 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
             sim,
             pass_seq: 0,
             last_frame_hash: 0,
-            clock: ClockState {
-                virtual_time: None,
-                paused: false,
-            },
-            screen,
         }
     }
 
@@ -142,9 +131,14 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
     }
 }
 
-impl<S: SimulatorSeam> FrameworkAdapter for IcedAdapter<S> {
+impl<S: SimulatorSeam + 'static> FrameworkAdapter for IcedAdapter<S> {
     fn meta(&self) -> &AdapterMeta {
         &self.meta
+    }
+
+    /// Level-2 adapter: no AccessKit tree of its own (§6.2 row).
+    fn tree_update(&mut self) -> Option<accesskit::TreeUpdate> {
+        None
     }
 
     fn pump(&mut self, deadline: FrameDeadline) -> PumpOutcome {
@@ -173,7 +167,8 @@ impl<S: SimulatorSeam> FrameworkAdapter for IcedAdapter<S> {
     }
 
     fn logical_snapshot(&mut self) -> Option<LogicalTreeDiff> {
-        Some(self.engine.rebuild(self.current_report()))
+        let report = self.current_report();
+        Some(self.engine.rebuild(report))
     }
 
     fn act(&mut self, node: NodeId, action: SemAction) -> Result<ActionOutcome, AdapterError> {
@@ -225,10 +220,6 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
     pub fn last_frame_hash(&self) -> u64 {
         self.last_frame_hash
     }
-
-    fn sim(&self) -> &S {
-        &self.sim
-    }
 }
 
 /// Screenshot hook for the CI matrix pass (§10 `render_frame`): binds
@@ -237,6 +228,17 @@ pub fn screenshot_unsupported() -> Result<(), AdapterError> {
     Err(AdapterError::Unsupported(
         "render_frame (binds iced_test::screenshot in the CI matrix pass)",
     ))
+}
+
+impl<S: SimulatorSeam> std::fmt::Debug for IcedAdapter<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IcedAdapter")
+            .field("meta", &self.meta)
+            .field("mode", &self.mode)
+            .field("pass_seq", &self.pass_seq)
+            .field("last_frame_hash", &self.last_frame_hash)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]
@@ -295,7 +297,6 @@ mod tests {
                 screen: (480.0, 240.0),
             },
             RoleRegistry::new(),
-            (480.0, 240.0),
         )
     }
 
@@ -346,7 +347,6 @@ mod tests {
         adapter
             .input(InputEvent::TextInput { text: "ada".into() })
             .expect("typewrite");
-        let _ = adapter.sim();
     }
 
     #[test]
