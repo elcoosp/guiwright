@@ -59,6 +59,7 @@ pub struct MasonryAdapter<W: Widget> {
 }
 
 mod normalize;
+pub mod overlay;
 
 impl<W: Widget> MasonryAdapter<W> {
     /// Create the adapter with the given root widget (default 400×400
@@ -359,8 +360,18 @@ impl<W: Widget> FrameworkAdapter for MasonryAdapter<W> {
                 }
             }
             ClockCmd::RunFor(dt) => self.harness.animate_ms(dt.as_millis() as u64),
+            ClockCmd::SetTime(t) => {
+                // Absolute time: jump forward by the delta from the
+                // approximate current virtual time (the harness tracks a
+                // plain tick counter, §14 masonry row).
+                let current = Duration::from_millis(self.frame_seq.saturating_mul(FRAME_MS));
+                if t > current {
+                    self.harness.animate_ms((t - current).as_millis() as u64);
+                }
+            }
             ClockCmd::Pause => self.clock_paused = true,
             ClockCmd::Resume => self.clock_paused = false,
+            ClockCmd::Probe => {}
         }
         Ok(ClockState {
             virtual_time: Some(Duration::from_millis(
