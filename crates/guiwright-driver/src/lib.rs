@@ -11,6 +11,8 @@
 //!   executed inside the adapter's runner context via `run_in`.
 //! * [`server`] — serves GWP over UDS by marshalling commands to the session
 //!   thread (commands are queued and applied inside the next frame, §5.1).
+//! * [`gesture`] — gesture synthesis (§9, M7): the wire's high-level
+//!   `Gesture` vocabulary → raw `InputEvent` sequences, paced per adapter.
 //! * [`mock`] — a scriptable adapter used by tests and benches (feature
 //!   `mock`).
 
@@ -18,6 +20,7 @@
 
 pub mod adapter;
 pub mod clock;
+pub mod gesture;
 pub mod seams;
 pub mod server;
 pub mod session;
@@ -27,10 +30,11 @@ pub mod mock;
 
 pub use adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
-    FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PointerButton, PumpOutcome,
-    SemAction, WindowInfo,
+    FrameStamp, FrameworkAdapter, GesturePacing, InputEvent, LogicalTreeDiff, PointerButton,
+    PumpOutcome, SemAction, WindowInfo,
 };
 pub use clock::{ClockLedgerEntry, ClockReport, ClockService, FRAME_STEP, LedgerCommand};
+pub use gesture::{Gesture, synthesize};
 pub use seams::{SeamFn, SeamRegistry, SeamTask};
-pub use server::spawn_session_server;
-pub use session::{ActionOpts, Session};
+pub use server::{GwpServerHandle, spawn_session_server};
+pub use session::{ActionOpts, GestureOutcome, Session};
