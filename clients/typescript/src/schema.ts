@@ -6,7 +6,8 @@
  *
  * Wire discipline: variants are append-only within the `V1` envelope —
  * `Video` follows `Bye` (M3), the `Window` domain follows `Video`
- * (M6, §16 v0.4 multi-window); a mid-enum reorder fails the Rust
+ * (M6, §16 v0.4 multi-window) and the `Gesture` domain follows `Window`
+ * (M7, §9 input pipeline); a mid-enum reorder fails the Rust
  * discriminant pinning test and the schema golden at the same time.
  */
 
@@ -34,6 +35,7 @@ export const RequestV1 = {
   Bye: 9,
   Video: 10,
   Window: 11,
+  Gesture: 12,
 } as const;
 
 export const ClockV1 = {
@@ -68,6 +70,15 @@ export const WindowV1 = {
   Use: 1,
 } as const;
 
+/** §9 gesture synthesis (M7): the driver builds the raw event batch. */
+export const GestureV1 = {
+  Click: 0,
+  Drag: 1,
+  Wheel: 2,
+  Key: 3,
+  Type: 4,
+} as const;
+
 // --- Response variants -------------------------------------------------------
 
 export const ResponseV1 = {
@@ -85,6 +96,7 @@ export const ResponseV1 = {
   VideoFile: 11,
   Windows: 12,
   WindowUsed: 13,
+  GestureDone: 14,
 } as const;
 
 export const ErrorCode = {
@@ -242,7 +254,8 @@ export type GwpRequest =
   | { kind: "inspect"; cmd: InspectCmd }
   | { kind: "bye" }
   | { kind: "video"; cmd: VideoCmd }
-  | { kind: "window"; cmd: WindowCmd };
+  | { kind: "window"; cmd: WindowCmd }
+  | { kind: "gesture"; cmd: GestureCmd };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -297,6 +310,26 @@ export type VideoCmd =
 /** §16 v0.4 multi-window: `Use` aims THIS connection at a window target. */
 export type WindowCmd = { kind: "list" } | { kind: "use"; handle: string };
 
+/**
+ * §9 gestures (M7): high-level synthetic gestures — the driver
+ * synthesizes the raw `InputEvent` batch (per-adapter pacing) and injects
+ * it through the target window's real pipeline. Coordinates are logical
+ * px relative to the sending connection's active window target.
+ */
+export type GestureCmd =
+  | { kind: "click"; x: number; y: number; button: number; count: number }
+  | {
+      kind: "drag";
+      from_x: number;
+      from_y: number;
+      to_x: number;
+      to_y: number;
+      button: number;
+    }
+  | { kind: "wheel"; dx: number; dy: number }
+  | { kind: "key"; key: string; modifiers: string[] }
+  | { kind: "type"; text: string };
+
 export type GwpResponse =
   | ({ kind: "welcome" } & Welcome)
   | { kind: "pong" }
@@ -311,4 +344,5 @@ export type GwpResponse =
   | { kind: "bye" }
   | ({ kind: "video_file" } & VideoFile)
   | { kind: "windows"; windows: WindowInfoV1[] }
-  | { kind: "window_used"; handle: string };
+  | { kind: "window_used"; handle: string }
+  | { kind: "gesture_done"; frame_seq: number; detail: string };
