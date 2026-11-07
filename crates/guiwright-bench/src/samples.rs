@@ -248,3 +248,136 @@ pub fn element_screenshot_crop() -> Duration {
     let _ = (region.width, region.height);
     started.elapsed()
 }
+
+// --- M2 samples (remote UDS round-trip, §5.3/§15.1; viewer replay, §12) ------
+
+/// §15.1 `resolve_remote_uds`: one Resolve round-trip over a real UDS
+/// socket — the §15.6 IPC shape (postcard framing, session-thread
+/// rendezvous included). The server is spawned once per sample with the
+/// mock adapter; the measured operation is the client call only.
+pub fn resolve_remote_uds() -> Duration {
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::schema::{RequestV1, ResponseV1, SelectorV1, TextMatchV1};
+    use guiwright_proto::uds::Client;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let fixture = Fixture::buttons();
+    let runtime = Runtime::new().expect("bench runtime");
+    let dir = std::env::temp_dir().join(format!("gw-bench-uds-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("resolve.sock");
+
+    // The server spawns tokio tasks: it must come up inside the runtime
+    // context (the handle escapes block_on for shutdown).
+    let (measured, handle) = runtime.block_on(async {
+        let handle = GwpServerHandle::spawn_with_seams(
+            path.clone(),
+            move || MockAdapter::with_fixture(&fixture),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench server binds");
+        let mut client = Client::connect(&path).await.expect("bench client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let selector = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+
+        const ITERATIONS: u32 = 64;
+        // Warm the index once (the §15.1 row is the cached-index path).
+        for _ in 0..4 {
+            let resp = client
+                .request(RequestV1::Resolve {
+                    selector: selector.clone(),
+                    timeout_ms: 1000,
+                })
+                .await
+                .expect("warm resolve");
+            assert!(matches!(resp, ResponseV1::Resolved { .. }));
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let resp = client
+                .request(RequestV1::Resolve {
+                    selector: selector.clone(),
+                    timeout_ms: 1000,
+                })
+                .await
+                .expect("bench resolve");
+            assert!(matches!(resp, ResponseV1::Resolved { .. }));
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+    measured.max(Duration::from_nanos(1))
+}
+
+/// §15.7 micro-suite guard (M2): open a synthetic archive and resolve the
+/// tree at the last frame — the viewer's timeline replay path (§12).
+pub fn viewer_timeline_replay() -> Duration {
+    use guiwright_trace::schema::{AdapterRecord, TreeNode, TreeSnapshot};
+    use guiwright_trace::{TraceOptions, TraceRecorder};
+    use guiwright_viewer::Timeline;
+    use std::time::Instant;
+
+    let dir = std::env::temp_dir().join(format!("gw-bench-viewer-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("replay.zip");
+
+    let options = TraceOptions {
+        output_path: path.clone(),
+        test: "bench".into(),
+        app: "bench".into(),
+        adapter: AdapterRecord {
+            name: "bench".into(),
+            framework: "fixture".into(),
+            framework_version: "0".into(),
+        },
+        seed: None,
+        resolution: (1280, 800),
+        scale: 1.0,
+        frame_budget_bytes: 64 * 1024 * 1024,
+        ring_capacity: 8192,
+    };
+    let mut recorder = TraceRecorder::start(options);
+    // ~1 000-node tree snapshots at 3 frames + diffs between.
+    let nodes: Vec<TreeNode> = (0..1000)
+        .map(|i| TreeNode {
+            id: i,
+            parent: Some(0),
+            role: "Button".into(),
+            label: Some(format!("button-{i}")),
+            value: None,
+            bounds: Some([0.0, 0.0, 40.0, 20.0]),
+        })
+        .collect();
+    for frame in [1u64, 30, 60] {
+        recorder.tree_snapshot(TreeSnapshot {
+            frame_seq: frame,
+            nodes: nodes.clone(),
+            focus: Some(0),
+        });
+        recorder.tree_diff(frame + 1, vec![], vec![frame], vec![], false);
+    }
+    recorder.stop().expect("bench archive");
+
+    let started = Instant::now();
+    let archive = guiwright_viewer::TraceArchive::open(&path).expect("open");
+    let timeline = Timeline::from_archive(&archive);
+    let view = timeline
+        .tree_at(60)
+        .expect("resolved view at the last frame");
+    assert_eq!(view.nodes.len(), 1000);
+    started.elapsed()
+}
