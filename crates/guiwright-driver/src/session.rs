@@ -8,6 +8,7 @@
 //! changes** — between frames the session does no CPU work.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use accesskit::NodeId;
@@ -20,6 +21,7 @@ use guiwright_core::{CoreError, NodeKey, Selector};
 use crate::adapter::{ActionOutcome, FrameDeadline, FrameworkAdapter, InputEvent, SemAction};
 use crate::clock::{ClockReport, ClockService, LedgerCommand};
 use crate::seams::SeamRegistry;
+use guiwright_trace::video::{VideoOptions, VideoRecorder, VideoSummary};
 
 /// Options for actions (§8.3 "Timeout & retries" + force mode).
 #[derive(Clone, Debug)]
@@ -86,6 +88,9 @@ pub struct Session<A: FrameworkAdapter> {
     seam_overrides: BTreeMap<String, Option<String>>,
     /// The seam `reset_state(scope)` runs (§14 fixture parity).
     reset_seam: String,
+    /// Video recording service (§10, M3): present-frame capture riding
+    /// the pump loop. `None` = not recording.
+    video: Option<VideoRecorder>,
 }
 
 impl<A: FrameworkAdapter> Session<A> {
@@ -100,6 +105,7 @@ impl<A: FrameworkAdapter> Session<A> {
             seams: SeamRegistry::new(),
             seam_overrides: BTreeMap::new(),
             reset_seam: "reset_state".into(),
+            video: None,
         }
     }
 
@@ -156,8 +162,86 @@ impl<A: FrameworkAdapter> Session<A> {
             let _info = self.tree.frame_presented(stamp.hash);
             summary.frames_presented += 1;
         }
+
+        // Video capture (§10, M3): every presented frame is offered to the
+        // recorder — hash-equality dedup drops static spans, the ring is
+        // bounded, and encoding happens on the writer thread (§15.4: the
+        // UI thread only hands over an `Arc` clone).
+        if self.video.is_some() {
+            for stamp in &outcome.frames {
+                let frame = self.adapter.last_frame();
+                if let (Some(rec), Some(frame)) = (self.video.as_mut(), frame) {
+                    rec.push_frame(
+                        stamp.seq,
+                        stamp.hash,
+                        frame.size.0,
+                        frame.size.1,
+                        frame.pixels.as_ref(),
+                    );
+                }
+            }
+        }
+
         summary.quiescent = outcome.is_quiescent();
         summary
+    }
+
+    // --- Video service (§10, M3) ------------------------------------------
+
+    /// Start recording presented frames into `dir` (§10). Requires the
+    /// adapter's §6.2 pixel capability row (`last_frame` or
+    /// `render_frame`); refuses when a recording is already running.
+    /// `fps = 0` selects the driver default (25).
+    pub fn video_start_in(&mut self, dir: &Path, fps: u32) -> Result<(), CoreError> {
+        let caps = self.adapter.meta().caps;
+        if !caps.last_frame && !caps.render_frame {
+            return Err(CoreError::Unsupported(
+                "video (adapter exposes no pixel path, §6.2)",
+            ));
+        }
+        if self.video.is_some() {
+            return Err(CoreError::Other(
+                "a video recording is already running".into(),
+            ));
+        }
+        let path = dir.join(format!(
+            "guiwright-video-{}-{}.webm",
+            std::process::id(),
+            guiwright_trace::video::epoch_ms()
+        ));
+        let recorder = VideoRecorder::start(path, VideoOptions::new(fps))
+            .map_err(|e| CoreError::Other(format!("video start: {e}")))?;
+        self.video = Some(recorder);
+        Ok(())
+    }
+
+    /// Start recording into the default directory (`GUIWRIGHT_VIDEO_DIR`
+    /// or the OS temp dir) — the remote-mode default, since the client
+    /// learns the finalized path from the `VideoFile` reply (§7).
+    pub fn video_start(&mut self, fps: u32) -> Result<(), CoreError> {
+        let dir = std::env::var_os("GUIWRIGHT_VIDEO_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        self.video_start_in(&dir, fps)
+    }
+
+    /// Stop and finalize the recording; one final pump lands the last
+    /// requested frame before the encoder closes (§15.4). Idempotence via
+    /// error: stopping twice is an error, mirroring `Clock` domain rules.
+    pub fn video_stop(&mut self) -> Result<VideoSummary, CoreError> {
+        if self.video.is_none() {
+            return Err(CoreError::Other("no video recording is running".into()));
+        }
+        self.pump();
+        let recorder = self.video.take().expect("checked above");
+        recorder
+            .stop()
+            .map_err(|e| CoreError::Other(format!("video stop: {e}")))
+    }
+
+    /// Is a recording currently running?
+    pub fn recording(&self) -> bool {
+        self.video.is_some()
     }
 
     /// Pump until the app is quiescent or the deadline hits (§6.1 "pump
@@ -1027,5 +1111,74 @@ mod tests {
         let detail = session.reset_state("baseline").expect("seeds");
         assert_eq!(detail, "3 users seeded");
         assert_eq!(session.seam_ids(), vec!["reset_state", "seed_users"]);
+    }
+
+    // --- Video service (§10, M3) ------------------------------------------
+
+    fn pixel_adapter() -> MockAdapter {
+        MockAdapter::with_fixture(&Fixture::buttons()).with_frame_pixels(
+            16,
+            8,
+            vec![96; 16 * 8 * 4],
+        )
+    }
+
+    #[test]
+    fn video_records_presented_frames_and_dedups_static_spans() {
+        let mut session = Session::new(pixel_adapter());
+        session.settle(Instant::now() + Duration::from_secs(1));
+        let dir = tempfile::tempdir().expect("tmpdir");
+        session.video_start_in(dir.path(), 25).expect("start");
+        assert!(session.recording());
+
+        // Two distinct frames + one static span land during the window;
+        // the final stop pump presents one more (queue-empty hash 0).
+        session.adapter_mut().push_frame(0xA1);
+        session.pump();
+        session.adapter_mut().push_frame(0xA1);
+        session.pump();
+        session.adapter_mut().push_frame(0xB2);
+        session.pump();
+
+        let summary = session.video_stop().expect("stop");
+        assert!(!session.recording());
+        assert_eq!(
+            summary.frames, 3,
+            "0xA1 + 0xB2 + the final pump frame (hash 0)"
+        );
+        assert_eq!(summary.dropped, 1, "the static span collapsed");
+        assert!(
+            summary.path.exists(),
+            "finalized artifact exists at {}",
+            summary.path.display()
+        );
+    }
+
+    #[test]
+    fn video_requires_the_pixel_capability_row() {
+        let mut session = Session::new(MockAdapter::with_fixture(&Fixture::buttons()));
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let err = session
+            .video_start_in(dir.path(), 25)
+            .expect_err("no pixel capability");
+        assert!(
+            matches!(err, CoreError::Unsupported(_)),
+            "clean §6.2 error: {err}"
+        );
+    }
+
+    #[test]
+    fn double_video_start_is_rejected_and_stop_without_start_too() {
+        let mut session = Session::new(pixel_adapter());
+        session.settle(Instant::now() + Duration::from_secs(1));
+        let dir = tempfile::tempdir().expect("tmpdir");
+        session.video_start_in(dir.path(), 25).expect("first start");
+        let err = session
+            .video_start_in(dir.path(), 25)
+            .expect_err("second start");
+        assert!(err.to_string().contains("already running"), "{err}");
+        session.video_stop().expect("stop");
+        let err = session.video_stop().expect_err("second stop");
+        assert!(err.to_string().contains("no video recording"), "{err}");
     }
 }
