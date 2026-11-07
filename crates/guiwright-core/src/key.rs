@@ -21,6 +21,11 @@ pub enum NodeKey {
     Logical { adapter: &'static str, id: u64 },
 }
 
+/// The handle of a graft-free (single-window) app's only window target
+/// (§16 v0.4, M6). Multi-window adapters instead use their grafted subtrees'
+/// [`accesskit::TreeId`] strings — see `guiwright_core::tree::WindowScope`.
+pub const MAIN_WINDOW: &str = "main";
+
 impl NodeKey {
     /// Human-friendly identity used in error reports.
     pub fn describe(&self) -> String {
