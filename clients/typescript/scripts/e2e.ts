@@ -151,6 +151,20 @@ try {
   await client.windowUse("main"); // a no-op scope on single-window apps
   console.log("✓ window: listed", windows.length, "target, aimed at main");
 
+  // --- gestures: the §9 input pipeline over the wire (M7) ---
+  const click = await client.mouse.click(12.5, 30);
+  assert.match(click.detail, /clicked at \(12\.5, 30\) — 3 events/);
+  const dbl = await client.mouse.dblclick(4, 8);
+  assert.match(dbl.detail, /double-clicked at \(4, 8\) — 5 events/);
+  const drag = await client.mouse.drag(10, 10, 110, 10);
+  assert.match(drag.detail, /dragged \(10, 10\) → \(110, 10\) — 22 events/);
+  await client.mouse.wheel(0, -120);
+  const queued = await client.input([{ kind: "pointer_move", x: 1, y: 2 }]);
+  assert.ok(queued.frame_seq >= 1, "raw input reports its frame");
+  await client.keyboard.press("Enter", ["Shift"]);
+  await client.keyboard.type("héllo");
+  console.log("✓ gestures: click/drag/wheel + raw input + keyboard (M7)");
+
   // --- strict-mode rejection is a typed error (§8.2) ---
   await assert.rejects(
     () =>
