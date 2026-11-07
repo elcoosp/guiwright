@@ -15,14 +15,15 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::net::UnixListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::{mpsc, oneshot};
 
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
-    RequestV1, ResponseV1, SemActionV1,
+    RequestV1, ResponseV1, SemActionV1, VideoV1,
 };
+use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
 
 use crate::adapter::{AdapterMeta, FrameworkAdapter, SemAction};
@@ -78,12 +79,21 @@ impl Handler for GwpBridge {
     }
 }
 
+/// Where a server handle listens (§7 transports).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Endpoint {
+    /// Unix domain socket path (default transport).
+    Uds(PathBuf),
+    /// TCP host:port (CI containers + other-language clients, M3).
+    Tcp(std::net::SocketAddr),
+}
+
 /// Handle keeping the server + session thread alive.
 pub struct GwpServerHandle {
     cmd_tx: mpsc::Sender<Internal>,
     serve_task: tokio::task::JoinHandle<()>,
     session_thread: std::thread::JoinHandle<()>,
-    pub path: PathBuf,
+    pub endpoint: Endpoint,
 }
 
 impl GwpServerHandle {
@@ -91,6 +101,13 @@ impl GwpServerHandle {
         GwpBridge {
             cmd_tx: self.cmd_tx.clone(),
         }
+    }
+
+    /// The bound endpoint (UDS path or TCP socket address). For an
+    /// ephemeral `spawn_tcp("127.0.0.1:0")` this is how clients learn the
+    /// port.
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
     }
 
     /// Graceful shutdown: signal the session thread, stop the accept loop,
@@ -104,7 +121,9 @@ impl GwpServerHandle {
         drop(self.cmd_tx);
         // 4. Join the session thread (bounded by the queue drain).
         let _ = self.session_thread.join();
-        let _ = std::fs::remove_file(&self.path);
+        if let Endpoint::Uds(path) = &self.endpoint {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -135,7 +154,45 @@ impl GwpServerHandle {
     {
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;
+        Self::start(listener, Endpoint::Uds(path), make_adapter, seams)
+    }
 
+    /// Spawn the remote-mode stack over **TCP** (§7 "TCP for CI
+    /// containers" plus M3 other-language clients): same session thread,
+    /// same rendezvous discipline, byte-identical GWP frames — only the
+    /// socket differs. Pass port `0` for an ephemeral bind; read the
+    /// bound address back from [`GwpServerHandle::endpoint`].
+    pub fn spawn_tcp<A, F>(
+        addr: std::net::SocketAddr,
+        make_adapter: F,
+        seams: crate::seams::SeamRegistry,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        let listener = std::net::TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        let bound = listener.local_addr()?;
+        let listener = TcpListener::from_std(listener)?;
+        Self::start(listener, Endpoint::Tcp(bound), make_adapter, seams)
+    }
+
+    /// Shared stack bring-up: session thread + accept loop bridged over
+    /// one command queue (§5.1).
+    fn start<A, F, L, S>(
+        listener: L,
+        endpoint: Endpoint,
+        make_adapter: F,
+        seams: crate::seams::SeamRegistry,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+        L: Send + 'static,
+        S: Future<Output = ()> + Send + 'static,
+        L: IntoServe<S>,
+    {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(64);
         let session_thread = std::thread::Builder::new()
             .name("guiwright-session".into())
@@ -144,17 +201,46 @@ impl GwpServerHandle {
 
         let bridge_tx = cmd_tx.clone();
         let serve_task = tokio::spawn(async move {
-            uds::serve(listener, move || GwpBridge {
-                cmd_tx: bridge_tx.clone(),
-            })
-            .await;
+            listener
+                .into_serve(move || GwpBridge {
+                    cmd_tx: bridge_tx.clone(),
+                })
+                .await;
         });
 
         Ok(GwpServerHandle {
             cmd_tx,
             serve_task,
             session_thread,
-            path,
+            endpoint,
+        })
+    }
+}
+
+/// Bridges a transport listener into its `serve` future, so the shared
+/// stack bring-up above is transport-blind.
+trait IntoServe<S> {
+    fn into_serve<H: Handler>(self, make_handler: impl FnMut() -> H + Send + 'static) -> S;
+}
+
+impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for UnixListener {
+    fn into_serve<H: Handler>(
+        self,
+        make_handler: impl FnMut() -> H + Send + 'static,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            uds::serve(self, make_handler).await;
+        })
+    }
+}
+
+impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for TcpListener {
+    fn into_serve<H: Handler>(
+        self,
+        make_handler: impl FnMut() -> H + Send + 'static,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            tcp::serve(self, make_handler).await;
         })
     }
 }
@@ -284,7 +370,36 @@ fn handle_request<A: FrameworkAdapter>(session: &mut Session<A>, request: Reques
         RequestV1::Clock(cmd) => clock_response(session, cmd),
         RequestV1::Mock(cmd) => mock_response(session, cmd),
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
+        RequestV1::Video(cmd) => video_response(session, cmd),
         RequestV1::Bye => ResponseV1::Bye,
+    }
+}
+
+/// §7 video domain (§10): recording control. Wired to the session's
+/// video service — frames ride the pump loop (§15.4), dedup + encoding
+/// happen off the session thread. The client owns the artifact dir
+/// (Playwright parity): `VideoOptsV1.dir` overrides the driver default.
+fn video_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: VideoV1) -> ResponseV1 {
+    match cmd {
+        VideoV1::Start(opts) => {
+            let result = match opts.dir.as_deref() {
+                Some(dir) => session.video_start_in(std::path::Path::new(dir), opts.fps),
+                None => session.video_start(opts.fps),
+            };
+            match result {
+                Ok(()) => ResponseV1::Pong,
+                Err(err) => error_response(err),
+            }
+        }
+        VideoV1::Stop => match session.video_stop() {
+            Ok(file) => ResponseV1::VideoFile {
+                path: file.path.display().to_string(),
+                frames: file.frames,
+                dropped: file.dropped,
+                duration_ms: file.duration_ms,
+            },
+            Err(err) => error_response(err),
+        },
     }
 }
 
