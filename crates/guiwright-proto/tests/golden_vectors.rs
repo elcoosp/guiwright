@@ -15,9 +15,9 @@
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InputEventV1, InspectV1, MockV1, NodeKeyV1,
-    PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1, SemActionV1, TextMatchV1,
-    VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, GestureV1, InputEventV1, InspectV1, MockV1,
+    NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1, SemActionV1,
+    TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -151,6 +151,33 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         "window_use",
         RequestV1::Window(WindowV1::Use {
             handle: "a6000000-0000-0000-0000-000000000001".into(),
+        }),
+    );
+    // M7 (§9): the Gesture domain appends after Window.
+    push(
+        "gesture_click",
+        RequestV1::Gesture(GestureV1::Click {
+            x: 12.5,
+            y: 30.0,
+            button: PointerButtonV1::Primary,
+            count: 2,
+        }),
+    );
+    push(
+        "gesture_drag",
+        RequestV1::Gesture(GestureV1::Drag {
+            from_x: 10.0,
+            from_y: 10.0,
+            to_x: 110.0,
+            to_y: 60.0,
+            button: PointerButtonV1::Primary,
+        }),
+    );
+    push(
+        "gesture_key",
+        RequestV1::Gesture(GestureV1::Key {
+            key: "Enter".into(),
+            modifiers: vec!["Shift".into()],
         }),
     );
     push("bye", RequestV1::Bye);
@@ -347,6 +374,19 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         serde_json::json!({
             "kind": "window_used",
             "handle": "a6000000-0000-0000-0000-000000000001",
+        }),
+    );
+    // M7 (§9): the gesture reply appends after WindowUsed.
+    push(
+        "gesture_done",
+        ResponseV1::GestureDone {
+            frame_seq: 20,
+            detail: "clicked at (12.5, 30) — 3 events".into(),
+        },
+        serde_json::json!({
+            "kind": "gesture_done",
+            "frame_seq": 20,
+            "detail": "clicked at (12.5, 30) — 3 events",
         }),
     );
     out
