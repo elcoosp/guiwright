@@ -14,7 +14,7 @@ use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     AdapterInfoV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, RequestV1, ResponseV1,
-    SelectorV1, SemActionV1, TextMatchV1, VideoOptsV1, VideoV1,
+    SelectorV1, SemActionV1, TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
 };
 
 /// One output line of a REPL step.
@@ -73,6 +73,10 @@ pub struct Repl {
     timeout_ms: u64,
     /// The current node handle (actions apply to it).
     current: Option<CurrentNode>,
+    /// This connection's active window target (§16 v0.4, M6): (handle,
+    /// title). Display-only state — the server bridge scopes the requests,
+    /// the REPL just remembers what it aimed at.
+    window: Option<(String, String)>,
     /// Set by `bye`/`exit`/`quit`.
     exit_requested: bool,
 }
@@ -87,6 +91,7 @@ impl Repl {
             adapter,
             timeout_ms: 5_000,
             current: None,
+            window: None,
             exit_requested: false,
         })
     }
@@ -226,6 +231,7 @@ impl Repl {
             "mock" => self.mock_command(tokens).await,
             "codegen" => self.codegen_command(tokens).await,
             "video" => self.video_command(tokens).await,
+            "window" => self.window_command(tokens).await,
             "bye" | "exit" | "quit" => {
                 let lines = match self.request(RequestV1::Bye).await {
                     Ok(_) => vec![Line::Ok("session closed".into())],
@@ -339,6 +345,80 @@ impl Repl {
                 current.describe
             ))]),
             other => Err(unexpected("ActionDone", &other)),
+        }
+    }
+
+    // --- window domain (§16 v0.4, M6) -----------------------------------------
+
+    /// `window list` / `window use <handle>` — the multi-window targets
+    /// (§16 v0.4). `Use` aims THIS connection: subsequent locators resolve
+    /// inside that window's subtree only (the server bridge scopes the
+    /// requests; the REPL records the active handle for the prompt/list).
+    async fn window_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        match tokens.get(1).map(String::as_str) {
+            Some("list") | None => {
+                if tokens.get(1).is_none() {
+                    return Err("`window` needs a subcommand — list | use <handle>".into());
+                }
+                match self.request(RequestV1::Window(WindowV1::List)).await? {
+                    ResponseV1::Windows { windows } => {
+                        let mut lines =
+                            vec![Line::Ok(format!("window targets ({}):", windows.len()))];
+                        for w in &windows {
+                            let marker = match &self.window {
+                                Some((handle, _)) if *handle == w.handle => "*",
+                                _ => " ",
+                            };
+                            let focus = if w.focused { " focused" } else { "" };
+                            lines.push(Line::Ok(format!(
+                                "{marker} {} {}{focus}",
+                                w.handle, w.title
+                            )));
+                        }
+                        Ok(lines)
+                    }
+                    other => Err(unexpected("Windows", &other)),
+                }
+            }
+            Some("use") => {
+                let handle = tokens
+                    .get(2)
+                    .ok_or("`window use` needs a handle — see `window list`")?
+                    .clone();
+                match self
+                    .request(RequestV1::Window(WindowV1::Use { handle }))
+                    .await?
+                {
+                    ResponseV1::WindowUsed { handle } => {
+                        let title = self.listed_title(&handle).await.unwrap_or_default();
+                        self.window = Some((handle.clone(), title.clone()));
+                        Ok(vec![Line::Ok(format!(
+                            "now targeting {handle}{}",
+                            if title.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" ({title})")
+                            }
+                        ))])
+                    }
+                    other => Err(unexpected("WindowUsed", &other)),
+                }
+            }
+            Some(other) => Err(format!(
+                "unknown window command `{other}` — list | use <handle>"
+            )),
+        }
+    }
+
+    /// The title of a window target, for the `window use` confirmation
+    /// line (a second `List` round-trip — cold path, interactive only).
+    async fn listed_title(&mut self, handle: &str) -> Option<String> {
+        match self.request(RequestV1::Window(WindowV1::List)).await {
+            Ok(ResponseV1::Windows { windows }) => windows
+                .into_iter()
+                .find(|w| w.handle == handle)
+                .map(|w| w.title),
+            _ => None,
         }
     }
 
@@ -510,6 +590,8 @@ impl Repl {
             "  clock install | ff <ms> | runfor <ms> | pause | resume | set <ms> | state",
             "  mock install <id> [response] | clear <id> | call <id> [scope]",
             "  mock reset <scope>",
+            "  window list                 the session's window targets",
+            "  window use <handle>         aim this connection at one target",
             "  codegen start | stop        record actions as kit code (§13)",
             "  video start [fps] [dir] | video stop",
             "  timeout <ms>                resolve/action deadline",
