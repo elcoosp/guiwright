@@ -1,0 +1,23 @@
+[package]
+name = "guiwright-viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Guiwright trace viewer (architecture §5.2/§12): reads gwtrace/v1 zip archives, resolves the UI tree at any frame from snapshots + diffs, emits a self-contained trace.html scrubber"
+
+[dependencies]
+guiwright-trace.workspace = true
+postcard.workspace = true
+lz4_flex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zip = { version = "9.4.1", default-features = false, features = ["time"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zip = { version = "9.4.1", default-features = false, features = ["time"] }
+
+[lints]
+workspace = true
