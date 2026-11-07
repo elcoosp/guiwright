@@ -16,6 +16,8 @@ members = [
     "crates/guiwright-inspect",
     "crates/guiwright-viewer",
     "crates/guiwright-adapter-slint",
+    "crates/guiwright-adapter-floem",
+    "crates/guiwright-adapter-gpui",
 ]
 
 [workspace.package]
