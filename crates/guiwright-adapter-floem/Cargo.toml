@@ -1,0 +1,27 @@
+[package]
+name = "guiwright-adapter-floem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Guiwright Level-2 adapter engine for Floem (architecture §4.7): the test-id registry and tiny-skia headless PaintState contributions, role metadata, logical-tree engine, harness-timer clock plan and input vocabulary; the harness glue runs downstream (floem 0.2.0 predates the HeadlessHarness — recorded constraint)"
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+thiserror.workspace = true
+twox-hash.workspace = true
+tiny-skia = "0.12.0"
+
+# No framework dependency (§18 "adapters are thin & feature-gated", the
+# guiwright-adapter-slint precedent): floem 0.2.0 on crates.io predates the
+# `HeadlessHarness` (§4.7 recon cites it at `src/headless.rs:101` on
+# `lapce/floem@1351ffb`, i.e. post-0.2.0 main). The engine ships
+# framework-free; `contract` records the downstream binding + the two
+# upstream contributions. When floem releases the harness, the glue lands
+# behind a `floem` feature exactly like iced's (`iced_test`) and freya's
+# (`freya-testing`).
+
+[lints]
+workspace = true
