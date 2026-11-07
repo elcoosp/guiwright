@@ -93,6 +93,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ),
     ("resolve_remote_tcp", crate::samples::resolve_remote_tcp),
     ("video_frame_dedup", crate::samples::video_frame_dedup),
+    ("gesture_synthesis", crate::samples::gesture_synthesis),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
