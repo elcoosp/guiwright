@@ -96,6 +96,11 @@ pub enum CoreError {
     /// The adapter/transport rejected the operation (e.g. unsupported at M0).
     #[error("unsupported operation: {0}")]
     Unsupported(&'static str),
+    /// Multi-window (§16 v0.4, M6): the session has no window with this
+    /// handle — never existed, or it was closed between `Window::Use` and
+    /// the scoped request.
+    #[error("no window `{handle}` exists in this session")]
+    UnknownWindow { handle: String },
     /// Anything else, with context.
     #[error("{0}")]
     Other(String),
