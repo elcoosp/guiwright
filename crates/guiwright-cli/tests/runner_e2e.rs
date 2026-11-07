@@ -484,3 +484,43 @@ steps = [
 
     server.shutdown();
 }
+
+/// M7 (§9): the gesture vocabulary works verbatim as `gwtest/v1` steps —
+/// the runner drives the same `Repl::step` core, so raw input needs no
+/// spec-format change (the M5 design).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gesture_steps_run_in_specs() {
+    let (path, server) = spawn_server("runner-gestures");
+    let dir = leak_dir("runner-gestures-specs");
+    write_spec(
+        &dir,
+        "gestures.spec.toml",
+        r#"
+[[scenario]]
+name = "raw input vocabulary"
+steps = [
+    "mouse move 5 6",
+    "mouse click 10 20",
+    "mouse dblclick 4 8",
+    "mouse drag 0 0 100 0",
+    "mouse wheel 0 -120",
+    "key Enter",
+    "text héllo",
+]
+"#,
+    );
+
+    let specs = runner::discover(std::slice::from_ref(&dir)).expect("discovery");
+    assert_eq!(specs.len(), 1);
+    let outcome = runner::run(specs, &uds_opts(&path), None)
+        .await
+        .expect("run completes");
+    assert!(!outcome.failed, "{:?}", outcome.report.scenarios);
+    let scenarios = &outcome.report.scenarios;
+    assert_eq!(scenarios.len(), 1);
+    assert_eq!(scenarios[0].name, "raw input vocabulary");
+    assert_eq!(scenarios[0].status, ScenarioStatus::Passed, "{scenarios:?}");
+    assert_eq!(scenarios[0].attempts, 1);
+
+    server.shutdown();
+}
