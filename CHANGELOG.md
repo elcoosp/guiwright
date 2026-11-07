@@ -13,6 +13,16 @@ Commits](https://www.conventionalcommits.org).
 - **bench:** Bind the M2 §15.1 row — remote Resolve over a real UDS round-trip (resolve_remote_uds; the "remote benching lands" note) — and add the M2 micro-suite guard for viewer timeline replay; both enforce in the release guard
 - **bench:** Bind the M1 §15.1 rows — trace write amplification (UI-thread ring push) and element screenshot crop (CPU, guiwright-shot::crop); both enforce in the release guard
 
+### Documentation
+- Add the M5 own-runner doc (docs/m5-test-runner.md): the §16 v0.5 row's scope, the gwtest/v1 spec format whose steps are the M4 REPL command language (the REPL session pastes into a spec verbatim), the honest parallel/shard semantics (one driver session serves all connections; one app per shard, §11), the §14 reset-seam fixture story and the test posture
+- README: M5 status — the `guiwright test` runner, the scenario-spec usage section and the `gwrun/v1` / JUnit / HTML reports
+
+### Features
+- **cli:** `guiwright test` — the §16 v0.5 "own runner" row and the §5.2 crate row's remaining "nextest/report glue, sharding" halves (M5): discovers `gwtest/v1` scenario specs (`*.spec.toml`, directories scanned recursively), resolves per-scenario deadlines/retries (CLI > scenario > file > default), splits them deterministically for `--shard k/n` (interleaved index over the sorted discovery list, one app per shard — §11 "multiple apps per host"), runs them with `--workers N` (one fresh GWP connection per attempt, every step through the same `Repl::step` core — no protocol change), retries failed scenarios with flaky detection, `--list` (shard-aware, no wire traffic), `--report list|json|junit|html` (`gwrun/v1` JSON, one JUnit suite per spec file, self-contained HTML under `--out`, default `guiwright-report/`), and exit codes 0/1/2 (passed / failed / config error)
+- **spec:** the `gwtest/v1` spec format — `target` / `timeout_ms` / `retries` plus `[[scenario]]` tables whose `steps` are strings in the M4 REPL command language; strict parsing (`deny_unknown_fields`, unique scenario names, non-empty steps, `bye`/`exit`/`quit` rejected — the runner owns the session lifecycle)
+- **report:** the run-report renderers — live progress lines (` PASS` / ` FAIL` / ` FLAKY`), the closing summary line, the `gwrun/v1` JSON document, JUnit XML with metacharacter escaping (flaky = passed testcase) and the self-contained HTML report (the trace.html precedent)
+- **repl:** `expect <get-args…>` — the runner's assertion wording over the same resolve path (client-side only, no wire change); `Repl::set_timeout_ms` so the runner injects spec deadlines
+
 ### Bug Fixes
 - **ci:** Malformed `branches:` list in the push trigger
 

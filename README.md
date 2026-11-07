@@ -185,6 +185,34 @@ app.get_by_role(Role::Button, "Save").click();
 
 Every command maps onto a GWP request — the same conversation works over TCP (`guiwright repl --tcp 127.0.0.1:41234`) and from the TypeScript client (`clients/typescript`). `guiwright show-trace <archive.zip>` renders a recorded trace into a self-contained HTML scrubber, `guiwright bless <dir>` promotes CI screenshot artifacts onto their baselines, and `guiwright install-deps` prints the §11 CI provisioning commands (see `crates/guiwright-cli/tests/`).
 
+### `guiwright test` — scenario specs in CI (M5)
+
+The REPL session pastes into a spec verbatim: a `gwtest/v1` file declares scenarios whose steps are REPL-command strings, and the runner drives them over GWP with workers, retries, sharding and reports.
+
+```toml
+# tests/guiwright/login.spec.toml
+target = "uds:///tmp/app.gwp"   # or override with --uds / --tcp
+
+[[scenario]]
+name = "save the document"
+steps = [
+  "get role button Save",
+  "click",
+  "expect role label \"Welcome, Ada\"",
+]
+```
+
+```bash
+# Local: run everything against a live app.
+guiwright test --uds /tmp/app.gwp
+
+# CI: one app per shard, retries for flaky scenarios, JUnit + HTML reports
+guiwright test --tcp 127.0.0.1:41234 --shard 1/3 --retries 2 \
+    --report junit --report html --out guiwright-report
+```
+
+Every step maps onto an existing GWP request — no protocol change. A step's error line fails the scenario; `expect <get-args…>` words failures as assertions. Failed scenarios re-run per `retries` (spec, scenario or `--retries`), passing on a retry reports `flaky`. `--list` prints the discovered scenarios (shard-aware) without touching the wire, and reports land as `report.json` (`gwrun/v1`), `junit.xml` (one suite per spec file) and a self-contained `report.html` (see `docs/m5-test-runner.md` and `crates/guiwright-cli/tests/runner_e2e.rs`).
+
 ### Supported adapters
 
 | Framework | Crate | Accessibility source | CI coverage |
@@ -199,7 +227,7 @@ Every command maps onto a GWP request — the same conversation works over TCP (
 ## Status
 
 > [!NOTE]
-> Guiwright is a pre-release project at version 0.1.0, with milestones M0–M2 of the plan in [docs/architecture.md](docs/architecture.md) implemented across the workspace crates, M3 shipped as framework-free adapter engines (floem, gpui), the video recorder and the TypeScript client, and M4 — the `guiwright-cli` crate (`repl`, `show-trace`, `bless`, `install-deps`) plus remote codegen recording (§13) — covered by in-repo integration tests. CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), runs the TypeScript client suite and the cross-language e2e, compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. The floem and gpui platform glue ships downstream (recorded constraints in the crate docs and `docs/m3-floem-contributions.md`). Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
+> Guiwright is a pre-release project at version 0.1.0, with milestones M0–M2 of the plan in [docs/architecture.md](docs/architecture.md) implemented across the workspace crates, M3 shipped as framework-free adapter engines (floem, gpui), the video recorder and the TypeScript client, M4 — the `guiwright-cli` crate (`repl`, `show-trace`, `bless`, `install-deps`) plus remote codegen recording (§13) — and M5 — the §16 v0.5 own runner: `guiwright test` discovers `gwtest/v1` scenario specs (REPL-language steps) and drives them over GWP with workers, retries with flaky detection, deterministic `--shard k/n` splitting and `gwrun/v1` JSON / JUnit / HTML reports. CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), runs the TypeScript client suite and the cross-language e2e, compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. The floem and gpui platform glue ships downstream (recorded constraints in the crate docs and `docs/m3-floem-contributions.md`). Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
 
 ## Learn more
 
