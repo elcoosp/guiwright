@@ -17,3 +17,4 @@ egui.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 twox-hash.workspace = true
+guiwright-inspect.workspace = true
