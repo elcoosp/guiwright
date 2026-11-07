@@ -9,6 +9,7 @@ Commits](https://www.conventionalcommits.org).
 ## Unreleased
 
 ### Benchmarks
+- **bench:** Bind the M2 §15.1 row — remote Resolve over a real UDS round-trip (resolve_remote_uds; the "remote benching lands" note) — and add the M2 micro-suite guard for viewer timeline replay; both enforce in the release guard
 - **bench:** Bind the M1 §15.1 rows — trace write amplification (UI-thread ring push) and element screenshot crop (CPU, guiwright-shot::crop); both enforce in the release guard
 
 ### Bug Fixes
@@ -16,11 +17,24 @@ Commits](https://www.conventionalcommits.org).
 
 ### CI/CD
 - Feature-gate compile-verification jobs for the iced and freya harness glue (§18 thin feature-gated adapters)
+- Fix the malformed `branches:` list in the push trigger
 
 ### Documentation
 - README: M1 status, new workspace crates and the kit quick start
+- README: M2 status — viewer, inspect, slint adapter, clock service, mock seams, GPUI spike
+- Add the M2 remote-mode GPUI spike notes (docs/m2-gpui-remote-spike.md): the adapter-agnostic GWP contract validated end-to-end over UDS
 
 ### Features
+- **viewer:** `guiwright-viewer` — `gwtrace/v1` archive reader (meta/events/logs/snapshots/diffs/index/clock; LZ4 diff-stream boundary recovery), timeline model resolving the UI tree at any frame from snapshots + diffs, and the self-contained `trace.html` emitter (§12); `App::export_trace_viewer`
+- **inspect:** `guiwright-inspect` — codegen recorder with the minimal-stable-selector cost model (TestId > role+name > label > text, `.first()` narrowing with live strict-mode warnings) and the framework-free overlay plan (§13)
+- **adapter-egui:** Inspector overlay painter — hover outline + role/TestId badges as a top-layer pass composition (§13)
+- **adapter-masonry:** Inspector overlay draw-ops — plan → `OverlayDrawOp` list for the `VisualLayerPlan` overlay layer (§13)
+- **adapter-slint:** `guiwright-adapter-slint` — framework-free testing-backend introspection engine with minted NodeIds + ABA generation guards, `(component, item)` id bridge, element-kind role registry, `mock_elapsed_time` clock plan and the testing build helper (`SLINT_BACKEND=headless-software`, `SLINT_EMIT_DEBUG_INFO=1`, §11); the downstream glue contract + the recorded upstream constraint (slint's skia lock chain vs freya's — no workspace can carry both) live in the crate docs (§4.4, §17 row 5)
+- **driver:** Clock service — frame-sized fast-forward stepping with per-step settling, pause/resume semantics (`run_for` refuses while paused), SetTime/Probe vocabulary, per-session `clock.bin` ledger (§14); `FrameworkAdapter::run_in` executes state-seam tasks inside the adapter's runner context
+- **driver:** State seams (mock domain) — `SeamRegistry` app-boot registration, canned overrides (`InstallSeam`/`Clear`), `reset_state(scope)` fixture parity, GWP `Clock`/`Mock` routes with `spawn_with_seams` (§7, §14)
+- **proto:** GWP `Clock`/`Mock`/`Inspect` domains (§7): clock vocabulary incl. `SetTime`/`State`, seam install/call/reset, codegen stop-and-fetch reply shapes
+- **macros:** `#[guiwright_kit::seam]` — app-registered reset/init hooks (state/context and state/scope shapes; `Result<(), E>` and `Result<String, E>` details) + `register_seams![..]` registry builder (§14)
+- **kit:** `app.clock()` — full virtual-clock surface (install/fast_forward/run_for/pause/resume/set_time/state) with ledger→trace flushing; `app.mock()` — seam install/call/reset with the configured reset seam; `app.enable_codegen()` — interaction → kit-code recording with strict-mode warnings (§13, §14)
 - **shot:** Screenshot capture pipeline — PNG codec, per-pixel weighted squared YIQ distance with `max_failed_pixels` budget (dify/kittest semantics), `Guiwright.toml` per-OS tolerances, per-platform baseline store with the `GUIWRIGHT_BLESS` flow and `.new.png`/`.diff.png` artifacts (§10)
 - **trace:** `gwtrace/v1` zip recorder — bounded SPSC ring → writer thread with drop-counted backpressure, postcard+LZ4 tree snapshots, hash-deduped frames, 256 MB oldest-first frame eviction, `tracing` layer feeding `logs.ndjson`, virtual-clock ledger and frame index (§12)
 - **driver:** Level-2 logical-tree contract — `LogicalTreeDiff` carries the synthesized AccessKit update, adapter-minted ids, `getByTestId` bindings; the session folds it so selectors/actionability/expect run unchanged (§6.1)
