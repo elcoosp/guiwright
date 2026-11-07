@@ -91,6 +91,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         "viewer_timeline_replay",
         crate::samples::viewer_timeline_replay,
     ),
+    ("resolve_remote_tcp", crate::samples::resolve_remote_tcp),
+    ("video_frame_dedup", crate::samples::video_frame_dedup),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
