@@ -14,6 +14,7 @@
 pub mod layer;
 pub mod recorder;
 pub mod schema;
+pub mod video;
 
 pub use layer::TraceLogLayer;
 pub use recorder::{
