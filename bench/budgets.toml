@@ -161,3 +161,12 @@ p95_us = 20
 notes = "§10 backpressure hot path: hash-equality dedup + bounded ring push per presented frame; M3 micro-suite guard"
 m0_measurable = true
 sample = "video_frame_dedup"
+
+[[budget]]
+id = "gesture_synthesis"
+name = "Gesture synthesis (200 px drag + dblclick, raw event batch)"
+p50_us = 5
+p95_us = 50
+notes = "§9 synthesis hot path: pacing-ratchet interpolation + event batch per gesture request; M7 micro-suite guard"
+m0_measurable = true
+sample = "gesture_synthesis"
