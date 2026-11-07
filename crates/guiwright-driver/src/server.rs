@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
-    RequestV1, ResponseV1, SemActionV1, VideoV1,
+    RequestV1, ResponseV1, SelectorV1, SemActionV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -31,8 +31,13 @@ use crate::session::Session;
 use guiwright_core::{CoreError, NodeKey, Selector};
 
 /// A command on its way to the session thread (§5.1 rendezvous queue).
+/// `window` is the sending connection's active window target (§16 v0.4,
+/// M6): `None` = unscoped (the whole tree). Per-connection state lives on
+/// the bridge — the shared session stays a single honest interpreter
+/// (§11 "one driver session serves all connections").
 pub struct Command {
     request: RequestV1,
+    window: Option<String>,
     reply: oneshot::Sender<ResponseV1>,
 }
 
@@ -44,20 +49,43 @@ enum Internal {
 }
 
 /// Tokio-side bridge: implements the proto `Handler` by proxying to the
-/// session thread.
+/// session thread. One instance per connection (the serve loop calls
+/// `make_handler` per accepted socket); the active window target is
+/// **per-connection** (§16 v0.4) — `Window::Use` on one connection never
+/// re-aims another.
 #[derive(Clone)]
 pub struct GwpBridge {
     cmd_tx: mpsc::Sender<Internal>,
+    /// This connection's active window target handle. Shared with the
+    /// reply-processing future via `Arc<Mutex<..>>` (the `Handler` future
+    /// cannot borrow `self`).
+    window: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl Handler for GwpBridge {
     fn handle(&mut self, request: RequestV1) -> impl Future<Output = ResponseV1> + Send {
         let tx = self.cmd_tx.clone();
+        let window = self.window.clone();
+        // `Window::Use` is the only request that mutates this connection's
+        // target — after the session validates the handle (the reply is
+        // `WindowUsed`).
+        let use_target = match &request {
+            RequestV1::Window(WindowV1::Use { handle }) => Some(handle.clone()),
+            _ => None,
+        };
         async move {
             let (reply_tx, reply_rx) = oneshot::channel();
+            // Stamp the active target onto every non-Window request: the
+            // session scopes resolution to it (§16 v0.4).
+            let stamped = if use_target.is_some() {
+                None
+            } else {
+                window.lock().ok().and_then(|guard| guard.clone())
+            };
             if tx
                 .send(Internal::Gwp(Command {
                     request,
+                    window: stamped,
                     reply: reply_tx,
                 }))
                 .await
@@ -68,13 +96,21 @@ impl Handler for GwpBridge {
                     message: "session thread is gone".into(),
                 };
             }
-            match reply_rx.await {
+            let response = match reply_rx.await {
                 Ok(resp) => resp,
                 Err(_) => ResponseV1::Error {
                     code: ErrorCode::Internal,
                     message: "session dropped the request".into(),
                 },
+            };
+            if let Some(handle) = use_target {
+                if matches!(response, ResponseV1::WindowUsed { .. }) {
+                    if let Ok(mut guard) = window.lock() {
+                        *guard = Some(handle);
+                    }
+                }
             }
+            response
         }
     }
 }
@@ -100,6 +136,7 @@ impl GwpServerHandle {
     pub fn bridge(&self) -> GwpBridge {
         GwpBridge {
             cmd_tx: self.cmd_tx.clone(),
+            window: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -204,6 +241,7 @@ impl GwpServerHandle {
             listener
                 .into_serve(move || GwpBridge {
                     cmd_tx: bridge_tx.clone(),
+                    window: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 })
                 .await;
         });
@@ -263,8 +301,12 @@ fn run_session_thread<A: FrameworkAdapter>(
     while let Some(cmd) = cmd_rx.blocking_recv() {
         match cmd {
             Internal::Shutdown => break,
-            Internal::Gwp(Command { request, reply }) => {
-                let response = handle_request(&mut session, request);
+            Internal::Gwp(Command {
+                request,
+                window,
+                reply,
+            }) => {
+                let response = handle_request(&mut session, request, window);
                 let _ = reply.send(response);
                 // One pump per batch: queued commands apply at the next
                 // frame boundary (§15.4).
@@ -274,8 +316,15 @@ fn run_session_thread<A: FrameworkAdapter>(
     }
 }
 
-/// Process a single GWP request against the session.
-fn handle_request<A: FrameworkAdapter>(session: &mut Session<A>, request: RequestV1) -> ResponseV1 {
+/// Process a single GWP request against the session. `window` is the
+/// sending connection's active target (§16 v0.4): resolution-only scoping —
+/// node identities are already window-unique, actions/clock/mock/inspect/
+/// video are session-wide by design.
+fn handle_request<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    request: RequestV1,
+    window: Option<String>,
+) -> ResponseV1 {
     match request {
         RequestV1::Hello { .. } => {
             let meta = session.adapter().meta();
@@ -296,24 +345,19 @@ fn handle_request<A: FrameworkAdapter>(session: &mut Session<A>, request: Reques
             selector,
             timeout_ms,
         } => {
-            let sel = Selector::from(selector);
-            let result = match session.resolve(&sel) {
-                Ok(resolved) => Ok(Some(resolved)),
-                Err(err) if matches!(err, CoreError::NoMatch { .. }) && timeout_ms > 0 => {
-                    // Auto-wait over the wire: attached within the timeout
-                    // (§8.2). Strict violations fail immediately.
-                    let deadline =
-                        std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-                    session
-                        .wait_for(
-                            &sel,
-                            vec![guiwright_core::actionability::Check::Attached],
-                            deadline,
-                        )
-                        .map(|wait| wait.into_node().ok())
-                }
-                Err(err) => Err(err),
+            // Window scope (§16 v0.4): the connection's active target
+            // narrows the resolution surface. Unknown/closed targets fail
+            // before any waiting happens.
+            let scope = match window.as_deref() {
+                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => return error_response(err),
+                },
+                _ => None,
             };
+            session.set_resolve_scope(scope);
+            let result = resolve_result(session, selector, timeout_ms);
+            session.clear_resolve_scope();
             match result {
                 Ok(Some(resolved)) => ResponseV1::Resolved {
                     node: NodeKeyV1::from(resolved.key),
@@ -371,7 +415,58 @@ fn handle_request<A: FrameworkAdapter>(session: &mut Session<A>, request: Reques
         RequestV1::Mock(cmd) => mock_response(session, cmd),
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
         RequestV1::Video(cmd) => video_response(session, cmd),
+        RequestV1::Window(cmd) => window_response(session, cmd),
         RequestV1::Bye => ResponseV1::Bye,
+    }
+}
+
+/// The resolve/auto-wait core of the `Resolve` arm (§8.2 over the wire).
+/// The caller has already applied the connection's window scope (§16 v0.4):
+/// both the immediate resolve and the waiter surface honor it.
+fn resolve_result<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    selector: SelectorV1,
+    timeout_ms: u64,
+) -> Result<Option<guiwright_core::Resolved>, CoreError> {
+    let sel = Selector::from(selector);
+    match session.resolve(&sel) {
+        Ok(resolved) => Ok(Some(resolved)),
+        Err(err) if matches!(err, CoreError::NoMatch { .. }) && timeout_ms > 0 => {
+            // Auto-wait over the wire: attached within the timeout
+            // (§8.2). Strict violations fail immediately.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+            session
+                .wait_for(
+                    &sel,
+                    vec![guiwright_core::actionability::Check::Attached],
+                    deadline,
+                )
+                .map(|wait| wait.into_node().ok())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// §7 `Window` domain (§16 v0.4 multi-window, M6): list targets, validate
+/// `Use`. The bridge records the active target when it sees `WindowUsed` —
+/// the session stays stateless about which connection asked.
+fn window_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: WindowV1) -> ResponseV1 {
+    match cmd {
+        WindowV1::List => ResponseV1::Windows {
+            windows: session
+                .windows()
+                .into_iter()
+                .map(|w| WindowInfoV1 {
+                    handle: w.handle,
+                    title: w.title,
+                    focused: w.focused,
+                })
+                .collect(),
+        },
+        WindowV1::Use { handle } => match session.window_scope(&handle) {
+            Ok(_) => ResponseV1::WindowUsed { handle },
+            Err(err) => error_response(err),
+        },
     }
 }
 
@@ -486,6 +581,7 @@ fn error_response(err: CoreError) -> ResponseV1 {
         CoreError::Timeout { .. } => (ErrorCode::Timeout, err.to_string()),
         CoreError::StaleNode { .. } => (ErrorCode::StaleGeneration, err.to_string()),
         CoreError::Unsupported(what) => (ErrorCode::Unsupported, (*what).to_string()),
+        CoreError::UnknownWindow { .. } => (ErrorCode::UnknownWindow, err.to_string()),
         CoreError::Other(msg) => (ErrorCode::Internal, msg.clone()),
         _ => (ErrorCode::Internal, err.to_string()),
     };
@@ -539,9 +635,21 @@ mod tests {
     use tokio::sync::oneshot;
 
     async fn send(cmd_tx: &mpsc::Sender<Internal>, request: RequestV1) -> ResponseV1 {
+        send_scoped(cmd_tx, request, None).await
+    }
+
+    async fn send_scoped(
+        cmd_tx: &mpsc::Sender<Internal>,
+        request: RequestV1,
+        window: Option<String>,
+    ) -> ResponseV1 {
         let (tx, rx) = oneshot::channel();
         cmd_tx
-            .send(Internal::Gwp(Command { request, reply: tx }))
+            .send(Internal::Gwp(Command {
+                request,
+                window,
+                reply: tx,
+            }))
             .await
             .unwrap();
         rx.await.unwrap()
