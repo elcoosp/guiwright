@@ -1730,6 +1730,7 @@ dependencies = [
  "egui",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "thiserror 2.0.21",
  "tracing",
  "twox-hash",
@@ -1766,12 +1767,23 @@ dependencies = [
  "accesskit_consumer 0.31.0",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "masonry",
  "masonry_core",
  "masonry_testing",
  "thiserror 2.0.21",
  "tracing",
  "twox-hash",
+]
+
+[[package]]
+name = "guiwright-adapter-slint"
+version = "0.1.0"
+dependencies = [
+ "accesskit 0.25.2",
+ "guiwright-core",
+ "guiwright-driver",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1785,8 +1797,10 @@ dependencies = [
  "guiwright-proto",
  "guiwright-shot",
  "guiwright-trace",
+ "guiwright-viewer",
  "postcard",
  "serde",
+ "tokio",
  "toml",
  "twox-hash",
 ]
@@ -1818,15 +1832,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "guiwright-inspect"
+version = "0.1.0"
+dependencies = [
+ "accesskit 0.25.2",
+ "guiwright-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "guiwright-kit"
 version = "0.1.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "guiwright-macros",
  "guiwright-shot",
  "guiwright-trace",
+ "guiwright-viewer",
+ "postcard",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1882,6 +1908,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "twox-hash",
+ "zip",
+]
+
+[[package]]
+name = "guiwright-viewer"
+version = "0.1.0"
+dependencies = [
+ "guiwright-trace",
+ "lz4_flex",
+ "postcard",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
  "zip",
 ]
 
