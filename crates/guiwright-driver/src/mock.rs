@@ -9,13 +9,14 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use accesskit::NodeId;
+use accesskit::{NodeId, TreeId};
 
 use crate::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
-    FrameworkAdapter, LogicalTreeDiff, PumpOutcome, SemAction,
+    FrameworkAdapter, LogicalTreeDiff, PumpOutcome, SemAction, WindowInfo,
 };
-use guiwright_core::test_util::Fixture;
+use guiwright_core::MAIN_WINDOW;
+use guiwright_core::test_util::{Fixture, MultiWindowFixture};
 
 /// A scriptable in-process adapter.
 pub struct MockAdapter {
@@ -37,6 +38,23 @@ pub struct MockAdapter {
     /// The runner context handed to seam tasks by `run_in` (§14 state
     /// seams) — the app state the "UI thread" owns.
     state: Option<Box<dyn std::any::Any + Send>>,
+    /// Scripted window targets (§16 v0.4 multi-window, M6): the metadata
+    /// `windows()` reports. Empty = single-window persona (the default
+    /// `main` target).
+    windows: Vec<WindowScript>,
+    /// Shared script channel (e2e tests): other threads queue tree updates
+    /// while the session runs — the next pump delivers them, exactly like
+    /// app-side changes arriving mid-session.
+    shared: Option<std::sync::Arc<std::sync::Mutex<Vec<accesskit::TreeUpdate>>>>,
+}
+
+/// A scripted window target: the handle is the subtree [`TreeId`] the
+/// adapter pushes updates for — the same identity the tree scopes with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowScript {
+    pub id: TreeId,
+    pub title: String,
+    pub focused: bool,
 }
 
 impl std::fmt::Debug for MockAdapter {
@@ -91,6 +109,8 @@ impl MockAdapter {
             },
             repaints_left: 0,
             state: None,
+            windows: Vec::new(),
+            shared: None,
         }
     }
 
@@ -99,6 +119,62 @@ impl MockAdapter {
     /// remote sessions (the server spawns a session thread).
     pub fn with_state(mut self, state: impl std::any::Any + Send) -> Self {
         self.state = Some(Box::new(state));
+        self
+    }
+
+    /// The multi-window persona (§16 v0.4, M6): scripts the grafted
+    /// two-window fixture (root tree + one subtree per window, delivered
+    /// over successive pumps) and the matching `windows()` metadata — the
+    /// handles are the fixture's subtree TreeIds, the same identity the
+    /// tree scopes resolution with.
+    pub fn with_multi_window(fixture: &MultiWindowFixture) -> Self {
+        let mut me = Self::bare();
+        for update in fixture.initial_updates() {
+            me.push_update(update);
+        }
+        me.windows = vec![
+            WindowScript {
+                id: fixture.w1,
+                title: "Editor".into(),
+                focused: true,
+            },
+            WindowScript {
+                id: fixture.w2,
+                title: "Preview".into(),
+                focused: false,
+            },
+        ];
+        me
+    }
+
+    /// Queue an incremental update for ONE window's subtree (§16 v0.4):
+    /// per-window diffs ride the same pump stream as single-window ones.
+    pub fn push_subtree_update(&mut self, id: TreeId, update: accesskit::TreeUpdate) {
+        assert_eq!(
+            update.tree_id, id,
+            "subtree update must target its window's TreeId"
+        );
+        self.push_update(update);
+    }
+
+    /// Script a focus flip on one window target (reflected in `windows()`).
+    pub fn set_window_focus(&mut self, id: TreeId, focused: bool) {
+        for w in &mut self.windows {
+            if w.id == id {
+                w.focused = focused;
+            }
+        }
+    }
+
+    /// Attach a shared script channel: updates pushed into the vec from
+    /// any thread are delivered on the next pump (the e2e tests emulate
+    /// app-side changes arriving mid-session — window-local diffs land
+    /// through the same pump stream).
+    pub fn with_shared_scripts(
+        mut self,
+        scripts: std::sync::Arc<std::sync::Mutex<Vec<accesskit::TreeUpdate>>>,
+    ) -> Self {
+        self.shared = Some(scripts);
         self
     }
 
@@ -172,7 +248,37 @@ impl FrameworkAdapter for MockAdapter {
         &self.meta
     }
 
+    /// Window targets (§16 v0.4): the scripted list, or the default single
+    /// `main` target for the single-window persona.
+    fn windows(&mut self) -> Vec<WindowInfo> {
+        if self.windows.is_empty() {
+            return vec![WindowInfo {
+                handle: MAIN_WINDOW.to_string(),
+                title: self.meta.framework.to_string(),
+                focused: true,
+            }];
+        }
+        self.windows
+            .iter()
+            .map(|w| WindowInfo {
+                handle: w.id.0.to_string(),
+                title: w.title.clone(),
+                focused: w.focused,
+            })
+            .collect()
+    }
+
     fn pump(&mut self, _deadline: FrameDeadline) -> PumpOutcome {
+        // Drain the shared script channel first: queued updates ride this
+        // pump's diff stream like any app-side change.
+        if let Some(shared) = self.shared.clone() {
+            if let Ok(mut queue) = shared.lock() {
+                for update in queue.drain(..) {
+                    self.updates.push_back(update);
+                    self.repaints_left += 1;
+                }
+            }
+        }
         self.seq += 1;
         // Repaint requested while scripted work remains.
         let repaint_requested = !self.updates.is_empty()
