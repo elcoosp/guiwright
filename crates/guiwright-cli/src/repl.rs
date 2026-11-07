@@ -13,8 +13,9 @@
 use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    AdapterInfoV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, RequestV1, ResponseV1,
-    SelectorV1, SemActionV1, TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
+    AdapterInfoV1, ClockV1, ErrorCode, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1,
+    PointerButtonV1, RequestV1, ResponseV1, SelectorV1, SemActionV1, TextMatchV1, VideoOptsV1,
+    VideoV1, WindowV1,
 };
 
 /// One output line of a REPL step.
@@ -232,6 +233,20 @@ impl Repl {
             "codegen" => self.codegen_command(tokens).await,
             "video" => self.video_command(tokens).await,
             "window" => self.window_command(tokens).await,
+            "mouse" => self.mouse_command(tokens).await,
+            "key" => {
+                let key = tokens
+                    .get(1)
+                    .ok_or("`key` needs a key — e.g. `key Enter`")?
+                    .clone();
+                let modifiers = tokens[2..].to_vec();
+                self.gesture_request(GestureV1::Key { key, modifiers })
+                    .await
+            }
+            "text" => {
+                let text = one_argument(tokens, "text <string>")?;
+                self.gesture_request(GestureV1::Type { text }).await
+            }
             "bye" | "exit" | "quit" => {
                 let lines = match self.request(RequestV1::Bye).await {
                     Ok(_) => vec![Line::Ok("session closed".into())],
@@ -422,6 +437,92 @@ impl Repl {
         }
     }
 
+    // --- raw input & gestures (§9, M7) -------------------------------------
+
+    /// The `mouse` domain: the synthesized gestures (`click | dblclick |
+    /// drag | wheel`) and the raw primitive events (`move | down | up`).
+    /// Everything rides the connection's active window target (M6) and
+    /// window-relative logical-px coordinates (§9); the driver synthesizes
+    /// the raw batch from its adapter's pacing table.
+    async fn mouse_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        match tokens.get(1).map(String::as_str) {
+            Some("click") | Some("dblclick") => {
+                let count = if tokens[1] == "dblclick" { 2 } else { 1 };
+                let (x, y) = two_nums(tokens, 2, "mouse click <x> <y> [right|middle]")?;
+                let button = pointer_button(tokens.get(4))?;
+                self.gesture_request(GestureV1::Click {
+                    x,
+                    y,
+                    button,
+                    count,
+                })
+                .await
+            }
+            Some("drag") => {
+                let (from_x, from_y, to_x, to_y) =
+                    four_nums(tokens, 2, "mouse drag <x1> <y1> <x2> <y2> [right|middle]")?;
+                let button = pointer_button(tokens.get(6))?;
+                self.gesture_request(GestureV1::Drag {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                    button,
+                })
+                .await
+            }
+            Some("wheel") => {
+                let (dx, dy) = two_nums(tokens, 2, "mouse wheel <dx> <dy>")?;
+                self.gesture_request(GestureV1::Wheel { dx, dy }).await
+            }
+            Some("move") => {
+                let (x, y) = two_nums(tokens, 2, "mouse move <x> <y>")?;
+                self.raw_input(vec![InputEventV1::PointerMove { x, y }])
+                    .await
+            }
+            Some("down") => {
+                let (x, y) = two_nums(tokens, 2, "mouse down <x> <y> [right|middle]")?;
+                let button = pointer_button(tokens.get(4))?;
+                self.raw_input(vec![InputEventV1::PointerDown { x, y, button }])
+                    .await
+            }
+            Some("up") => {
+                let (x, y) = two_nums(tokens, 2, "mouse up <x> <y> [right|middle]")?;
+                let button = pointer_button(tokens.get(4))?;
+                self.raw_input(vec![InputEventV1::PointerUp { x, y, button }])
+                    .await
+            }
+            Some(other) => Err(format!(
+                "unknown mouse command `{other}` — click | dblclick | drag | wheel | move | down | up"
+            )),
+            None => Err(
+                "usage: mouse click | dblclick | drag | wheel | move | down | up — see `help`"
+                    .into(),
+            ),
+        }
+    }
+
+    /// Send a gesture request and render the `GestureDone` synthesis
+    /// summary.
+    async fn gesture_request(&mut self, gesture: GestureV1) -> Result<Vec<Line>, String> {
+        match self.request(RequestV1::Gesture(gesture)).await? {
+            ResponseV1::GestureDone { frame_seq, detail } => {
+                Ok(vec![Line::Ok(format!("{detail} @ frame {frame_seq}"))])
+            }
+            other => Err(unexpected("GestureDone", &other)),
+        }
+    }
+
+    /// Send a raw event batch and render the `InputQueued` frame.
+    async fn raw_input(&mut self, events: Vec<InputEventV1>) -> Result<Vec<Line>, String> {
+        match self.request(RequestV1::Input { events }).await? {
+            ResponseV1::InputQueued { frame_seq } => {
+                Ok(vec![Line::Ok(format!("input queued @ frame {frame_seq}"))])
+            }
+            other => Err(unexpected("InputQueued", &other)),
+        }
+    }
+
     // --- clock domain (§14) -----------------------------------------------------
 
     async fn clock_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
@@ -587,6 +688,11 @@ impl Repl {
             "  fill <text> | setvalue <text>",
             "  press <key> [modifiers…]    e.g. `press Enter`, `press a Ctrl`",
             "  scroll <dx> <dy>",
+            "  mouse click <x> <y> [right]  synthetic click (§9, active window)",
+            "  mouse dblclick | drag | wheel — synthesized with adapter pacing",
+            "  mouse move | down | up <x> <y> — raw primitive pointer events",
+            "  key <key> [modifiers…]      e.g. `key Enter`, `key a Ctrl`",
+            "  text <string>               commit text in one step",
             "  clock install | ff <ms> | runfor <ms> | pause | resume | set <ms> | state",
             "  mock install <id> [response] | clear <id> | call <id> [scope]",
             "  mock reset <scope>",
@@ -691,6 +797,52 @@ fn one_argument(tokens: &[String], usage: &str) -> Result<String, String> {
         .get(1)
         .cloned()
         .ok_or_else(|| format!("`{usage}` needs an argument"))
+}
+
+/// Parse one f64 argument (the gesture vocabulary's coordinates/deltas).
+fn parse_num(token: &str, what: &str) -> Result<f64, String> {
+    token
+        .parse::<f64>()
+        .map_err(|_| format!("`{what}` is not a number: {token}"))
+}
+
+/// Two f64 arguments starting at `start` (e.g. `mouse click <x> <y>`).
+fn two_nums(tokens: &[String], start: usize, usage: &str) -> Result<(f64, f64), String> {
+    let x = tokens
+        .get(start)
+        .ok_or_else(|| format!("usage: {usage}"))?;
+    let y = tokens
+        .get(start + 1)
+        .ok_or_else(|| format!("usage: {usage}"))?;
+    Ok((parse_num(x, "x")?, parse_num(y, "y")?))
+}
+
+/// Four f64 arguments starting at `start` (e.g. `mouse drag <x1> <y1> <x2> <y2>`).
+fn four_nums(
+    tokens: &[String],
+    start: usize,
+    usage: &str,
+) -> Result<(f64, f64, f64, f64), String> {
+    let (x1, y1) = two_nums(tokens, start, usage)?;
+    let x2 = tokens
+        .get(start + 2)
+        .ok_or_else(|| format!("usage: {usage}"))?;
+    let y2 = tokens
+        .get(start + 3)
+        .ok_or_else(|| format!("usage: {usage}"))?;
+    Ok((x1, y1, parse_num(x2, "x2")?, parse_num(y2, "y2")?))
+}
+
+/// The optional trailing button word (`right` / `middle`); default primary.
+fn pointer_button(token: Option<&String>) -> Result<PointerButtonV1, String> {
+    match token.map(String::as_str) {
+        None | Some("left") | Some("primary") => Ok(PointerButtonV1::Primary),
+        Some("right") | Some("secondary") => Ok(PointerButtonV1::Secondary),
+        Some("middle") => Ok(PointerButtonV1::Middle),
+        Some(other) => Err(format!(
+            "unknown button `{other}` — left | right | middle"
+        )),
+    }
 }
 
 /// The remaining tokens joined by single spaces (unquoted multi-word
