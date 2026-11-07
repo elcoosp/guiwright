@@ -53,6 +53,7 @@ const ERROR_NAMES: Record<number, string> = {
   5: "Timeout",
   6: "Unsupported",
   7: "Internal",
+  8: "UnknownWindow",
 };
 
 /** The protocol version this client speaks. */
@@ -268,6 +269,25 @@ export class GwpClient {
     const resp = await this.request({ kind: "video", cmd: { kind: "stop" } });
     if (resp.kind !== "video_file") throw new Error(`expected VideoFile, got ${resp.kind}`);
     return { path: resp.path, frames: resp.frames, dropped: resp.dropped, duration_ms: resp.duration_ms };
+  }
+
+  /** `window.list` — the session's window targets (§16 v0.4, M6). */
+  async windowList(): Promise<WindowInfoV1[]> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "window", cmd: { kind: "list" } });
+    if (resp.kind !== "windows") throw new Error(`expected Windows, got ${resp.kind}`);
+    return resp.windows;
+  }
+
+  /**
+   * `window.use(handle)` — aim THIS connection at a window target (§16 v0.4):
+   * subsequent resolve calls only see that window's subtree. Other
+   * connections keep their own target (per-connection state).
+   */
+  async windowUse(handle: string): Promise<void> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "window", cmd: { kind: "use", handle } });
+    if (resp.kind !== "window_used") throw new Error(`expected WindowUsed, got ${resp.kind}`);
   }
 
   /** Convenience: `clock.fast_forward` (the common test verb). */
