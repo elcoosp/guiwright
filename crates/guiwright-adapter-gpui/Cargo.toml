@@ -1,0 +1,25 @@
+[package]
+name = "guiwright-adapter-gpui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Guiwright Level-1/hybrid adapter engine for GPUI (architecture §4.5, M3): a11y-hybrid activation model, PlatformInput mapping with the VisualTestContext keystroke vocabulary, test-support clock plan, run_in runner-context contract and strided frame digests; the app glue runs downstream (gpui 0.2.2's platform stack needs system libs — recorded constraint)"
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+thiserror.workspace = true
+twox-hash.workspace = true
+
+# No framework dependency (§18 "adapters are thin & feature-gated", the
+# guiwright-adapter-slint/floem precedent): gpui 0.2.2 is on crates.io, but
+# its Linux platform stack needs system libraries (xkbcommon, wayland) a
+# default build must never require. The engine ships framework-free;
+# `contract` records the downstream binding (§5.3 `gw-gpui` feature shape
+# from the M2 spike doc). Apps enable it with
+# `gw-gpui = ["dep:guiwright-driver", "gpui/test-support"]`.
+
+[lints]
+workspace = true
