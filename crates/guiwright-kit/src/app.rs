@@ -359,6 +359,14 @@ impl<A: FrameworkAdapter> App<A> {
         MockHandle { app: self }
     }
 
+    /// The video surface (§10, M3): `app.video().start_in(dir, fps)` /
+    /// `.start(fps)` / `.stop()` — records the presented frames between
+    /// the two calls (hash-equality dedup collapses static spans) and
+    /// finalizes a `.webm` (ffmpeg) or PNG frame folder on stop.
+    pub fn video(&mut self) -> VideoHandle<'_, A> {
+        VideoHandle { app: self }
+    }
+
     /// Register the app's boot seams (§14). Use the
     /// `guiwright_kit::register_seams![...]` macro to build the registry:
     ///
@@ -683,6 +691,54 @@ impl<'a, A: FrameworkAdapter> MockHandle<'a, A> {
     pub fn with_reset_seam(&mut self, id: &str) -> &mut Self {
         self.app.session.with_reset_seam(id);
         self
+    }
+}
+
+/// `app.video()` — the §10 video surface (M3).
+pub struct VideoHandle<'a, A: FrameworkAdapter> {
+    app: &'a mut App<A>,
+}
+
+impl<A: FrameworkAdapter> std::fmt::Debug for VideoHandle<'_, A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VideoHandle").finish_non_exhaustive()
+    }
+}
+
+impl<'a, A: FrameworkAdapter> VideoHandle<'a, A> {
+    /// `video.start_in(dir, fps)` — record presented frames into `dir`
+    /// (the client/test owns the artifact dir, Playwright parity). The
+    /// adapter must expose a pixel path (§6.2); `fps = 0` selects the
+    /// driver default (25).
+    pub fn start_in(&mut self, dir: &std::path::Path, fps: u32) -> Result<(), KitError> {
+        self.app.session.video_start_in(dir, fps)?;
+        self.app
+            .record_event("video", format!("start(dir={dir:?}, fps={fps})"));
+        Ok(())
+    }
+
+    /// `video.start(fps)` — record into the OS temp dir (the stop reply
+    /// carries the finalized path).
+    pub fn start(&mut self, fps: u32) -> Result<(), KitError> {
+        self.app.session.video_start(fps)?;
+        self.app.record_event("video", format!("start(fps={fps})"));
+        Ok(())
+    }
+
+    /// `video.stop()` — finalize the recording; one last pump lands the
+    /// latest requested frame before the encoder closes (§15.4).
+    pub fn stop(&mut self) -> Result<guiwright_trace::video::VideoSummary, KitError> {
+        let summary = self.app.session.video_stop()?;
+        self.app.record_event(
+            "video",
+            format!(
+                "stop → {} frames={} dropped={}",
+                summary.path.display(),
+                summary.frames,
+                summary.dropped
+            ),
+        );
+        Ok(summary)
     }
 }
 
