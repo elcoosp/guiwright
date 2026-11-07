@@ -1,0 +1,28 @@
+{
+  "name": "@guiwright/gwp",
+  "version": "0.3.0",
+  "description": "Guiwright Protocol (GWP) client for TypeScript/JavaScript \u2014 the other-language client (architecture \u00a716): postcard codec, length-prefixed framing, TCP + WebSocket transports. Zero dependencies.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "main": "src/client.ts",
+  "types": "src/client.ts",
+  "files": [
+    "src",
+    "gwp-schema.json"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/codec.test.ts test/client.test.ts",
+    "e2e": "node scripts/e2e.ts"
+  },
+  "keywords": [
+    "guiwright",
+    "gwp",
+    "postcard",
+    "testing",
+    "gui",
+    "automation"
+  ]
+}
