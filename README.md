@@ -17,7 +17,7 @@ enforced performance budgets.
 
 ## Status
 
-This repository is at **M2** (architecture `docs/architecture.md`):
+This repository is at **M3** (architecture `docs/architecture.md`):
 
 - [x] `guiwright-core` — tree service, selector engine, actionability,
       zero-polling auto-wait, expect/assertions
@@ -53,14 +53,31 @@ This repository is at **M2** (architecture `docs/architecture.md`):
       overrides, `app.mock()` surface, GWP `Mock` routes (§14)
 - [x] Remote-mode GPUI spike — clock + mock domains end-to-end over a real
       UDS socket; findings in `docs/m2-gpui-remote-spike.md` (§17)
+- [x] Video recording (§10) — `Video` GWP domain, session video service,
+      hash-deduped frame ring → ffmpeg pipe (`.webm`) with a lossless
+      PNG-sequence fallback; `app.video()` surface; client-owned artifact
+      dir (Playwright parity)
+- [x] Other-language client (§16) — GWP over TCP + the published wire
+      schema (`gwp-schema.json`, golden-pinned); the zero-dependency
+      `@guiwright/gwp` TypeScript client with a cross-language e2e against
+      a real Rust server (`clients/typescript`)
+- [x] `guiwright-adapter-floem` — the two §4.7 contributions implemented
+      (test-id registry with ABA generations; tiny-skia headless
+      `PaintState` with the strided xxh3 digest), role metadata, the
+      Level-2 logical engine and the harness glue contract;
+      `docs/m3-floem-contributions.md` carries the upstream patch designs
+- [x] `guiwright-adapter-gpui` — the §4.5 hybrid engine: a11y
+      activation-at-attach model, `PlatformInput` mapping with the
+      `VisualTestContext` keystroke vocabulary, test-support dispatcher
+      clock plan, `run_in` runner-context contract, strided frame digests
 
 ## Workspace
 
 | Crate | Role |
 |---|---|
 | `guiwright-core` | Selector resolution, tree diffing, wait/expect — substrate only |
-| `guiwright-proto` | GWP protocol: schema, framing, blobs, UDS |
-| `guiwright-driver` | Sessions, adapters trait, UDS server |
+| `guiwright-proto` | GWP protocol: schema, framing, blobs, UDS + TCP, published schema |
+| `guiwright-driver` | Sessions, adapters trait, UDS/TCP servers, clock service, video service |
 | `guiwright-adapter-egui` | egui: AccessKit tree + paint-digest determinism |
 | `guiwright-adapter-masonry` | Masonry/Xilem: `RenderRoot` headless |
 | `guiwright-bench` | Criterion benches + `check_budgets` perf guard |
@@ -69,7 +86,10 @@ This repository is at **M2** (architecture `docs/architecture.md`):
 | `guiwright-adapter-iced` | iced Level-2 engine; `iced` feature gates the harness glue |
 | `guiwright-adapter-freya` | freya Level-1 support; `freya` feature gates the runner glue |
 | `guiwright-adapter-slint` | slint testing-backend engine (framework-free); glue contract in the crate docs |
-| `guiwright-kit` | Embedded App, Locators, expect, clock, mock seams, codegen, traces |
+| `guiwright-adapter-floem` | floem contributions (test-id registry, tiny-skia headless paint) + Level-2 engine (framework-free) |
+| `guiwright-adapter-gpui` | gpui hybrid engine (a11y activation, input mapping, clock plan, run_in) — framework-free |
+| `clients/typescript` | `@guiwright/gwp`: the zero-dependency other-language client (TCP + WS) |
+| `guiwright-kit` | Embedded App, Locators, expect, clock, mock seams, codegen, video, traces |
 | `guiwright-macros` | `#[guiwright_kit::test]` + `#[guiwright_kit::seam]` proc macros |
 | `guiwright-viewer` | Archive reader, timeline resolver, self-contained `trace.html` |
 | `guiwright-inspect` | Codegen recorder + selector cost model + overlay plan |
@@ -124,6 +144,24 @@ fn checkout_flow(app: &mut App) -> Result<(), String> {
     let (code, warnings) = app.codegen_finish().unwrap();
     Ok(())
 }
+```
+
+### Video and the other-language client (M3)
+
+```rust
+#[guiwright_kit::test]
+fn checkout_flow(app: &mut App) -> Result<(), String> {
+    app.video().start_in("test-results/videos", 25).map_err(|e| e.to_string())?;
+    app.get_by_role(Role::Button, "Save").click().map_err(|e| e.to_string())?;
+    let video = app.video().stop().map_err(|e| e.to_string())?;   // .webm (ffmpeg) or PNG frames
+    println!("video: {}", video.path.display());
+    Ok(())
+}
+```
+
+```bash
+# The zero-dependency TypeScript client drives a real Rust server (§16):
+cd clients/typescript && npm test && npm run e2e
 ```
 
 The perf guard fails the build on budget regressions; targets live in
