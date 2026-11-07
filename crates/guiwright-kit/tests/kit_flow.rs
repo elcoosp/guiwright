@@ -237,3 +237,43 @@ fn macro_strict_mode_panics(app: &mut guiwright_kit::App) {
     // Four buttons — the unnamed role locator must fail strict mode.
     app.role_locator(Role::Button).resolve().unwrap();
 }
+
+// --- M2: codegen (§13) -----------------------------------------------------
+
+#[test]
+fn codegen_records_minimal_stable_selectors() {
+    let mut app = App::launch_fixture("codegen_flow");
+    app.enable_codegen();
+    app.get_by_role(Role::Button, "Save").click().unwrap();
+    app.get_by_role(Role::TextInput, "Email")
+        .fill("ada@lovelace.dev")
+        .unwrap();
+    let (code, warnings) = app.codegen_finish().expect("recorder active");
+    assert_eq!(
+        code,
+        "app.get_by_role(Role::Button, \"Save\").click();\n\
+         app.get_by_role(Role::TextInput, \"Email\").fill(\"ada@lovelace.dev\");\n"
+    );
+    assert_eq!(warnings.len(), 0, "no strict violations here: {warnings:?}");
+}
+
+#[test]
+fn codegen_prefers_test_ids_when_registered() {
+    let mut app = App::launch_fixture("codegen_testid");
+    // Register a test id for the Save button (§13 tier 0).
+    let key = app
+        .key_of(&guiwright_core::Selector::role_named(Role::Button, "Save"))
+        .unwrap();
+    app.session().register_test_id(key, "save-btn");
+    app.enable_codegen();
+    app.get_by_role(Role::Button, "Save").click().unwrap();
+    let (code, _) = app.codegen_finish().expect("recorder active");
+    assert!(code.contains("get_by_test_id(\"save-btn\")"), "{code}");
+}
+
+#[test]
+fn codegen_off_by_default() {
+    let mut app = App::launch_fixture("codegen_off");
+    app.get_by_role(Role::Button, "Save").click().unwrap();
+    assert!(app.codegen_finish().is_none(), "recording is opt-in");
+}
