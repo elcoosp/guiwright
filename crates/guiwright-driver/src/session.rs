@@ -91,6 +91,10 @@ pub struct Session<A: FrameworkAdapter> {
     /// Video recording service (§10, M3): present-frame capture riding
     /// the pump loop. `None` = not recording.
     video: Option<VideoRecorder>,
+    /// Remote codegen recorder (§13, M4): active while a GWP client has
+    /// issued `Inspect::StartRecording`. Embedded sessions never touch it
+    /// — the kit records through its own locator taps (`App::codegen`).
+    codegen: Option<guiwright_inspect::codegen::CodegenRecorder>,
 }
 
 impl<A: FrameworkAdapter> Session<A> {
@@ -106,6 +110,7 @@ impl<A: FrameworkAdapter> Session<A> {
             seam_overrides: BTreeMap::new(),
             reset_seam: "reset_state".into(),
             video: None,
+            codegen: None,
         }
     }
 
@@ -242,6 +247,96 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Is a recording currently running?
     pub fn recording(&self) -> bool {
         self.video.is_some()
+    }
+
+    // --- Remote codegen (§13, M4) -----------------------------------------
+
+    /// Start the interaction → kit-code recorder (§7 `Inspect::StartRecording`).
+    /// Refuses while a recording is already active (clean `Unsupported`-style
+    /// error, mirroring the video domain's idempotence rules).
+    pub fn codegen_start(&mut self) -> Result<(), CoreError> {
+        if self.codegen.is_some() {
+            return Err(CoreError::Other(
+                "codegen recording is already active".into(),
+            ));
+        }
+        self.codegen = Some(guiwright_inspect::codegen::CodegenRecorder::new());
+        Ok(())
+    }
+
+    /// Stop the recorder and fetch the generated kit code (§7
+    /// `Inspect::StopRecording` → `Codegen { code, warnings }`).
+    pub fn codegen_stop(&mut self) -> Result<(String, Vec<String>), CoreError> {
+        let recorder = self
+            .codegen
+            .take()
+            .ok_or_else(|| CoreError::Other("no codegen recording is active".into()))?;
+        Ok(recorder.finish())
+    }
+
+    /// Is a codegen recording currently active?
+    pub fn codegen_active(&self) -> bool {
+        self.codegen.is_some()
+    }
+
+    /// Record one applied GWP action into the codegen recorder (§13
+    /// "captured at the adapter tap"): facts come from the session's tree
+    /// service, the §13 cost model picks the minimal stable selector.
+    /// `Scroll` is a raw-input gesture (§9), not a locator action — it is
+    /// not recorded (recorded in the gesture milestone).
+    ///
+    /// Called with the *pre-action* tree state: the node is exactly what
+    /// the client targeted, before the action's own side effects land.
+    fn codegen_action_facts(
+        &self,
+        key: &NodeKey,
+        action: &SemAction,
+    ) -> Option<(
+        &'static str,
+        Option<String>,
+        guiwright_inspect::codegen::NodeFacts,
+    )> {
+        self.codegen.as_ref()?;
+        // (action-name, argument) in the kit's locator vocabulary.
+        let (kind, argument): (&str, Option<String>) = match action {
+            SemAction::Click => ("click", None),
+            SemAction::DoubleClick => ("dblclick", None),
+            SemAction::SetValue { text } => ("fill", Some(text.clone())),
+            SemAction::Focus => ("focus", None),
+            SemAction::Blur => ("blur", None),
+            SemAction::Hover => ("hover", None),
+            SemAction::Press { key, .. } => ("press", Some(key.clone())),
+            SemAction::Scroll { .. } => return None,
+            SemAction::Check => ("check", None),
+            SemAction::Uncheck => ("uncheck", None),
+        };
+        let node = self.tree.node(key);
+        let facts = guiwright_inspect::codegen::NodeFacts {
+            key: *key,
+            role: node.as_ref().map(|n| format!("{:?}", n.role())),
+            name: node.as_ref().and_then(|n| n.label()),
+            label: node.as_ref().and_then(|n| n.label()),
+            value: node.as_ref().and_then(|n| n.value()),
+            test_id: self.tree.test_id_of(key).map(str::to_string),
+            bounds: None,
+        };
+        Some((kind, argument, facts))
+    }
+
+    /// Land a prepared codegen line (see [`Session::codegen_action_facts`]).
+    fn codegen_record(
+        &mut self,
+        kind: &str,
+        argument: Option<String>,
+        facts: &guiwright_inspect::codegen::NodeFacts,
+    ) {
+        let Some(mut recorder) = self.codegen.take() else {
+            return;
+        };
+        if let Err(err) = recorder.record(kind, argument.as_deref(), facts, &self.tree) {
+            tracing::debug!(%err, action = %kind, "codegen: no stable selector");
+        }
+        self.codegen = Some(recorder);
     }
 
     /// Pump until the app is quiescent or the deadline hits (§6.1 "pump
@@ -426,6 +521,12 @@ impl<A: FrameworkAdapter> Session<A> {
         timeout_ms: u64,
     ) -> Result<ActionOutcome, CoreError> {
         let _ = (force, timeout_ms);
+        // Remote codegen (§13, M4): facts come from the *pre-action* tree —
+        // the node is exactly what the client targeted before the action's
+        // own side effects land. The embedded path (`perform_action`)
+        // records through the kit's own locator taps instead — no double
+        // recording.
+        let codegen_pending = self.codegen_action_facts(&key, &action);
         let outcome = self
             .adapter
             .act(node_id(&key), action)
@@ -433,6 +534,9 @@ impl<A: FrameworkAdapter> Session<A> {
         // Frame-boundary rendezvous (§15.4): one pump so the action is
         // applied at a frame before the reply is sent.
         self.pump();
+        if let Some((kind, argument, facts)) = codegen_pending {
+            self.codegen_record(kind, argument, &facts);
+        }
         Ok(outcome)
     }
 

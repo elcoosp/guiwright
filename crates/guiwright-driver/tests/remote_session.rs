@@ -561,3 +561,92 @@ async fn video_domain_over_the_wire() {
 
     handle.shutdown();
 }
+
+/// §7 `Inspect` domain over the wire (§13, M4 remote codegen): actions
+/// applied between Start and Stop emit kit code against the minimal
+/// stable selector, with strict-mode warnings riding the reply.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codegen_records_actions_over_the_wire() {
+    let path = socket_path("remote-codegen.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("m4-codegen/0.1").await.unwrap();
+
+    // Start: acknowledged with Pong (§7 control-command shape).
+    let resp = client
+        .request(RequestV1::Inspect(
+            guiwright_proto::schema::InspectV1::StartRecording,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp, ResponseV1::Pong);
+
+    // Resolve + click the Save button; the applied action is recorded.
+    let resolved = client
+        .request(RequestV1::Resolve {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: Some(TextMatchV1 {
+                    text: "Save".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+            },
+            timeout_ms: 2000,
+        })
+        .await
+        .unwrap();
+    let (node, generation) = match resolved {
+        ResponseV1::Resolved {
+            node, generation, ..
+        } => (node, generation),
+        other => panic!("expected Resolved, got {other:?}"),
+    };
+    let done = client
+        .request(RequestV1::Action {
+            node,
+            generation,
+            action: SemActionV1::Click,
+            force: false,
+            timeout_ms: 2000,
+        })
+        .await
+        .unwrap();
+    match done {
+        ResponseV1::ActionDone { .. } => {}
+        other => panic!("expected ActionDone, got {other:?}"),
+    }
+
+    // Stop: the generated kit code + warnings (§13 cost model picked
+    // role+name — the fixture has no test ids).
+    let resp = client
+        .request(RequestV1::Inspect(
+            guiwright_proto::schema::InspectV1::StopRecording,
+        ))
+        .await
+        .unwrap();
+    match resp {
+        ResponseV1::Codegen { code, warnings } => {
+            assert_eq!(code, "app.get_by_role(Role::Button, \"Save\").click();\n");
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
+        other => panic!("expected Codegen, got {other:?}"),
+    }
+
+    // Stop again: a clean error (no recording active).
+    let err = client
+        .request(RequestV1::Inspect(
+            guiwright_proto::schema::InspectV1::StopRecording,
+        ))
+        .await
+        .expect_err("no recording active");
+    assert!(
+        matches!(err, GwpError::Rejected { .. }),
+        "clean rejected error: {err:?}"
+    );
+
+    handle.shutdown();
+}

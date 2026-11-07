@@ -1835,6 +1835,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "guiwright-cli"
+version = "0.1.0"
+dependencies = [
+ "guiwright-core",
+ "guiwright-driver",
+ "guiwright-proto",
+ "guiwright-trace",
+ "guiwright-viewer",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "guiwright-core"
 version = "0.1.0"
 dependencies = [
@@ -1852,6 +1866,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
+ "guiwright-inspect",
  "guiwright-proto",
  "guiwright-trace",
  "serde",

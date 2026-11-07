@@ -460,14 +460,20 @@ fn mock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: MockV1) -> 
     }
 }
 
-/// §7 inspect domain (§13): recording control. The session-side recorder
-/// is the kit's `CodegenRecorder` (guiwright-inspect); over the wire the
-/// interactive highlight handles land with the overlay session.
-fn inspect_response<A: FrameworkAdapter>(_session: &mut Session<A>, cmd: InspectV1) -> ResponseV1 {
+/// §7 inspect domain (§13): remote codegen recording (M4). The
+/// session-side recorder is the kit's `CodegenRecorder` (guiwright-inspect)
+/// fed by every applied `Action` request; `StopRecording` replies with the
+/// generated kit code + strict-mode warnings (§13). The live highlight
+/// handles land with the interactive overlay session.
+fn inspect_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: InspectV1) -> ResponseV1 {
     match cmd {
-        InspectV1::StartRecording | InspectV1::StopRecording => ResponseV1::Error {
-            code: ErrorCode::Unsupported,
-            message: "remote codegen recording lands with the interactive inspector session (§13); embedded mode records via guiwright-kit::App::codegen".into(),
+        InspectV1::StartRecording => match session.codegen_start() {
+            Ok(()) => ResponseV1::Pong,
+            Err(err) => error_response(err),
+        },
+        InspectV1::StopRecording => match session.codegen_stop() {
+            Ok((code, warnings)) => ResponseV1::Codegen { code, warnings },
+            Err(err) => error_response(err),
         },
     }
 }
