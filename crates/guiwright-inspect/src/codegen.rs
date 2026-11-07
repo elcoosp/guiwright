@@ -107,8 +107,12 @@ impl CodegenRecorder {
             ));
         }
         let locator = locator_code(&choice, facts);
+        // M4 (§13 remote codegen): `fill` and `press` carry their payload
+        // as the recorder argument — the emitted call reads like the kit
+        // API (`locator.fill("…")`, `locator.press("Enter")`).
         let call = match (action, argument) {
             ("fill", Some(arg)) => format!("{locator}.fill({arg:?});"),
+            ("press", Some(arg)) => format!("{locator}.press({arg:?});"),
             _ => format!("{locator}.{action}();"),
         };
         let line = RecordedLine {
@@ -428,6 +432,26 @@ mod tests {
         assert_eq!(
             line.code,
             "app.get_by_role(Role::TextInput, \"Email\").fill(\"ada@lovelace.dev\");"
+        );
+    }
+
+    /// M4 (§13 remote codegen): `press` carries the key as the recorder
+    /// argument, same call shape as `fill`.
+    #[test]
+    fn press_emits_press_with_argument() {
+        let tree = fixture_tree();
+        let mut rec = CodegenRecorder::new();
+        let line = rec
+            .record(
+                "press",
+                Some("Enter"),
+                &facts(5, Role::TextInput, "Email"),
+                &tree,
+            )
+            .expect("recorded");
+        assert_eq!(
+            line.code,
+            "app.get_by_role(Role::TextInput, \"Email\").press(\"Enter\");"
         );
     }
 
