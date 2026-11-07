@@ -1,186 +1,178 @@
 <div align="center">
-
-# guiwright
-
-**Playwright-grade test & automation driver for Rust GUI frameworks.**
-
-One driver, every kit: locate, act on, assert and inspect widgets through
-the AccessKit accessibility tree — embedded in-process or over a wire
-protocol — with auto-wait semantics, frame-boundary discipline and
-enforced performance budgets.
-
-[![CI](https://github.com/elcoosp/guiwright/actions/workflows/ci.yml/badge.svg)](https://github.com/elcoosp/guiwright/actions/workflows/ci.yml)
-[![Changelog](https://img.shields.io/badge/changelog-git--cliff-8A2BE2)](CHANGELOG.md)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
-
+  <img src="https://cdn.jsdelivr.net/gh/elcoosp/guiwright@main/docs/logo.png" alt="Guiwright Logo" width="300"/>
+  <p>
+    <strong>Playwright-grade GUI testing for Rust frameworks, driven through the AccessKit accessibility tree.</strong><br/>
+    Locators resolve against each framework's accessibility tree, actions run through its real
+    input pipeline, and every step auto-waits on tree diffs and frame boundaries instead of
+    sleeping. Adapters for egui, Masonry/Xilem, iced and Freya run in-process for tests, and the
+    same adapter contract is served over a Unix domain socket for out-of-process sessions. The
+    framework-agnostic core depends only on AccessKit, and the whole workspace forbids unsafe code.
+  </p>
+  <p>
+    <a href="https://github.com/elcoosp/guiwright/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/elcoosp/guiwright/ci.yml?style=flat-square&label=CI" alt="CI status"/></a>
+    <a href="https://github.com/elcoosp/guiwright/blob/main/.github/workflows/ci.yml"><img src="https://img.shields.io/badge/tested-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Tested on Linux, macOS and Windows"/></a>
+    <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.85-blue?style=flat-square" alt="MSRV 1.85"/></a>
+    <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/version-0.1.0-blue?style=flat-square" alt="Workspace version 0.1.0"/></a>
+    <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License: MIT OR Apache-2.0"/></a>
+    <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/unsafe%20code-forbidden-success?style=flat-square" alt="unsafe code forbidden workspace-wide"/></a>
+  </p>
 </div>
 
-## Status
+<p align="center">
+  <a href="#quickstart">Quickstart</a> • <a href="#features">Features</a> • <a href="#how-it-works">How it works</a> • <a href="#usage">Usage</a> • <a href="#status">Status</a> • <a href="#learn-more">Learn more</a>
+</p>
 
-This repository is at **M3** (architecture `docs/architecture.md`):
+## Quickstart
 
-- [x] `guiwright-core` — tree service, selector engine, actionability,
-      zero-polling auto-wait, expect/assertions
-- [x] `guiwright-proto` — GWP wire schema (`V1`), length-prefixed
-      postcard framing, LZ4 blob side channel, UDS transport
-- [x] `guiwright-driver` — session loop, mock adapter, GWP-over-UDS server
-- [x] `guiwright-adapter-egui` — embedded adapter, frame digests, input batching
-- [x] `guiwright-adapter-masonry` — embedded adapter over `RenderRoot`
-- [x] `guiwright-bench` — criterion suites + CI perf-budget guard
-      (`bench/budgets.toml`, §15.1)
-- [x] `guiwright-shot` — screenshot codec, YIQ diff, baselines + bless flow (§10)
-- [x] `guiwright-trace` — `gwtrace/v1` zip recorder, SPSC ring → writer thread (§12)
-- [x] `guiwright-adapter-iced` — Level-2 engine (logical tree, role registry,
-      action routing); harness glue behind the `iced` feature (§4.6)
-- [x] `guiwright-adapter-freya` — Level-1 support (id bridge, key sequences
-      with KeyUp, frame-quantized event buffer); glue behind the `freya` feature (§4.3)
-- [x] `guiwright-kit` + `guiwright-macros` — embedded App, Locators, `#[test]`,
-      traces, screenshots, nextest-aware artifact naming (§5.2, §6.3, §11)
-- [x] `guiwright-viewer` — `gwtrace/v1` archive reader, timeline model
-      (tree resolved at any frame from snapshots + diffs), self-contained
-      `trace.html` emitter (§12); `App::export_trace_viewer`
-- [x] `guiwright-inspect` — codegen recorder with the minimal-stable-selector
-      cost model (TestId > role+name > label > text) and the overlay plan
-      (§13); egui painter + masonry draw-ops in the adapters
-- [x] `guiwright-adapter-slint` — testing-backend introspection engine,
-      `(component, item)` id bridge, `mock_elapsed_time` clock plan,
-      testing build helper; the glue runs downstream (slint's skia lock
-      chain conflicts with freya's — recorded in the crate docs, §4.4)
-- [x] Clock service — frame-sized fast-forward stepping, pause/resume
-      semantics, `clock.bin` ledger, full kit `app.clock()` surface (§14)
-- [x] Mock domain — state seams (`#[guiwright_kit::seam]` +
-      `register_seams!`), `run_in` runner-context execution, canned
-      overrides, `app.mock()` surface, GWP `Mock` routes (§14)
-- [x] Remote-mode GPUI spike — clock + mock domains end-to-end over a real
-      UDS socket; findings in `docs/m2-gpui-remote-spike.md` (§17)
-- [x] Video recording (§10) — `Video` GWP domain, session video service,
-      hash-deduped frame ring → ffmpeg pipe (`.webm`) with a lossless
-      PNG-sequence fallback; `app.video()` surface; client-owned artifact
-      dir (Playwright parity)
-- [x] Other-language client (§16) — GWP over TCP + the published wire
-      schema (`gwp-schema.json`, golden-pinned); the zero-dependency
-      `@guiwright/gwp` TypeScript client with a cross-language e2e against
-      a real Rust server (`clients/typescript`)
-- [x] `guiwright-adapter-floem` — the two §4.7 contributions implemented
-      (test-id registry with ABA generations; tiny-skia headless
-      `PaintState` with the strided xxh3 digest), role metadata, the
-      Level-2 logical engine and the harness glue contract;
-      `docs/m3-floem-contributions.md` carries the upstream patch designs
-- [x] `guiwright-adapter-gpui` — the §4.5 hybrid engine: a11y
-      activation-at-attach model, `PlatformInput` mapping with the
-      `VisualTestContext` keystroke vocabulary, test-support dispatcher
-      clock plan, `run_in` runner-context contract, strided frame digests
+Requires Rust 1.85 or newer (edition 2024). Tests run headless in your process; no display server or window is needed.
 
-## Workspace
+Add the kit to your dev dependencies:
 
-| Crate | Role |
-|---|---|
-| `guiwright-core` | Selector resolution, tree diffing, wait/expect — substrate only |
-| `guiwright-proto` | GWP protocol: schema, framing, blobs, UDS + TCP, published schema |
-| `guiwright-driver` | Sessions, adapters trait, UDS/TCP servers, clock service, video service |
-| `guiwright-adapter-egui` | egui: AccessKit tree + paint-digest determinism |
-| `guiwright-adapter-masonry` | Masonry/Xilem: `RenderRoot` headless |
-| `guiwright-bench` | Criterion benches + `check_budgets` perf guard |
-| `guiwright-shot` | PNG codec, weighted squared YIQ diff, baseline store + bless |
-| `guiwright-trace` | `gwtrace/v1` zip recorder (bounded ring, hash-deduped frames) |
-| `guiwright-adapter-iced` | iced Level-2 engine; `iced` feature gates the harness glue |
-| `guiwright-adapter-freya` | freya Level-1 support; `freya` feature gates the runner glue |
-| `guiwright-adapter-slint` | slint testing-backend engine (framework-free); glue contract in the crate docs |
-| `guiwright-adapter-floem` | floem contributions (test-id registry, tiny-skia headless paint) + Level-2 engine (framework-free) |
-| `guiwright-adapter-gpui` | gpui hybrid engine (a11y activation, input mapping, clock plan, run_in) — framework-free |
-| `clients/typescript` | `@guiwright/gwp`: the zero-dependency other-language client (TCP + WS) |
-| `guiwright-kit` | Embedded App, Locators, expect, clock, mock seams, codegen, video, traces |
-| `guiwright-macros` | `#[guiwright_kit::test]` + `#[guiwright_kit::seam]` proc macros |
-| `guiwright-viewer` | Archive reader, timeline resolver, self-contained `trace.html` |
-| `guiwright-inspect` | Codegen recorder + selector cost model + overlay plan |
-
-## Quick start
-
-```bash
-cargo test --workspace          # full suite
-cargo clippy --workspace --all-targets -- -D warnings
-cargo bench -p guiwright-bench  # criterion suites
-cargo run --release -p guiwright-bench --bin check_budgets   # perf guard (§15.7)
+```toml
+[dev-dependencies]
+guiwright-kit = { git = "https://github.com/elcoosp/guiwright" }
+accesskit = "0.25"
 ```
 
-### Writing a test (embedded mode, §6.3)
+Write a test. The `#[guiwright_kit::test]` macro launches the built-in fixture app (a "Save" button, a "Welcome, Ada" label and an "Email" text input), so this runs as-is:
 
 ```rust
 use accesskit::Role;
-use guiwright_kit::{expect, App};
+use guiwright_kit::{App, expect};
 
 #[guiwright_kit::test]
 fn login_flow(app: &mut App) -> Result<(), String> {
-    app.get_by_role(Role::Button, "Save").click().map_err(|e| e.to_string())?;
-    expect(app.get_by_text("Welcome, Ada")).to_be_visible().map_err(|e| e.to_string())?;
-    // GUIWRIGHT_BLESS=1 creates baselines; failing runs emit .new.png/.diff.png
+    // Auto-waits for actionability, then clicks through the adapter.
+    app.get_by_role(Role::Button, "Save")
+        .click()
+        .map_err(|e| e.to_string())?;
+
+    // Retries until the condition holds or the 5 s default timeout expires.
+    expect(app.get_by_text("Welcome, Ada"))
+        .to_be_visible()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 ```
+
+Run it like any other Rust test:
 
 ```bash
-GW_TRACE=1 cargo nextest run          # per-test gwtrace zip archives (§12)
-GUIWRIGHT_BLESS=1 cargo nextest run   # bless failing screenshot baselines (§10)
+cargo test
 ```
 
-### Virtual clock, state seams and codegen (M2)
+Swap in a real framework adapter with `App::launch(name, adapter)` as shown in [Usage](#usage).
+
+> [!TIP]
+> Set `GW_TRACE=1` to record a `gwtrace/v1` zip archive (tree snapshots, input events, logs, frame captures) per test, and `GUIWRIGHT_BLESS=1` to accept failing screenshot baselines.
+
+## Features
+
+- **Playwright-shaped locators.** `get_by_role`, `get_by_label`, `get_by_text`, `get_by_test_id` and `get_by_value`, with `.first()` / `.nth()` / `.has_text(...)` filters and strict-mode failure on ambiguous matches (`crates/guiwright-core/src/selector.rs`).
+- **Actionability auto-wait without polling.** Clicks and fills wait for attached / visible / stable / enabled / receives-events checks that are woken by tree diffs and presented frames; a waiter fed no events does no work (`crates/guiwright-core/src/actionability.rs`, `crates/guiwright-core/src/wait.rs`, pinned by `crates/guiwright-core/tests/auto_wait.rs`).
+- **Retry-until-timeout assertions.** `expect(locator).to_be_visible()`, `to_have_text`, `to_have_value` and friends complete exactly when the condition turns true, or fail with the last tree summary embedded in the error (`crates/guiwright-core/src/expect.rs`).
+- **Screenshot baselines with a perceptual diff.** Weighted squared YIQ pixel distance, an absolute `max_failed_pixels` budget, per-OS baseline directories and a `GUIWRIGHT_BLESS` flow that leaves `.new.png` and `.diff.png` artifacts next to a failing baseline (`crates/guiwright-shot`).
+- **Time-travel traces.** Opt-in `gwtrace/v1` zip archives with postcard+LZ4 tree snapshots, hash-deduped frame captures and a `tracing`-fed event log, recorded through a bounded lock-free ring to a writer thread (`crates/guiwright-trace`).
+- **Embedded and remote through one trait.** Tests call the `FrameworkAdapter` directly in-process; the same contract is served over the GWP wire protocol (length-prefixed postcard framing, LZ4 blob side channel) on a Unix domain socket (`crates/guiwright-driver`, `crates/guiwright-proto`).
+- **Performance budgets enforced in CI.** Criterion benches plus a `check_budgets` binary that fails the build when p95 samples regress against `bench/budgets.toml` (`crates/guiwright-bench`, `.github/workflows/ci.yml`).
+
+## How it works
+
+Every framework implements one `FrameworkAdapter` trait whose methods execute on the UI thread at frame boundaries. Frameworks that already emit an AccessKit tree (egui, Masonry, Freya) hand their `TreeUpdate`s to the adapter, which folds them into an incremental consumer tree; for iced, which has no accessibility tree, the adapter builds one from widget reports plus a role registry contributed by the app. Selectors resolve against that tree, semantic actions rendezvous with the next frame, and waiters are woken by diffs and frame-presented events rather than by polling. In remote mode, the driver exposes the same adapter contract as a session server speaking GWP over a Unix domain socket, so out-of-process clients get identical semantics.
+
+```mermaid
+flowchart LR
+    T["Test<br/>guiwright-kit: App, locators, expect"] --> C["guiwright-core<br/>selector resolution, actionability,<br/>event-driven wait"]
+    C --> A["FrameworkAdapter<br/>egui, iced, masonry, freya"]
+    A --> U["App under test"]
+    A -- "tree diffs and presented frames" --> C
+    C --> O["Artifacts<br/>guiwright-shot diffs,<br/>guiwright-trace gwtrace zips"]
+    T -. "remote mode" .-> P["guiwright-proto<br/>GWP over a UDS socket"]
+    P --> D["guiwright-driver<br/>session server"]
+    D --> A
+```
+
+## Usage
+
+The examples below are condensed from the workspace's own integration tests.
+
+### Click and assert against a real app (egui)
 
 ```rust
-use guiwright_kit::{register_seams, App};
+use std::{cell::RefCell, rc::Rc, time::{Duration, Instant}};
 
-#[guiwright_kit::seam]
-fn reset_db(state: &mut AppState) -> Result<(), AppError> {
-    app_state::reset_to_fixture(state)
-}
+use accesskit::Role;
+use guiwright_adapter_egui::EguiAdapter;
+use guiwright_core::Selector;
+use guiwright_driver::Session;
 
-#[guiwright_kit::test]
-fn checkout_flow(app: &mut App) -> Result<(), String> {
-    app.register_seams(&register_seams![reset_db]);
-    app.mock().reset_state("seed-42").map_err(|e| e.to_string())?;
-    app.clock().install_virtual().map_err(|e| e.to_string())?;
-    app.clock().fast_forward(Duration::from_secs(30)).map_err(|e| e.to_string())?;
-    app.enable_codegen();                       // §13 interaction → kit code
-    app.get_by_role(Role::Button, "Save").click().map_err(|e| e.to_string())?;
-    let (code, warnings) = app.codegen_finish().unwrap();
-    Ok(())
-}
+let state = Rc::new(RefCell::new(CounterApp::default()));
+let ui_state = Rc::clone(&state);
+let adapter = EguiAdapter::new(move |ctx: &egui::Context| {
+    ui_state.borrow_mut().ui(ctx); // your normal egui painting code
+});
+
+let mut session = Session::new(adapter);
+session.settle(Instant::now() + Duration::from_secs(2));
+session.click(&Selector::role_named(Role::Button, "Save"))?;
+assert_eq!(state.borrow().clicks, 1);
 ```
 
-### Video and the other-language client (M3)
+The adapter drives a real `egui::Context` windowless: AccessKit tree generation, synthetic input and a virtual clock all run through the standard `Session` loop, so embedded and remote sessions behave identically (see `crates/guiwright-adapter-egui/tests/egui_embedded.rs`).
+
+### Screenshots and baselines
 
 ```rust
-#[guiwright_kit::test]
-fn checkout_flow(app: &mut App) -> Result<(), String> {
-    app.video().start_in("test-results/videos", 25).map_err(|e| e.to_string())?;
-    app.get_by_role(Role::Button, "Save").click().map_err(|e| e.to_string())?;
-    let video = app.video().stop().map_err(|e| e.to_string())?;   // .webm (ffmpeg) or PNG frames
-    println!("video: {}", video.path.display());
-    Ok(())
+use guiwright_kit::{App, BlessMode};
+
+let mut app = App::launch("shot_test", my_adapter)
+    .with_baseline_dir("tests/screenshots");
+
+app.screenshot("main", BlessMode::Failing)?; // first run: writes the baseline
+app.screenshot("main", BlessMode::Off)?;     // later runs: Matched or Mismatch
+```
+
+A mismatch fails the test and writes `<name>.new.png` plus a rendered `<name>.diff.png` next to the baseline. Baselines are stored per platform, scale factor and renderer; tolerances come from `Guiwright.toml` with per-OS overrides. A virtual clock (`app.clock_fast_forward(Duration::from_secs(30))`) makes time-dependent UI deterministic.
+
+### Remote session over a Unix domain socket
+
+```rust
+use guiwright_driver::{MockAdapter, spawn_session_server};
+use guiwright_proto::{Client, RequestV1, ResponseV1};
+
+// App side (or a test host): serve GWP on a UDS socket. Real apps serve
+// their own adapter; MockAdapter comes from guiwright-driver's `mock` feature.
+let handle = spawn_session_server(socket_path, || MockAdapter::with_fixture(&fixture))?;
+
+// Client side: handshake, then Playwright-shaped commands over the wire.
+let mut client = Client::connect(&socket_path).await?;
+let caps = client.handshake("guiwright-tests/0.1").await?;
+match client.request(RequestV1::TreeSnapshot).await? {
+    ResponseV1::TreeSnapshot { node_count, .. } => println!("{node_count} nodes"),
+    other => panic!("unexpected response: {other:?}"),
 }
 ```
 
-```bash
-# The zero-dependency TypeScript client drives a real Rust server (§16):
-cd clients/typescript && npm test && npm run e2e
-```
+Resolve requests carry selectors and auto-wait over the wire the same way embedded sessions do (see `crates/guiwright-driver/tests/remote_session.rs`).
 
-The perf guard fails the build on budget regressions; targets live in
-[`bench/budgets.toml`](bench/budgets.toml) and CI applies a documented ×3
-headroom.
+### Supported adapters
 
-## Changelog & releases
+| Framework | Crate | Accessibility source | CI coverage |
+|---|---|---|---|
+| egui | `guiwright-adapter-egui` | egui's own AccessKit tree (Level 1) | embedded tests on Linux, macOS, Windows |
+| Masonry / Xilem | `guiwright-adapter-masonry` | `RenderRoot` via `masonry_testing::TestHarness` (Level 1) | embedded tests on Linux, macOS, Windows |
+| iced | `guiwright-adapter-iced` | Guiwright-built logical tree + app-contributed role registry (Level 2); harness glue behind the `iced` feature | compile-verified in CI |
+| Freya | `guiwright-adapter-freya` | `freya_testing` harness + `a11y_id` bridge (Level 1); runner glue behind the `freya` feature | compile-verified in CI |
 
-Changelogs are generated from [Conventional
-Commits](https://www.conventionalcommits.org) by [git-cliff](https://git-cliff.org)
-(`cliff.toml`); see [`CHANGELOG.md`](CHANGELOG.md). Tagging `vX.Y.Z` triggers
-the release workflow, which regenerates the changelog, packages the crates
-and publishes a GitHub release.
+"Level" is the integration tier from [docs/architecture.md](docs/architecture.md): Level 1 piggybacks on a framework's existing accessibility tree, Level 2 synthesizes one.
 
-## License
+## Status
 
-Dual-licensed under either of:
+> [!NOTE]
+> Guiwright is a pre-release project at version 0.1.0, with milestone M1 of the plan in [docs/architecture.md](docs/architecture.md) implemented across all twelve workspace crates and covered by in-repo integration tests. CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
 
-- Apache License, Version 2.0 ([LICENSE-APACHE-2.0](LICENSE-APACHE-2.0))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
+## Learn more
 
-at your option.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, process model, the GWP protocol spec, the Playwright parity map and performance engineering.
+- [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff (`cliff.toml`); tagging `vX.Y.Z` triggers the release workflow.
+- [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard.
