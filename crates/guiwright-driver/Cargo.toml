@@ -18,6 +18,7 @@ mock = []
 guiwright-core.workspace = true
 accesskit.workspace = true
 guiwright-proto.workspace = true
+guiwright-trace.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time", "macros"] }
