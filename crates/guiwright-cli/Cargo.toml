@@ -1,0 +1,33 @@
+[package]
+name = "guiwright-cli"
+description = "The guiwright binary: repl, show-trace, bless and install-deps (architecture §5.2, §11, §12, §13, §16)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "guiwright"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+guiwright-proto.workspace = true
+guiwright-viewer.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "macros"] }
+
+[dev-dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+guiwright-trace.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true
