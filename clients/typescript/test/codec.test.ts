@@ -32,6 +32,7 @@ import {
   SelectorV1,
   SemActionV1,
   VideoV1,
+  WindowV1,
 } from "../src/schema.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,8 +45,8 @@ const hexToBytes = (hex: string): Uint8Array => {
 
 test("golden manifest is the expected shape", () => {
   assert.equal(golden.schema, "gwp-golden/v1");
-  assert.ok(golden.requests.length >= 16, "every request variant is pinned");
-  assert.ok(golden.responses.length >= 12, "every response variant is pinned");
+  assert.ok(golden.requests.length >= 18, "every request variant is pinned");
+  assert.ok(golden.responses.length >= 14, "every response variant is pinned");
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -109,6 +110,11 @@ test("requests encode byte-identical to the Rust wire", () => {
       cmd: { kind: "start", opts: { fps: 30, dir: "test-results/videos" } },
     }),
     video_stop: () => ({ kind: "video", cmd: { kind: "stop" } }),
+    window_list: () => ({ kind: "window", cmd: { kind: "list" } }),
+    window_use: () => ({
+      kind: "window",
+      cmd: { kind: "use", handle: "a6000000-0000-0000-0000-000000000001" },
+    }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -179,14 +185,14 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-2), ["Bye", "Video"]);
+  assert.deepEqual(byName(requests).slice(-3), ["Bye", "Video", "Window"]);
   assert.deepEqual(
     Object.values(RequestV1),
     requests.map((v: any) => Number(v.index)),
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-2), ["Bye", "VideoFile"]);
+  assert.deepEqual(byName(responses).slice(-3), ["VideoFile", "Windows", "WindowUsed"]);
   assert.deepEqual(
     Object.values(ResponseV1),
     responses.map((v: any) => Number(v.index)),
@@ -198,6 +204,10 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   assert.deepEqual(
     Object.values(VideoV1),
     domains.video.variants.map((v: any) => Number(v.index)),
+  );
+  assert.deepEqual(
+    Object.values(WindowV1),
+    domains.window.variants.map((v: any) => Number(v.index)),
   );
   assert.equal(schema.protocol_version, PROTO_VERSION);
 });
