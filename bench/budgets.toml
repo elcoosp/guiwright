@@ -143,3 +143,21 @@ p95_us = 20000
 notes = "M2 micro-suite guard (15.7): gwtrace archive open + snapshot resolve, 1k nodes"
 m0_measurable = true
 sample = "viewer_timeline_replay"
+
+[[budget]]
+id = "resolve_remote_tcp"
+name = "Resolve locator, remote (TCP round-trip)"
+p50_us = 800
+p95_us = 4000
+notes = "incl. marshalling + session-thread rendezvous over loopback TCP; bound at M3 (the other-language-client transport, byte-identical to the UDS row)"
+m0_measurable = true
+sample = "resolve_remote_tcp"
+
+[[budget]]
+id = "video_frame_dedup"
+name = "Video frame dedup push (hash-equality hot path)"
+p50_us = 2
+p95_us = 20
+notes = "§10 backpressure hot path: hash-equality dedup + bounded ring push per presented frame; M3 micro-suite guard"
+m0_measurable = true
+sample = "video_frame_dedup"
