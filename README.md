@@ -73,7 +73,9 @@ Swap in a real framework adapter with `App::launch(name, adapter)` as shown in [
 - **Retry-until-timeout assertions.** `expect(locator).to_be_visible()`, `to_have_text`, `to_have_value` and friends complete exactly when the condition turns true, or fail with the last tree summary embedded in the error (`crates/guiwright-core/src/expect.rs`).
 - **Screenshot baselines with a perceptual diff.** Weighted squared YIQ pixel distance, an absolute `max_failed_pixels` budget, per-OS baseline directories and a `GUIWRIGHT_BLESS` flow that leaves `.new.png` and `.diff.png` artifacts next to a failing baseline (`crates/guiwright-shot`).
 - **Time-travel traces.** Opt-in `gwtrace/v1` zip archives with postcard+LZ4 tree snapshots, hash-deduped frame captures and a `tracing`-fed event log, recorded through a bounded lock-free ring to a writer thread (`crates/guiwright-trace`).
-- **Embedded and remote through one trait.** Tests call the `FrameworkAdapter` directly in-process; the same contract is served over the GWP wire protocol (length-prefixed postcard framing, LZ4 blob side channel) on a Unix domain socket (`crates/guiwright-driver`, `crates/guiwright-proto`).
+- **Embedded and remote through one trait.** Tests call the `FrameworkAdapter` directly in-process; the same contract is served over the GWP wire protocol (length-prefixed postcard framing, LZ4 blob side channel) on a Unix domain socket and over TCP for CI containers (`crates/guiwright-driver`, `crates/guiwright-proto`).
+- **Live REPL over the wire.** `guiwright repl` attaches to a running remote-mode app — locators, actions, the virtual clock, state seams, codegen recording and video, all as commands mapped 1:1 onto GWP requests (`crates/guiwright-cli`, architecture §13/§16).
+- **Trace viewer + CLI plumbing.** `guiwright show-trace` renders a `gwtrace/v1` zip into a self-contained scrubber HTML, `guiwright bless` promotes CI screenshot artifacts onto their baselines, `guiwright install-deps` prints the §11 CI provisioning commands (`crates/guiwright-viewer`, `crates/guiwright-cli`).
 - **Performance budgets enforced in CI.** Criterion benches plus a `check_budgets` binary that fails the build when p95 samples regress against `bench/budgets.toml` (`crates/guiwright-bench`, `.github/workflows/ci.yml`).
 
 ## How it works
@@ -155,6 +157,34 @@ match client.request(RequestV1::TreeSnapshot).await? {
 
 Resolve requests carry selectors and auto-wait over the wire the same way embedded sessions do (see `crates/guiwright-driver/tests/remote_session.rs`).
 
+### Live REPL against a running app (M4)
+
+```bash
+# App side: serve its adapter in remote mode (§5.3).
+GUIWRIGHT_DRIVER=uds:///tmp/app.gwp ./my-app &
+
+# Your side: attach and debug interactively.
+guiwright repl --uds /tmp/app.gwp
+```
+
+```text
+gw> snapshot
+tree @3: 12 nodes
+gw> get role Button Save
+resolved Button "Save" (generation 0) rect=[16,16 → 136,48]
+gw> click
+Button "Save": clicked (frame 7)
+gw> clock install
+clock: virtual=0ms paused=false steps=0
+gw> codegen start
+…act, then…
+gw> codegen stop
+codegen: 1 line(s), 0 warning(s)
+app.get_by_role(Role::Button, "Save").click();
+```
+
+Every command maps onto a GWP request — the same conversation works over TCP (`guiwright repl --tcp 127.0.0.1:41234`) and from the TypeScript client (`clients/typescript`). `guiwright show-trace <archive.zip>` renders a recorded trace into a self-contained HTML scrubber, `guiwright bless <dir>` promotes CI screenshot artifacts onto their baselines, and `guiwright install-deps` prints the §11 CI provisioning commands (see `crates/guiwright-cli/tests/`).
+
 ### Supported adapters
 
 | Framework | Crate | Accessibility source | CI coverage |
@@ -169,7 +199,7 @@ Resolve requests carry selectors and auto-wait over the wire the same way embedd
 ## Status
 
 > [!NOTE]
-> Guiwright is a pre-release project at version 0.1.0, with milestone M1 of the plan in [docs/architecture.md](docs/architecture.md) implemented across all twelve workspace crates and covered by in-repo integration tests. CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
+> Guiwright is a pre-release project at version 0.1.0, with milestones M0–M2 of the plan in [docs/architecture.md](docs/architecture.md) implemented across the workspace crates, M3 shipped as framework-free adapter engines (floem, gpui), the video recorder and the TypeScript client, and M4 — the `guiwright-cli` crate (`repl`, `show-trace`, `bless`, `install-deps`) plus remote codegen recording (§13) — covered by in-repo integration tests. CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), runs the TypeScript client suite and the cross-language e2e, compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. The floem and gpui platform glue ships downstream (recorded constraints in the crate docs and `docs/m3-floem-contributions.md`). Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
 
 ## Learn more
 

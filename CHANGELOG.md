@@ -23,6 +23,8 @@ Commits](https://www.conventionalcommits.org).
 - Fix the malformed `branches:` list in the push trigger
 
 ### Documentation
+- Add the M4 CLI & REPL doc (docs/m4-cli-repl.md): the §5.2 crate row's scope, the REPL command surface mapped onto the GWP domains, the remote-codegen design (§13), the deferred rows (`guiwright test`, multi-window, live viewer streaming) and the test posture
+- README: M4 status — the CLI crate, the live REPL usage section and the remote-codegen closing of the inspect domain; plus the new "Live REPL" usage example
 - Add the M3 floem contributions doc (docs/m3-floem-contributions.md): the `test_id` decorator + tiny-skia headless PaintState upstream patch designs, the adapter's pre/post-patch capability contract and the CI posture
 - README: M3 status — video, the other-language client, the floem and gpui adapter engines, and the new workspace crates
 - README: M1 status, new workspace crates and the kit quick start
@@ -30,6 +32,8 @@ Commits](https://www.conventionalcommits.org).
 - Add the M2 remote-mode GPUI spike notes (docs/m2-gpui-remote-spike.md): the adapter-agnostic GWP contract validated end-to-end over UDS
 
 ### Features
+- **cli:** `guiwright-cli` — the §5.2 crate row and the §16 v0.4 "REPL / debugging" row (M4): `guiwright repl` attaches to a live remote-mode session over UDS or TCP and drives it with Playwright-shaped commands — `get role|text|label|testid|value` locators with strict-mode errors as single error lines, the §8.4 action vocabulary, the §14 clock (`install`/`ff`/`runfor`/`pause`/`resume`/`set`/`state`) and mock (`install`/`clear`/`call`/`reset`) domains, `codegen start|stop` and `video start|stop` — every command mapped 1:1 onto an existing GWP request (no protocol change, the M2 conclusion holds); a quoting-aware tokenizer, a pure testable core (`Repl::step`), and `show-trace`/`bless`/`install-deps` as sibling subcommands (§12 trace.html deep links, the §10 bless flow for CI artifacts, the §11 provisioning printer)
+- **driver:** remote codegen recording (§13, closing the M2 `Unsupported` hole) — `Inspect::StartRecording/StopRecording` now drive a session-side `CodegenRecorder`; every applied GWP `Action` emits kit code against the minimal stable selector (facts collected from the session's tree at the pre-action tap, `App::collect_facts` precedent), with strict-mode narrowing warnings riding the `Codegen { code, warnings }` reply; the recorder learned `press` argument emission (`locator.press("Enter")`)
 - **proto:** GWP over **TCP** (§7 "TCP for CI containers") — a transport-agnostic connection state machine (`conn`) shared byte-for-byte with UDS, `GwpServerHandle::spawn_tcp` with ephemeral-port reporting, and the M3 `Video` domain (`Start{fps, dir} | Stop → VideoFile`) with append-only wire discipline pinned by discriminant tests
 - **proto:** the published, machine-readable wire schema (§16 "schema-published") — `guiwright_proto::schemadoc::gwp_schema_json()` emits `gwp-schema/v1` (framing, codec rules, transports, variant tables); golden-pinned in Rust and vendored into the TypeScript client
 - **trace:** the §10 video recorder — hash-equality dedup (static UI compresses to keyframe + no-ops) into a bounded ring → writer thread; encoders: the ffmpeg rawvideo pipe (`.webm`/vp9, `.mp4`/h264) and the deterministic lossless PNG-sequence fallback with a `gwvideo/v1` manifest; Auto probes the binary and degrades auditable
