@@ -20,6 +20,8 @@ serde.workspace = true
 twox-hash.workspace = true
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
+guiwright-viewer.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
 
 [dev-dependencies]
 criterion.workspace = true
