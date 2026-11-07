@@ -485,3 +485,35 @@ pub fn video_frame_dedup() -> Duration {
     let _ = std::fs::remove_dir_all(&dir);
     measured.max(Duration::from_nanos(1))
 }
+
+// --- M7 sample (gesture synthesis hot path, §9) -----------------------------
+
+/// §9 gesture synthesis: build the raw event batch for one 200 px drag
+/// (down + 40 ratchet-interpolated moves + up at the default 5 px/tick)
+/// and one double-click. Pure CPU on the session path — the pacing
+/// ratchet runs per gesture request, so the batch build must stay
+/// trivially cheap next to the frame rendezvous it feeds (§15.4).
+pub fn gesture_synthesis() -> Duration {
+    use guiwright_driver::{Gesture, GesturePacing, PointerButton, synthesize};
+    let pacing = GesturePacing::default();
+    let drag = Gesture::Drag {
+        from_x: 10.0,
+        from_y: 10.0,
+        to_x: 210.0,
+        to_y: 10.0,
+        button: PointerButton::Primary,
+    };
+    let click = Gesture::Click {
+        x: 12.5,
+        y: 30.0,
+        button: PointerButton::Primary,
+        count: 2,
+    };
+    let start = Instant::now();
+    let drag_events = synthesize(&drag, &pacing);
+    let click_events = synthesize(&click, &pacing);
+    let elapsed = start.elapsed();
+    assert_eq!(drag_events.len(), 42, "down + 40 ratchet moves + up");
+    assert_eq!(click_events.len(), 5, "move + down/up ×2");
+    elapsed
+}
