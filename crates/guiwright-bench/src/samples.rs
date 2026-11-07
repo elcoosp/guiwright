@@ -381,3 +381,107 @@ pub fn viewer_timeline_replay() -> Duration {
     assert_eq!(view.nodes.len(), 1000);
     started.elapsed()
 }
+
+// --- M3 samples (remote TCP round-trip §7/§15.1; video dedup §10) -----------
+
+/// §15.1 `resolve_remote_tcp`: one Resolve round-trip over loopback TCP —
+/// the M3 transport other-language clients drive (§7 "TCP for CI
+/// containers"; byte-identical to the UDS row, only the socket differs).
+pub fn resolve_remote_tcp() -> Duration {
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::schema::{RequestV1, ResponseV1, SelectorV1, TextMatchV1};
+    use guiwright_proto::tcp::Client;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let fixture = Fixture::buttons();
+    let runtime = Runtime::new().expect("bench runtime");
+
+    let (measured, handle) = runtime.block_on(async {
+        let handle = GwpServerHandle::spawn_tcp(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            move || MockAdapter::with_fixture(&fixture),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench tcp server binds");
+        let addr = match handle.endpoint() {
+            guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
+            other => unreachable!("spawn_tcp reports a TCP endpoint, got {other:?}"),
+        };
+        let mut client = Client::connect(&addr.to_string())
+            .await
+            .expect("bench client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let selector = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+
+        const ITERATIONS: u32 = 64;
+        for _ in 0..4 {
+            let resp = client
+                .request(RequestV1::Resolve {
+                    selector: selector.clone(),
+                    timeout_ms: 1000,
+                })
+                .await
+                .expect("warm resolve");
+            assert!(matches!(resp, ResponseV1::Resolved { .. }));
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let resp = client
+                .request(RequestV1::Resolve {
+                    selector: selector.clone(),
+                    timeout_ms: 1000,
+                })
+                .await
+                .expect("bench resolve");
+            assert!(matches!(resp, ResponseV1::Resolved { .. }));
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+/// §15.7 micro-suite guard (M3): the §10 video backpressure hot path —
+/// hash-equality dedup + bounded ring push per presented frame. The
+/// measured window is the `push_frame` loop only (encoding runs on the
+/// writer thread, off the session path, §15.4).
+pub fn video_frame_dedup() -> Duration {
+    use guiwright_trace::video::{EncoderChoice, VideoOptions, VideoRecorder};
+    use std::time::Instant;
+
+    let dir = std::env::temp_dir().join(format!("gw-bench-video-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let mut options = VideoOptions::new(25);
+    options.encoder = EncoderChoice::PngSequence;
+    let mut recorder =
+        VideoRecorder::start(dir.join("bench.frames"), options).expect("bench recorder");
+
+    let frame: std::sync::Arc<[u8]> =
+        std::sync::Arc::from(vec![7u8; 64 * 64 * 4].into_boxed_slice());
+    const FRAMES: u64 = 512;
+    // Half the frames repeat the previous hash (a static UI compresses to
+    // keyframe + no-ops, §10); the others change.
+    let started = Instant::now();
+    for i in 0..FRAMES {
+        let hash = if i % 2 == 0 { i } else { i - 1 };
+        recorder.push_frame(i + 1, hash, 64, 64, Some(&frame));
+    }
+    let measured = started.elapsed() / u32::try_from(FRAMES).expect("frames fit u32");
+
+    recorder.stop().expect("bench recording finalized");
+    let _ = std::fs::remove_dir_all(&dir);
+    measured.max(Duration::from_nanos(1))
+}
