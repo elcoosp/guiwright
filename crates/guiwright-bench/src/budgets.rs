@@ -86,6 +86,11 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         "element_screenshot_crop",
         crate::samples::element_screenshot_crop,
     ),
+    ("resolve_remote_uds", crate::samples::resolve_remote_uds),
+    (
+        "viewer_timeline_replay",
+        crate::samples::viewer_timeline_replay,
+    ),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
