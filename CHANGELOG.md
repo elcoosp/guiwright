@@ -9,6 +9,7 @@ Commits](https://www.conventionalcommits.org).
 ## Unreleased
 
 ### Benchmarks
+- **bench:** Bind the M3 §15.1 row — remote Resolve over loopback TCP (resolve_remote_tcp, the other-language-client transport, byte-identical to the UDS row) — and add the M3 micro-suite guard for the §10 video dedup hot path; both enforce in the release guard
 - **bench:** Bind the M2 §15.1 row — remote Resolve over a real UDS round-trip (resolve_remote_uds; the "remote benching lands" note) — and add the M2 micro-suite guard for viewer timeline replay; both enforce in the release guard
 - **bench:** Bind the M1 §15.1 rows — trace write amplification (UI-thread ring push) and element screenshot crop (CPU, guiwright-shot::crop); both enforce in the release guard
 
@@ -16,15 +17,27 @@ Commits](https://www.conventionalcommits.org).
 - **ci:** Malformed `branches:` list in the push trigger
 
 ### CI/CD
+- Add the clients job — TypeScript codec/client tests + the cross-language e2e against the Rust demo app (node 24, no framework deps)
+- Record the floem/gpui framework-free posture in the adapter-features job comments (no compile-verify jobs: floem 0.2.0 predates the HeadlessHarness; gpui 0.2.2 needs system libs)
 - Feature-gate compile-verification jobs for the iced and freya harness glue (§18 thin feature-gated adapters)
 - Fix the malformed `branches:` list in the push trigger
 
 ### Documentation
+- Add the M3 floem contributions doc (docs/m3-floem-contributions.md): the `test_id` decorator + tiny-skia headless PaintState upstream patch designs, the adapter's pre/post-patch capability contract and the CI posture
+- README: M3 status — video, the other-language client, the floem and gpui adapter engines, and the new workspace crates
 - README: M1 status, new workspace crates and the kit quick start
 - README: M2 status — viewer, inspect, slint adapter, clock service, mock seams, GPUI spike
 - Add the M2 remote-mode GPUI spike notes (docs/m2-gpui-remote-spike.md): the adapter-agnostic GWP contract validated end-to-end over UDS
 
 ### Features
+- **proto:** GWP over **TCP** (§7 "TCP for CI containers") — a transport-agnostic connection state machine (`conn`) shared byte-for-byte with UDS, `GwpServerHandle::spawn_tcp` with ephemeral-port reporting, and the M3 `Video` domain (`Start{fps, dir} | Stop → VideoFile`) with append-only wire discipline pinned by discriminant tests
+- **proto:** the published, machine-readable wire schema (§16 "schema-published") — `guiwright_proto::schemadoc::gwp_schema_json()` emits `gwp-schema/v1` (framing, codec rules, transports, variant tables); golden-pinned in Rust and vendored into the TypeScript client
+- **trace:** the §10 video recorder — hash-equality dedup (static UI compresses to keyframe + no-ops) into a bounded ring → writer thread; encoders: the ffmpeg rawvideo pipe (`.webm`/vp9, `.mp4`/h264) and the deterministic lossless PNG-sequence fallback with a `gwvideo/v1` manifest; Auto probes the binary and degrades auditable
+- **driver:** the video service — present-frame capture riding the pump loop (§15.4: the UI thread only hands over an `Arc` clone), §6.2 pixel-capability gating, client-owned artifact dir (Playwright parity) and the GWP `Video` route
+- **kit:** `app.video()` — start_in/start/stop with trace-event recording (`video` events land in `events.ndjson`)
+- **adapter-floem:** `guiwright-adapter-floem` (§4.7, §17 row 6) — the two scoped contributions implemented on the Guiwright side: the `test_id(...)` registry (strict-mode duplicates, ABA generation guards, removal hooks) and the tiny-skia headless `PaintState` (CPU offscreen surface, `PaintOp` contract, §15.5 strided xxh3 digest, lossless PNG export); role metadata registry (25 core view kinds), the Level-2 logical engine (`ViewReport` → synthesized AccessKit diff), the harness-timer clock plan and the input vocabulary; the harness binding ships downstream (floem 0.2.0 predates the `HeadlessHarness` — recorded constraint + `docs/m3-floem-contributions.md` upstream patch designs)
+- **adapter-gpui:** `guiwright-adapter-gpui` (§4.5, §17 row 7) — the hybrid engine: the a11y activation-at-attach model (§18 immediate ActivationHandler) with per-node bounds bookkeeping, the `PlatformInput` mapping incl. the `VisualTestContext` keystroke vocabulary (`"cmd-shift-p enter"`), the test-support dispatcher clock plan, the `run_in` runner-context contract (foreground executor + `&mut dyn Any` entity handover) and the §15.5 strided frame digests; caps depend on the `gpui/test-support` feature graph (framework-free — the platform stack needs system libs, recorded constraint)
+- **clients:** `clients/typescript` — `@guiwright/gwp`, the zero-dependency other-language client (§16): hand-written postcard codec (LEB128 varints, hex TreeIds), length-prefixed framing with an incremental reassembler, TCP + WebSocket transports, typed rejections; golden wire vectors captured from Rust (`GUIWRIGHT_BLESS` flow) re-pin the codec byte-for-byte; the cross-language e2e drives the Rust demo app (`gwp_demo_app` example) over real TCP through handshake → resolve → act → clock → mock seams → video → strict-mode rejection → bye
 - **viewer:** `guiwright-viewer` — `gwtrace/v1` archive reader (meta/events/logs/snapshots/diffs/index/clock; LZ4 diff-stream boundary recovery), timeline model resolving the UI tree at any frame from snapshots + diffs, and the self-contained `trace.html` emitter (§12); `App::export_trace_viewer`
 - **inspect:** `guiwright-inspect` — codegen recorder with the minimal-stable-selector cost model (TestId > role+name > label > text, `.first()` narrowing with live strict-mode warnings) and the framework-free overlay plan (§13)
 - **adapter-egui:** Inspector overlay painter — hover outline + role/TestId badges as a top-layer pass composition (§13)
