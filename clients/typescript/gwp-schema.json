@@ -66,6 +66,36 @@
         }
       ]
     },
+    "gesture": {
+      "name": "GestureV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "Click",
+          "payload": "{ x: f64, y: f64, button: PointerButtonV1, count: u32 varint (Playwright clickCount: 1 = click, 2 = double-click) } → GestureDone; synthesized as move→down→up ×count (§9)"
+        },
+        {
+          "index": 1,
+          "name": "Drag",
+          "payload": "{ from_x: f64, from_y: f64, to_x: f64, to_y: f64, button: PointerButtonV1 } → GestureDone; down→ratchet-interpolated moves (adapter pacing, ~5 px/tick)→up (§9)"
+        },
+        {
+          "index": 2,
+          "name": "Wheel",
+          "payload": "{ dx: f64, dy: f64 } → GestureDone; logical-px deltas"
+        },
+        {
+          "index": 3,
+          "name": "Key",
+          "payload": "{ key: string, modifiers: seq<string> } → GestureDone; synthesized as down→up (§8.4 key-name vocabulary)"
+        },
+        {
+          "index": 4,
+          "name": "Type",
+          "payload": "{ text: string } → GestureDone; one TextInput commit — adapters translate to IME or per-key events (§4.2)"
+        }
+      ]
+    },
     "inspect": {
       "name": "InspectV1",
       "variants": [
@@ -205,7 +235,7 @@
     {
       "index": 5,
       "name": "Input",
-      "payload": "{ events: seq<InputEventV1> }"
+      "payload": "{ events: seq<InputEventV1> } — injected into the sending connection's active window target (M7) → InputQueued"
     },
     {
       "index": 6,
@@ -236,6 +266,11 @@
       "index": 11,
       "name": "Window",
       "payload": "WindowV1 (see domains.window)"
+    },
+    {
+      "index": 12,
+      "name": "Gesture",
+      "payload": "GestureV1 (see domains.gesture)"
     }
   ],
   "responses": [
@@ -308,6 +343,11 @@
       "index": 13,
       "name": "WindowUsed",
       "payload": "{ handle: string }"
+    },
+    {
+      "index": 14,
+      "name": "GestureDone",
+      "payload": "{ frame_seq: u64 varint, detail: string }"
     }
   ],
   "schema": "gwp-schema/v1",
