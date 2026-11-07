@@ -7,6 +7,8 @@
 
 use accesskit::{Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
 
+use crate::key::NodeKey;
+
 /// A fixture definition: builds both the initial full update and scripted
 /// incremental updates against it.
 #[derive(Clone, Debug)]
@@ -288,6 +290,216 @@ impl Fixture {
             tree: None,
             tree_id: TreeId::ROOT,
             focus: NodeId(0),
+        }
+    }
+}
+
+/// The M6 multi-window fixture (§16 v0.4): a two-window app modeled the way
+/// AccessKit models multi-window — **grafted subtrees**. The root tree holds
+/// one window node per window, each carrying a `tree_id` property naming the
+/// subtree that holds the window's content; the consumer grafts the subtrees
+/// under their window nodes.
+///
+/// ```text
+/// ROOT tree                       W1 subtree ("Editor")        W2 subtree ("Preview")
+/// app (0)                         content (1)                  content (1)
+/// ├── window "Editor" (1) ──►W1   └── toolbar (4)              ├── button "Save" (2)
+/// │                               └── button "Save" (2)        └── label "Preview text" (3)
+/// └── window "Preview" (2) ──►W2
+/// ```
+///
+/// Both windows deliberately reuse the same **local** NodeIds (the subtree
+/// namespaces are independent): only the TreeId — the window identity —
+/// tells the two "Save" buttons apart, which is exactly the discriminator a
+/// window-scoped resolver must honor.
+///
+/// Incremental updates restate the interior toolbar node, never the subtree
+/// root: the consumer clears a subtree root's graft parent whenever an
+/// incremental update restates it (only full updates re-link the graft), so
+/// window content hangs one level below the root — the shape real adapters
+/// emit (window → panel → content).
+#[derive(Clone, Debug)]
+pub struct MultiWindowFixture {
+    /// Subtree (window) ids.
+    pub w1: TreeId,
+    pub w2: TreeId,
+    /// Graft node ids in the ROOT tree (`window "Editor"` / `window "Preview"`).
+    pub w1_graft: u64,
+    pub w2_graft: u64,
+}
+
+impl Default for MultiWindowFixture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MultiWindowFixture {
+    pub fn new() -> Self {
+        Self {
+            w1: TreeId(accesskit::Uuid::from_u128(
+                0xA600_0000_0000_0000_0000_0000_0000_0001,
+            )),
+            w2: TreeId(accesskit::Uuid::from_u128(
+                0xA600_0000_0000_0000_0000_0000_0000_0002,
+            )),
+            w1_graft: 1,
+            w2_graft: 2,
+        }
+    }
+
+    fn graft(title: &str, subtree: TreeId) -> Node {
+        let mut window = Node::new(Role::Window);
+        window.set_label(title);
+        window.set_tree_id(subtree);
+        window
+    }
+
+    fn subtree_root(name: &str, children: &[NodeId]) -> Node {
+        let mut content = Node::new(Role::Group);
+        content.set_label(name);
+        content.set_children(children.to_vec());
+        content
+    }
+
+    fn save_button(x0: f64, y0: f64) -> Node {
+        let mut save = Node::new(Role::Button);
+        save.set_label("Save");
+        save.set_bounds(Rect {
+            x0,
+            y0,
+            x1: x0 + 120.0,
+            y1: y0 + 32.0,
+        });
+        save
+    }
+
+    /// The editor window's toolbar — the interior node incremental updates
+    /// restate (children changes ride the changed parent; the subtree root
+    /// is never restated incrementally, see the type-level docs).
+    fn toolbar(children: &[NodeId]) -> Node {
+        let mut toolbar = Node::new(Role::Toolbar);
+        toolbar.set_children(children.to_vec());
+        toolbar
+    }
+
+    /// The three full updates a multi-window adapter emits on attach, in the
+    /// order the consumer requires: the root tree (with the graft nodes)
+    /// first, then one full update per grafted subtree.
+    pub fn initial_updates(&self) -> Vec<TreeUpdate> {
+        let mut app = Node::new(Role::Application);
+        app.set_label("guiwright app");
+        app.set_children([NodeId(self.w1_graft), NodeId(self.w2_graft)]);
+
+        let w1_content = Self::subtree_root("editor content", &[NodeId(4)]);
+        let w1_toolbar = Self::toolbar(&[NodeId(2)]);
+        let w1_save = Self::save_button(16.0, 16.0);
+        let w2_content = Self::subtree_root("preview content", &[NodeId(2), NodeId(3)]);
+        let w2_save = Self::save_button(12.0, 416.0);
+        let mut preview = Node::new(Role::Label);
+        preview.set_label("Preview text");
+        preview.set_bounds(Rect {
+            x0: 12.0,
+            y0: 456.0,
+            x1: 212.0,
+            y1: 480.0,
+        });
+
+        vec![
+            TreeUpdate {
+                nodes: vec![
+                    (NodeId(0), app),
+                    (NodeId(self.w1_graft), Self::graft("Editor", self.w1)),
+                    (NodeId(self.w2_graft), Self::graft("Preview", self.w2)),
+                ],
+                tree: Some(TreeInfo {
+                    root: NodeId(0),
+                    toolkit_name: Some("guiwright-fixture".to_string()),
+                    toolkit_version: None,
+                }),
+                tree_id: TreeId::ROOT,
+                focus: NodeId(0),
+            },
+            TreeUpdate {
+                nodes: vec![
+                    (NodeId(1), w1_content),
+                    (NodeId(4), w1_toolbar),
+                    (NodeId(2), w1_save),
+                ],
+                tree: Some(TreeInfo {
+                    root: NodeId(1),
+                    toolkit_name: Some("guiwright-fixture".to_string()),
+                    toolkit_version: None,
+                }),
+                tree_id: self.w1,
+                focus: NodeId(1),
+            },
+            TreeUpdate {
+                nodes: vec![
+                    (NodeId(1), w2_content),
+                    (NodeId(2), w2_save),
+                    (NodeId(3), preview),
+                ],
+                tree: Some(TreeInfo {
+                    root: NodeId(1),
+                    toolkit_name: Some("guiwright-fixture".to_string()),
+                    toolkit_version: None,
+                }),
+                tree_id: self.w2,
+                focus: NodeId(1),
+            },
+        ]
+    }
+
+    /// Incremental update: add a button to the Editor window's toolbar —
+    /// the subtree root is untouched (graft link preserved).
+    pub fn w1_add_button_update(&self, name: &str) -> TreeUpdate {
+        let mut btn = Node::new(Role::Button);
+        btn.set_label(name);
+        btn.set_bounds(Rect {
+            x0: 16.0,
+            y0: 56.0,
+            x1: 136.0,
+            y1: 88.0,
+        });
+        let toolbar = Self::toolbar(&[NodeId(2), NodeId(5)]);
+        TreeUpdate {
+            nodes: vec![(NodeId(5), btn), (NodeId(4), toolbar)],
+            tree: None,
+            tree_id: self.w1,
+            focus: NodeId(1),
+        }
+    }
+
+    /// Incremental update: the app closes the Preview window — the graft
+    /// node leaves the root tree (the consumer tears the subtree down with
+    /// it). The Editor window is restated unchanged.
+    pub fn close_w2_update(&self) -> TreeUpdate {
+        let mut app = Node::new(Role::Application);
+        app.set_label("guiwright app");
+        app.set_children([NodeId(self.w1_graft)]);
+        TreeUpdate {
+            nodes: vec![(NodeId(0), app)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        }
+    }
+
+    /// The W1 "Save" button's identity (its window's TreeId is what makes it
+    /// distinct from W2's).
+    pub fn w1_save_key(&self) -> NodeKey {
+        NodeKey::AccessKit {
+            tree: self.w1,
+            node: NodeId(2),
+        }
+    }
+
+    /// The W2 "Save" button's identity.
+    pub fn w2_save_key(&self) -> NodeKey {
+        NodeKey::AccessKit {
+            tree: self.w2,
+            node: NodeId(2),
         }
     }
 }
