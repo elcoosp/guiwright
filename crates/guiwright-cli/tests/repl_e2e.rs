@@ -9,7 +9,7 @@
 //! the §10 domain end-to-end.
 
 use guiwright_cli::{ConnectTarget, Line, Repl};
-use guiwright_core::test_util::Fixture;
+use guiwright_core::test_util::{Fixture, MultiWindowFixture};
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
 use guiwright_driver::spawn_session_server;
@@ -381,6 +381,85 @@ async fn help_and_timeout() {
         vec!["timeout = 250 ms"]
     );
     assert_eq!(repl.timeout_ms(), 250);
+
+    handle.shutdown();
+}
+
+/// M6 (§16 v0.4 multi-window): `window list` / `window use` aim the REPL's
+/// connection at one window target — the same commands the runner's spec
+/// steps use (the runner drives `Repl::step`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_window_domain() {
+    let fx = MultiWindowFixture::new();
+    let scripted = fx.clone();
+    let path = socket_path("repl-window.sock");
+    let handle = spawn_session_server(path.clone(), move || {
+        MockAdapter::with_multi_window(&scripted)
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // List: both targets with titles, none marked active yet.
+    let out = rendered(&repl.step("window list").await);
+    assert_eq!(out.len(), 3, "{out:?}");
+    assert!(out[0].starts_with("window targets"), "{out:?}");
+    let w1_handle = fx.w1.0.to_string();
+    let w2_handle = fx.w2.0.to_string();
+    let w1_line = out
+        .iter()
+        .find(|l| l.contains(&w1_handle))
+        .expect("w1 line");
+    assert!(w1_line.contains("Editor"), "{w1_line}");
+    let w2_line = out
+        .iter()
+        .find(|l| l.contains(&w2_handle))
+        .expect("w2 line");
+    assert!(w2_line.contains("Preview"), "{w2_line}");
+    assert!(
+        !out.iter().any(|l| l.starts_with("*")),
+        "no active target yet: {out:?}"
+    );
+
+    // Use: the connection is aimed at the editor window.
+    let out = rendered(&repl.step(&format!("window use {w1_handle}")).await);
+    assert_eq!(out, vec![format!("now targeting {w1_handle} (Editor)")]);
+
+    // The list marks the active target.
+    let out = rendered(&repl.step("window list").await);
+    let active = out
+        .iter()
+        .find(|l| l.starts_with('*'))
+        .expect("active mark");
+    assert!(active.contains(&w1_handle), "{out:?}");
+
+    // Locator commands now see ONLY the editor window: "Save" is unique
+    // there (strict mode would fire on the unscoped two-window surface).
+    // The two windows' Save buttons live at different rects — the resolved
+    // rect identifies which window's node was found.
+    let out = rendered(&repl.step("get role button Save").await);
+    assert!(out[0].starts_with("resolved"), "{out:?}");
+    assert!(out[0].contains("rect=[16,16"), "{out:?}");
+
+    // Unknown handles fail clean and change nothing.
+    let out = rendered(&repl.step("window use no-such-window").await);
+    assert_eq!(out.len(), 1);
+    assert!(out[0].starts_with("error:"), "{out:?}");
+    assert!(out[0].contains("no window"), "{out:?}");
+
+    // The active target is unchanged — re-aim at the preview window.
+    let out = rendered(&repl.step(&format!("window use {w2_handle}")).await);
+    assert_eq!(out, vec![format!("now targeting {w2_handle} (Preview)")]);
+    let out = rendered(&repl.step("get role button Save").await);
+    assert!(out[0].contains("rect=[12,416"), "{out:?}");
+
+    // Usage errors.
+    let out = rendered(&repl.step("window").await);
+    assert!(out[0].starts_with("error:"), "{out:?}");
+    let out = rendered(&repl.step("window frobnicate").await);
+    assert!(out[0].starts_with("error:"), "{out:?}");
 
     handle.shutdown();
 }
