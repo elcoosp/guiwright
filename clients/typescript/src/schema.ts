@@ -5,7 +5,8 @@
  * `test/schema.test.ts` against the copy vendored here).
  *
  * Wire discipline: variants are append-only within the `V1` envelope —
- * `Video` follows `Bye` (M3); a mid-enum reorder fails the Rust
+ * `Video` follows `Bye` (M3), the `Window` domain follows `Video`
+ * (M6, §16 v0.4 multi-window); a mid-enum reorder fails the Rust
  * discriminant pinning test and the schema golden at the same time.
  */
 
@@ -32,6 +33,7 @@ export const RequestV1 = {
   Inspect: 8,
   Bye: 9,
   Video: 10,
+  Window: 11,
 } as const;
 
 export const ClockV1 = {
@@ -61,6 +63,11 @@ export const VideoV1 = {
   Stop: 1,
 } as const;
 
+export const WindowV1 = {
+  List: 0,
+  Use: 1,
+} as const;
+
 // --- Response variants -------------------------------------------------------
 
 export const ResponseV1 = {
@@ -76,6 +83,8 @@ export const ResponseV1 = {
   Error: 9,
   Bye: 10,
   VideoFile: 11,
+  Windows: 12,
+  WindowUsed: 13,
 } as const;
 
 export const ErrorCode = {
@@ -87,6 +96,7 @@ export const ErrorCode = {
   Timeout: 5,
   Unsupported: 6,
   Internal: 7,
+  UnknownWindow: 8,
 } as const;
 
 // --- Nested payload enums ----------------------------------------------------
@@ -204,6 +214,13 @@ export interface MockDone {
   detail: string;
 }
 
+/** One window target (§16 v0.4): handle = subtree TreeId, or "main". */
+export interface WindowInfoV1 {
+  handle: string;
+  title: string;
+  focused: boolean;
+}
+
 // --- Request/response union types --------------------------------------------
 
 export type GwpRequest =
@@ -224,7 +241,8 @@ export type GwpRequest =
   | { kind: "mock"; cmd: MockCmd }
   | { kind: "inspect"; cmd: InspectCmd }
   | { kind: "bye" }
-  | { kind: "video"; cmd: VideoCmd };
+  | { kind: "video"; cmd: VideoCmd }
+  | { kind: "window"; cmd: WindowCmd };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -276,6 +294,9 @@ export type VideoCmd =
   | { kind: "start"; opts: VideoOptsV1 }
   | { kind: "stop" };
 
+/** §16 v0.4 multi-window: `Use` aims THIS connection at a window target. */
+export type WindowCmd = { kind: "list" } | { kind: "use"; handle: string };
+
 export type GwpResponse =
   | ({ kind: "welcome" } & Welcome)
   | { kind: "pong" }
@@ -288,4 +309,6 @@ export type GwpResponse =
   | { kind: "codegen"; code: string; warnings: string[] }
   | { kind: "error"; code: number; message: string }
   | { kind: "bye" }
-  | ({ kind: "video_file" } & VideoFile);
+  | ({ kind: "video_file" } & VideoFile)
+  | { kind: "windows"; windows: WindowInfoV1[] }
+  | { kind: "window_used"; handle: string };

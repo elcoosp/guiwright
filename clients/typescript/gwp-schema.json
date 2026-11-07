@@ -120,6 +120,21 @@
           "payload": "—"
         }
       ]
+    },
+    "window": {
+      "name": "WindowV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "List",
+          "payload": "— → Windows"
+        },
+        {
+          "index": 1,
+          "name": "Use",
+          "payload": "{ handle: string (WindowInfoV1.handle) } → WindowUsed | Error { UnknownWindow }; aims the CALLING connection at the target — subsequent Resolves only see that window's subtree (per-connection state, §16 v0.4)"
+        }
+      ]
     }
   },
   "error_codes": [
@@ -130,7 +145,8 @@
     "StrictModeViolation",
     "Timeout",
     "Unsupported",
-    "Internal"
+    "Internal",
+    "UnknownWindow"
   ],
   "events": [
     {
@@ -215,6 +231,11 @@
       "index": 10,
       "name": "Video",
       "payload": "VideoV1 (see domains.video)"
+    },
+    {
+      "index": 11,
+      "name": "Window",
+      "payload": "WindowV1 (see domains.window)"
     }
   ],
   "responses": [
@@ -277,6 +298,16 @@
       "index": 11,
       "name": "VideoFile",
       "payload": "{ path: string, frames: u64 varint, dropped: u64 varint, duration_ms: u64 varint }"
+    },
+    {
+      "index": 12,
+      "name": "Windows",
+      "payload": "{ windows: seq<WindowInfoV1> }"
+    },
+    {
+      "index": 13,
+      "name": "WindowUsed",
+      "payload": "{ handle: string }"
     }
   ],
   "schema": "gwp-schema/v1",
@@ -293,5 +324,9 @@
       "server": "GwpServerHandle::spawn_tcp (host:port)"
     }
   ],
-  "video_default_fps": 25
+  "video_default_fps": 25,
+  "window_info": {
+    "fields": "{ handle: string (stable target id: the AccessKit subtree TreeId for multi-window adapters, 'main' for single-window), title: string, focused: bool }",
+    "name": "WindowInfoV1"
+  }
 }
