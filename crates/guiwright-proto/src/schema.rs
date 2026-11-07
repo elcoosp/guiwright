@@ -78,6 +78,11 @@ pub enum RequestV1 {
     /// so every pre-M3 client keeps its byte-exact encodings; the
     /// pinning tests below fail the build on any reordering.
     Video(VideoV1),
+    /// Window domain (§7 + §16 v0.4 multi-window, M6): enumerate the
+    /// session's window targets and aim the calling connection at one of
+    /// them — Playwright's "targets per window". Wire discipline: appended
+    /// after `Video` (discriminant 11); see [`RequestV1::Video`].
+    Window(WindowV1),
 }
 
 /// `Clock { InstallVirtual | FastForward(ms) | RunFor(ms) | Pause | Resume |
@@ -170,6 +175,34 @@ impl Default for VideoOptsV1 {
 /// Driver default frame-rate cap (§10: Playwright records ≈25 fps).
 pub const VIDEO_DEFAULT_FPS: u32 = 25;
 
+/// `Window { List | Use { handle } }` (§7 + §16 v0.4, M6). A multi-window
+/// app exposes one target per window; `Use` aims the **calling connection**
+/// at one target — subsequent `Resolve` requests (and the auto-wait they
+/// drive) only see that window's subtree. Other connections keep their own
+/// target: per-connection state lives on the server bridge, not in the
+/// shared session (§11 "one driver session serves all connections").
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WindowV1 {
+    /// List the session's window targets → `Windows`.
+    List,
+    /// Aim this connection at a window target → `WindowUsed`, or
+    /// `Error { UnknownWindow }` when the handle is unknown (never existed
+    /// or closed). The node identities of `Action` are already
+    /// window-unique (NodeKey carries the TreeId), so scoping concerns
+    /// resolution only.
+    Use { handle: String },
+}
+
+/// One window target as reported by `Windows` (§16 v0.4, M6). `handle` is
+/// the stable target id — the AccessKit subtree `TreeId` for grafted
+/// (multi-window) adapters, `"main"` for single-window adapters.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WindowInfoV1 {
+    pub handle: String,
+    pub title: String,
+    pub focused: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ResponseV1 {
     /// Handshake reply (§7 `Welcome`).
@@ -236,6 +269,17 @@ pub enum ResponseV1 {
         dropped: u64,
         duration_ms: u64,
     },
+    /// Window domain reply (§16 v0.4, M6): the session's window targets.
+    /// Append-only wire discipline — see [`RequestV1::Video`].
+    Windows {
+        windows: Vec<WindowInfoV1>,
+    },
+    /// Window domain reply: this connection is now aimed at the window
+    /// target (§16 v0.4). The server bridge records the active handle and
+    /// stamps subsequent requests with it.
+    WindowUsed {
+        handle: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -255,6 +299,9 @@ pub enum ErrorCode {
     Timeout,
     Unsupported,
     Internal,
+    /// M6 (§16 v0.4): `Window::Use` named a handle the session does not
+    /// know (never existed or closed). Append-only — see the pinning test.
+    UnknownWindow,
 }
 
 /// Adapter self-description reported in `Welcome` (§6.1 `AdapterMeta`).
@@ -691,11 +738,45 @@ mod tests {
         assert_eq!(resp, back);
     }
 
+    /// §7 `Window` domain round-trip (M6, §16 v0.4 multi-window).
+    #[test]
+    fn window_domain_roundtrip() {
+        let requests = [
+            GwpRequest::V1(RequestV1::Window(WindowV1::List)),
+            GwpRequest::V1(RequestV1::Window(WindowV1::Use {
+                handle: "a6000000-0000-0000-0000-000000000001".into(),
+            })),
+        ];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [
+            GwpResponse::V1(ResponseV1::Windows {
+                windows: vec![WindowInfoV1 {
+                    handle: "a6000000-0000-0000-0000-000000000001".into(),
+                    title: "Editor".into(),
+                    focused: true,
+                }],
+            }),
+            GwpResponse::V1(ResponseV1::WindowUsed {
+                handle: "a6000000-0000-0000-0000-000000000001".into(),
+            }),
+        ];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
     /// postcard encodes enum variants as a varint of the variant index, so
     /// **variant order is the wire format**. §7 "old clients get clean
     /// errors" → within a `V1` envelope variants are append-only: pre-M3
-    /// requests keep discriminants 0–9 (`Bye` = 9) and `Video` appends at
-    /// 10; responses keep 0–10 (`Bye` = 10) and `VideoFile` appends at 11.
+    /// requests keep discriminants 0–9 (`Bye` = 9), `Video` appends at
+    /// 10 and the M6 `Window` domain at 11; responses keep 0–10 (`Bye` =
+    /// 10), `VideoFile` appends at 11 and the M6 window replies at 12–13.
     /// Reordering or inserting mid-enum fails this test — add new variants
     /// at the end and extend the pin list instead.
     #[test]
@@ -749,6 +830,7 @@ mod tests {
         );
         assert_eq!(discriminant(&RequestV1::Bye), 9);
         assert_eq!(discriminant(&RequestV1::Video(VideoV1::Stop)), 10);
+        assert_eq!(discriminant(&RequestV1::Window(WindowV1::List)), 11);
 
         // Responses.
         assert_eq!(
@@ -832,6 +914,18 @@ mod tests {
             }),
             11
         );
+        assert_eq!(
+            discriminant(&ResponseV1::Windows {
+                windows: Vec::new()
+            }),
+            12
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::WindowUsed {
+                handle: String::new()
+            }),
+            13
+        );
 
         // Nested domain enums are pinned too — other-language clients
         // hard-code these tables (clients/typescript).
@@ -855,5 +949,16 @@ mod tests {
         );
         assert_eq!(discriminant(&InspectV1::StartRecording), 0);
         assert_eq!(discriminant(&InspectV1::StopRecording), 1);
+        assert_eq!(discriminant(&WindowV1::List), 0);
+        assert_eq!(
+            discriminant(&WindowV1::Use {
+                handle: String::new()
+            }),
+            1
+        );
+        // ErrorCode is flat on the wire (u8 in Error payloads) — appending
+        // UnknownWindow keeps the pre-M6 codes byte-identical.
+        assert_eq!(discriminant(&ErrorCode::Internal), 7);
+        assert_eq!(discriminant(&ErrorCode::UnknownWindow), 8);
     }
 }
