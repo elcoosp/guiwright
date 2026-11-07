@@ -137,6 +137,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a38750a2a9617d9f1a1428b408fb909f7256a2766c59b0b07993170959731bb"
 
 [[package]]
+name = "arrayref"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -717,9 +723,9 @@ dependencies = [
 
 [[package]]
 name = "core-foundation"
-version = "0.10.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+checksum = "b55271e5c8c478ad3f38ad24ef34923091e0548492a266d19b3c0b4d82574c63"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -1737,6 +1743,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "guiwright-adapter-floem"
+version = "0.1.0"
+dependencies = [
+ "accesskit 0.25.2",
+ "guiwright-core",
+ "guiwright-driver",
+ "thiserror 2.0.21",
+ "tiny-skia",
+ "twox-hash",
+]
+
+[[package]]
 name = "guiwright-adapter-freya"
 version = "0.1.0"
 dependencies = [
@@ -1745,6 +1763,17 @@ dependencies = [
  "guiwright-core",
  "guiwright-driver",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "guiwright-adapter-gpui"
+version = "0.1.0"
+dependencies = [
+ "accesskit 0.25.2",
+ "guiwright-core",
+ "guiwright-driver",
+ "thiserror 2.0.21",
+ "twox-hash",
 ]
 
 [[package]]
@@ -1824,6 +1853,7 @@ dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
  "guiwright-proto",
+ "guiwright-trace",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -1878,6 +1908,7 @@ dependencies = [
  "lz4_flex",
  "postcard",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -1899,6 +1930,7 @@ dependencies = [
 name = "guiwright-trace"
 version = "0.1.0"
 dependencies = [
+ "guiwright-shot",
  "lz4_flex",
  "postcard",
  "serde",
@@ -3838,6 +3870,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
+name = "strict-num"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
+
+[[package]]
 name = "svg_fmt"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4029,6 +4067,32 @@ name = "tiny-notify"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef61a8c1cd4f6f789e0459bc67a51ea74df0acbe62b2ff78137f26d6d55acb1d"
+
+[[package]]
+name = "tiny-skia"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "bytemuck",
+ "cfg-if",
+ "log",
+ "png 0.18.1",
+ "tiny-skia-path",
+]
+
+[[package]]
+name = "tiny-skia-path"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edca365c3faccca67d06593c5980fa6c57687de727a03131735bb85f01fdeeb9"
+dependencies = [
+ "arrayref",
+ "bytemuck",
+ "strict-num",
+]
 
 [[package]]
 name = "tinystr"
