@@ -73,6 +73,11 @@ jobs:
         adapter:
           - { crate: guiwright-adapter-iced, feature: iced }
           - { crate: guiwright-adapter-freya, feature: freya }
+          # Slint has no compile-verify job: its renderer-skia lock chain
+          # claims `links = "skia"` like freya's, so no workspace can carry
+          # both (recorded in guiwright-adapter-slint's crate docs, §17
+          # row 5). The slint adapter ships framework-free and is verified
+          # by the normal test job.
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
