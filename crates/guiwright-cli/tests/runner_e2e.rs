@@ -9,9 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+use guiwright_cli::ConnectTarget;
 use guiwright_cli::report::{ReportKind, ScenarioStatus};
 use guiwright_cli::runner::{self, RunOutcome, RunnerError, TestOptions};
-use guiwright_cli::ConnectTarget;
 use guiwright_core::test_util::Fixture;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
@@ -90,10 +90,18 @@ async fn runs_discovered_specs_to_green_over_uds() {
     let scenarios = &outcome.report.scenarios;
     assert_eq!(scenarios.len(), 4);
     // Discovery order: sorted files, then in-file scenario order.
-    assert!(scenarios[0].file.ends_with("login.spec.toml"), "{:?}", scenarios[0].file);
+    assert!(
+        scenarios[0].file.ends_with("login.spec.toml"),
+        "{:?}",
+        scenarios[0].file
+    );
     assert_eq!(scenarios[0].name, "save the document");
     assert_eq!(scenarios[1].name, "email value");
-    assert!(scenarios[2].file.ends_with("smoke.spec.toml"), "{:?}", scenarios[2].file);
+    assert!(
+        scenarios[2].file.ends_with("smoke.spec.toml"),
+        "{:?}",
+        scenarios[2].file
+    );
     assert_eq!(scenarios[2].name, "ping");
     assert_eq!(scenarios[3].name, "clock state");
     for record in scenarios {
@@ -242,11 +250,17 @@ async fn workers_run_scenarios_in_parallel() {
         workers: 2,
         ..uds_opts(&path)
     };
-    let RunOutcome { report, failed, .. } =
-        runner::run(specs, &opts, None).await.expect("run completes");
+    let RunOutcome { report, failed, .. } = runner::run(specs, &opts, None)
+        .await
+        .expect("run completes");
     assert!(!failed);
     assert_eq!(report.scenarios.len(), 4);
-    assert!(report.scenarios.iter().all(|r| r.status == ScenarioStatus::Passed));
+    assert!(
+        report
+            .scenarios
+            .iter()
+            .all(|r| r.status == ScenarioStatus::Passed)
+    );
     assert_eq!(report.workers, 2);
 }
 
@@ -277,11 +291,15 @@ steps = ["ping"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_without_any_target_is_a_config_error() {
     let dir = leak_dir("runner-no-target");
-    write_spec(&dir, "x.spec.toml", r#"
+    write_spec(
+        &dir,
+        "x.spec.toml",
+        r#"
 [[scenario]]
 name = "ping"
 steps = ["ping"]
-"#);
+"#,
+    );
     let specs = runner::discover(&[dir]).expect("discovery");
     let err = runner::run(specs, &TestOptions::default(), None)
         .await
@@ -331,7 +349,10 @@ fn discovery_scans_directories_recursively_and_ignores_other_toml() {
     let empty = leak_dir("runner-discovery-empty");
     let err = runner::discover(std::slice::from_ref(&empty)).expect_err("empty discovery");
     assert!(err.to_string().contains("no *.spec.toml"), "{err}");
-    assert!(err.to_string().contains(empty.to_string_lossy().as_ref()), "{err}");
+    assert!(
+        err.to_string().contains(empty.to_string_lossy().as_ref()),
+        "{err}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -361,15 +382,13 @@ steps = ["expect role button Nope"]
         out: Some(out_dir.clone()),
         ..uds_opts(&path)
     };
-    let outcome = runner::run(specs, &opts, None).await.expect("run completes");
+    let outcome = runner::run(specs, &opts, None)
+        .await
+        .expect("run completes");
     assert!(outcome.failed);
 
-    let written = runner::write_reports(
-        &outcome.report,
-        &opts.reports,
-        &out_dir,
-    )
-    .expect("reports write");
+    let written =
+        runner::write_reports(&outcome.report, &opts.reports, &out_dir).expect("reports write");
     assert_eq!(written.len(), 3);
     let junit = std::fs::read_to_string(out_dir.join("junit.xml")).expect("junit file");
     assert!(junit.contains("tests=\"2\""), "{junit}");
@@ -379,4 +398,89 @@ steps = ["expect role button Nope"]
     assert!(json.contains("\"schema\": \"gwrun/v1\""), "{json}");
     let html = std::fs::read_to_string(out_dir.join("report.html")).expect("html file");
     assert!(html.contains("guiwright run report"), "{html}");
+}
+
+/// M6 (§16 v0.4 multi-window): a spec step re-aims its connection at a
+/// window target — the REPL command language works verbatim in specs (the
+/// M5 promise), so `window use` + scoped locators are declarative too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn window_steps_run_in_specs() {
+    use guiwright_core::test_util::MultiWindowFixture;
+
+    let fx = MultiWindowFixture::new();
+    let scripted = fx.clone();
+    let dir = leak_dir("runner-window");
+    write_spec(
+        &dir,
+        "unscoped.spec.toml",
+        r#"
+[[scenario]]
+name = "unscoped strict violation"
+steps = ["get role button Save"]
+"#,
+    );
+    write_spec(
+        &dir,
+        "editor.spec.toml",
+        &format!(
+            r#"
+[[scenario]]
+name = "editor window targeting"
+steps = [
+    "window use {}",
+    "get role button Save",
+    "expect role label \"Preview text\"",        # only in the preview window
+]
+"#,
+            fx.w1.0
+        ),
+    );
+    write_spec(
+        &dir,
+        "preview.spec.toml",
+        &format!(
+            r#"
+[[scenario]]
+name = "preview window targeting"
+steps = [
+    "window use {}",
+    "get role button Save",
+]
+"#,
+            fx.w2.0
+        ),
+    );
+
+    let server = GwpServerHandle::spawn_with_seams(
+        dir.join("window.sock"),
+        move || MockAdapter::with_multi_window(&scripted),
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("server binds");
+
+    let specs = runner::discover(std::slice::from_ref(&dir)).expect("discovery");
+    assert_eq!(specs.len(), 3);
+
+    let outcome = runner::run(specs, &uds_opts(&dir.join("window.sock")), None)
+        .await
+        .expect("run completes");
+    let status_of = |name: &str| {
+        outcome
+            .report
+            .scenarios
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("scenario {name} missing"))
+            .status
+    };
+    use ScenarioStatus::*;
+    // Unscoped, the two same-named Saves stay a strict-mode violation.
+    assert_eq!(status_of("unscoped strict violation"), Failed);
+    // Scoped to the editor: its Save resolves; the preview-only label
+    // stays invisible (the scope hides other windows from every selector).
+    assert_eq!(status_of("editor window targeting"), Failed);
+    // Scoped to the preview: its Save resolves inside the target.
+    assert_eq!(status_of("preview window targeting"), Passed);
+
+    server.shutdown();
 }
