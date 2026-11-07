@@ -78,11 +78,38 @@ jobs:
           # both (recorded in guiwright-adapter-slint's crate docs, §17
           # row 5). The slint adapter ships framework-free and is verified
           # by the normal test job.
+          # Floem (M3) and GPUI (M3) ship framework-free for the same
+          # family of recorded constraints: floem 0.2.0 predates the
+          # HeadlessHarness, and gpui 0.2.2's Linux platform stack needs
+          # system libraries (xkbcommon, wayland) a default build must
+          # never require (both contracts live in the crate docs +
+          # docs/m3-floem-contributions.md). Their engines are verified by
+          # the normal test job; the glue lands downstream.
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --locked
+
+  clients:
+    # §16 "other-language client" (M3): the TypeScript GWP client —
+    # codec golden vectors (captured from Rust), client-over-TCP tests,
+    # and the cross-language e2e against the real Rust demo server.
+    name: clients (typescript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Codec + client tests (node:test)
+        working-directory: clients/typescript
+        run: npm test
+      - name: Cross-language e2e (TypeScript → Rust demo app over TCP)
+        working-directory: clients/typescript
+        run: npm run e2e
 
   bench-guard:
     name: perf budgets (§15.7)
