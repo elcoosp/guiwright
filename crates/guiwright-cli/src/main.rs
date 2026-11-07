@@ -46,6 +46,46 @@ fn run(argv: &[String]) -> i32 {
             };
             rt.block_on(repl_loop(target))
         }
+        Command::Test {
+            paths,
+            target,
+            workers,
+            retries,
+            timeout_ms,
+            shard,
+            list,
+            quiet,
+            reports,
+            out,
+        } => {
+            // The runner is IO-bound (one GWP connection per attempt);
+            // a current-thread runtime interleaves the workers on the
+            // await points.
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(err) => {
+                    eprintln!("error: tokio runtime: {err}");
+                    return 1;
+                }
+            };
+            rt.block_on(test_loop(
+                guiwright_cli::runner::TestOptions {
+                    target,
+                    workers,
+                    retries,
+                    timeout_ms,
+                    shard,
+                    list,
+                    quiet,
+                    reports,
+                    out,
+                },
+                paths,
+            ))
+        }
         Command::ShowTrace { archive, out, open } => match show_trace(&archive, out, open) {
             Ok(path) => {
                 println!("{}", path.display());
@@ -148,4 +188,75 @@ async fn repl_loop(target: guiwright_cli::ConnectTarget) -> i32 {
     }
     // EOF without `bye`: the session ends with the process.
     0
+}
+
+/// The `guiwright test` front-end (M5): discover → run → print → report.
+/// Exit codes: 0 all passed (flaky included), 1 any failure, 2 config
+/// errors (no specs, bad specs, missing target).
+async fn test_loop(
+    mut opts: guiwright_cli::runner::TestOptions,
+    paths: Vec<std::path::PathBuf>,
+) -> i32 {
+    use guiwright_cli::report::{progress_line, summary_line};
+
+    let mut roots = paths;
+    if roots.is_empty() {
+        roots.push(std::path::PathBuf::from(guiwright_cli::runner::DEFAULT_SPEC_DIR));
+    }
+    let specs = match guiwright_cli::runner::discover(&roots) {
+        Ok(specs) => specs,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return 2;
+        }
+    };
+    let on_finish = if opts.quiet {
+        None
+    } else {
+        Some(std::sync::Arc::new(
+            |record: &guiwright_cli::report::ScenarioRecord| {
+                println!("{}", progress_line(record));
+            },
+        ) as std::sync::Arc<dyn Fn(&guiwright_cli::report::ScenarioRecord) + Send + Sync>)
+    };
+    let outcome = match guiwright_cli::runner::run(specs, &opts, on_finish).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return 2;
+        }
+    };
+    if let Some(listed) = &outcome.listed {
+        for id in listed {
+            println!("{id}");
+        }
+        return 0;
+    }
+    if !opts.quiet {
+        println!("{}", summary_line(&outcome.report));
+    }
+    // File reports (repeatable --report kinds; the default dir keeps the
+    // no-flag invocation useful).
+    if !opts.reports.is_empty() {
+        let out_dir = opts
+            .out
+            .take()
+            .unwrap_or_else(|| std::path::PathBuf::from("guiwright-report"));
+        match guiwright_cli::runner::write_reports(&outcome.report, &opts.reports, &out_dir) {
+            Ok(written) => {
+                for path in written {
+                    println!("report: {}", path.display());
+                }
+            }
+            Err(err) => {
+                eprintln!("error: writing reports: {err}");
+                return 1;
+            }
+        }
+    }
+    if outcome.failed {
+        1
+    } else {
+        0
+    }
 }
