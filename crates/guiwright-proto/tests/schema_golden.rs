@@ -46,19 +46,36 @@ fn published_schema_matches_the_wire_enums() {
     );
     assert_eq!(domains["inspect"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["video"]["variants"].as_array().unwrap().len(), 2);
+    assert_eq!(domains["window"]["variants"].as_array().unwrap().len(), 2);
 
     // Wire indices are exactly the enum positions: spot-check the ends of
     // both request/response tables (the append-only frontier).
     assert_eq!(doc["requests"][9]["name"], "Bye");
     assert_eq!(doc["requests"][10]["name"], "Video");
+    assert_eq!(doc["requests"][11]["name"], "Window");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
+    assert_eq!(doc["responses"][12]["name"], "Windows");
+    assert_eq!(doc["responses"][13]["name"], "WindowUsed");
+
+    // The error-code table is flat on the wire: appending UnknownWindow
+    // keeps the pre-M6 codes byte-identical.
+    assert_eq!(
+        doc["error_codes"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        "UnknownWindow"
+    );
 }
 
 /// Exhaustive matches: adding a variant anywhere below fails compilation
 /// here and forces the schemadoc tables + golden to move with the wire.
 fn request_variants() -> usize {
-    11 + match RequestV1::Ping {
+    12 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -69,7 +86,8 @@ fn request_variants() -> usize {
         | RequestV1::Mock(_)
         | RequestV1::Inspect(_)
         | RequestV1::Bye
-        | RequestV1::Video(_) => 0,
+        | RequestV1::Video(_)
+        | RequestV1::Window(_) => 0,
     }
 }
 
@@ -86,7 +104,9 @@ fn response_variants() -> usize {
         | ResponseV1::Codegen { .. }
         | ResponseV1::Error { .. }
         | ResponseV1::Bye
-        | ResponseV1::VideoFile { .. } => 12usize,
+        | ResponseV1::VideoFile { .. }
+        | ResponseV1::Windows { .. }
+        | ResponseV1::WindowUsed { .. } => 14usize,
     };
     probe(ResponseV1::Pong)
 }
