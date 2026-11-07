@@ -1,0 +1,15 @@
+[package]
+name = "guiwright-inspect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Guiwright inspector (architecture §5.2/§13): interaction → code recorder with the minimal-stable-selector cost model, overlay plans for adapter composition"
+
+[dependencies]
+guiwright-core.workspace = true
+accesskit.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
