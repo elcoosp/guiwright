@@ -1,0 +1,16 @@
+[package]
+name = "guiwright-adapter-slint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Guiwright Slint adapter engine (architecture §4.4): testing-backend introspection model, (component,item) id bridge, element-kind role registry, mock_elapsed_time clock plan and the testing build helper"
+
+[dependencies]
+guiwright-core.workspace = true
+guiwright-driver.workspace = true
+accesskit.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
