@@ -29,7 +29,8 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 }
 
 /// The request table, in wire order (§7). Append-only: `Video` follows
-/// `Bye` (M3); the pinning tests enforce the order.
+/// `Bye` (M3) and `Window` follows `Video` (M6, §16 v0.4 multi-window);
+/// the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -50,10 +51,11 @@ const REQUESTS: &[Variant] = &[
     v(8, "Inspect", "InspectV1 (see domains.inspect)"),
     v(9, "Bye", "—"),
     v(10, "Video", "VideoV1 (see domains.video)"),
+    v(11, "Window", "WindowV1 (see domains.window)"),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
-/// `Bye` (M3).
+/// `Bye` (M3); the M6 window replies append at 12–13.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -87,6 +89,8 @@ const RESPONSES: &[Variant] = &[
         "VideoFile",
         "{ path: string, frames: u64 varint, dropped: u64 varint, duration_ms: u64 varint }",
     ),
+    v(12, "Windows", "{ windows: seq<WindowInfoV1> }"),
+    v(13, "WindowUsed", "{ handle: string }"),
 ];
 
 /// Server-push events (multiplexed by `seq` per topic, §7).
@@ -183,7 +187,7 @@ pub fn gwp_schema_json() -> serde_json::Value {
         "requests": variants(REQUESTS),
         "responses": variants(RESPONSES),
         "events": variants(EVENTS),
-        "error_codes": ["UnsupportedVersion", "NotHandshaked", "UnknownNode", "StaleGeneration", "StrictModeViolation", "Timeout", "Unsupported", "Internal"],
+        "error_codes": ["UnsupportedVersion", "NotHandshaked", "UnknownNode", "StaleGeneration", "StrictModeViolation", "Timeout", "Unsupported", "Internal", "UnknownWindow"],
         "domains": {
             "clock": domain_table("ClockV1", &[
                 (0, "InstallVirtual", "—"),
@@ -208,6 +212,14 @@ pub fn gwp_schema_json() -> serde_json::Value {
                 (0, "Start", "{ opts: VideoOptsV1 { fps: u32 varint (0 = driver default), dir: option<string> (client-owned artifact dir) } }"),
                 (1, "Stop", "—"),
             ]),
+            "window": domain_table("WindowV1", &[
+                (0, "List", "— → Windows"),
+                (1, "Use", "{ handle: string (WindowInfoV1.handle) } → WindowUsed | Error { UnknownWindow }; aims the CALLING connection at the target — subsequent Resolves only see that window's subtree (per-connection state, §16 v0.4)"),
+            ]),
+        },
+        "window_info": {
+            "name": "WindowInfoV1",
+            "fields": "{ handle: string (stable target id: the AccessKit subtree TreeId for multi-window adapters, 'main' for single-window), title: string, focused: bool }",
         },
         "video_default_fps": VIDEO_DEFAULT_FPS,
     })
