@@ -1,6 +1,6 @@
 [package]
 name = "guiwright-cli"
-description = "The guiwright binary: repl, show-trace, bless and install-deps (architecture §5.2, §11, §12, §13, §16)"
+description = "The guiwright binary: repl, test, show-trace, bless and install-deps (architecture §5.2, §11, §12, §13, §16)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,10 +19,13 @@ path = "src/lib.rs"
 [dependencies]
 guiwright-proto.workspace = true
 guiwright-viewer.workspace = true
+serde.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "rt", "macros"] }
 
 [dev-dependencies]
+serde_json.workspace = true
 guiwright-core.workspace = true
 guiwright-driver.workspace = true
 guiwright-trace.workspace = true
