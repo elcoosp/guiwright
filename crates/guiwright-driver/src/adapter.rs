@@ -222,6 +222,10 @@ pub enum ClockCmd {
     RunFor(std::time::Duration),
     Pause,
     Resume,
+    /// Absolute virtual time (§7 `SetTime(t)`).
+    SetTime(std::time::Duration),
+    /// Read the current state without mutating anything.
+    Probe,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,5 +289,16 @@ pub trait FrameworkAdapter: 'static {
     fn clock(&mut self, cmd: ClockCmd) -> Result<ClockState, AdapterError> {
         let _ = cmd;
         Err(AdapterError::Unsupported("clock"))
+    }
+
+    /// State seams (§14 mock domain): execute `task` **inside the
+    /// adapter's runner context** — the app state owned by the UI thread.
+    /// The task receives `&mut dyn Any`; adapters document which concrete
+    /// type they hand over (the mock hands over what
+    /// [`crate::mock::MockAdapter::with_state`] received). Default = the
+    /// adapter has no seam surface (capability-matrix row says no, §6.2).
+    fn run_in(&mut self, task: crate::seams::SeamTask) -> Result<String, AdapterError> {
+        let _ = task;
+        Err(AdapterError::Unsupported("run_in (state seams, §14)"))
     }
 }
