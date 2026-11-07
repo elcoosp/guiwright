@@ -7,6 +7,7 @@
 //! full actionability checking (§8.3). Checks run **exactly when the world
 //! changes** — between frames the session does no CPU work.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use accesskit::NodeId;
@@ -17,6 +18,8 @@ use guiwright_core::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
 use guiwright_core::{CoreError, NodeKey, Selector};
 
 use crate::adapter::{ActionOutcome, FrameDeadline, FrameworkAdapter, InputEvent, SemAction};
+use crate::clock::{ClockReport, ClockService, LedgerCommand};
+use crate::seams::SeamRegistry;
 
 /// Options for actions (§8.3 "Timeout & retries" + force mode).
 #[derive(Clone, Debug)]
@@ -73,6 +76,16 @@ pub struct Session<A: FrameworkAdapter> {
     frame_seq: u64,
     /// Last frame seq fed to a waiter — events are fed exactly once.
     fed_frame_seq: u64,
+    /// Virtual clock service (§14): stepping plans + `clock.bin` ledger.
+    clock_service: ClockService,
+    /// App-registered state seams (§14 mock domain); executed via
+    /// `adapter.run_in` inside the runner context.
+    seams: SeamRegistry,
+    /// Mock-domain overrides: seam id → canned response (`None` = run the
+    /// real hook). Registered via GWP `Mock::InstallSeam`.
+    seam_overrides: BTreeMap<String, Option<String>>,
+    /// The seam `reset_state(scope)` runs (§14 fixture parity).
+    reset_seam: String,
 }
 
 impl<A: FrameworkAdapter> Session<A> {
@@ -83,6 +96,10 @@ impl<A: FrameworkAdapter> Session<A> {
             tree_seq: 0,
             frame_seq: 0,
             fed_frame_seq: 0,
+            clock_service: ClockService::new(),
+            seams: SeamRegistry::new(),
+            seam_overrides: BTreeMap::new(),
+            reset_seam: "reset_state".into(),
         }
     }
 
@@ -356,13 +373,175 @@ impl<A: FrameworkAdapter> Session<A> {
         self.perform_action(selector, SemAction::Hover, &ActionOpts::default())
     }
 
-    /// `app.clock().fast_forward(dt)` (§14).
+    /// `app.clock().fast_forward(dt)` (§14) — through the clock service:
+    /// virtual time advances in frame-sized steps until drained, settling
+    /// between steps (timers + animations + subscriptions).
     pub fn clock_fast_forward(&mut self, dt: Duration) -> Result<(), CoreError> {
-        self.adapter
-            .clock(crate::adapter::ClockCmd::FastForward(dt))
+        self.clock(crate::adapter::ClockCmd::FastForward(dt))
+            .map(|_| ())
+    }
+
+    /// The full clock surface (§14): install / fast-forward / run-for /
+    /// pause / resume / set-time / probe, recorded into the ledger so
+    /// traces replay timing (§12 `clock.bin`).
+    pub fn clock(&mut self, cmd: crate::adapter::ClockCmd) -> Result<ClockReport, CoreError> {
+        use crate::adapter::ClockCmd as Cmd;
+        let report = match cmd {
+            Cmd::InstallVirtual => {
+                let state = self
+                    .adapter
+                    .clock(Cmd::InstallVirtual)
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                self.clock_service
+                    .record(LedgerCommand::InstallVirtual, state, self.frame_seq, 0);
+                ClockReport { state, steps: 0 }
+            }
+            Cmd::FastForward(dt) => {
+                // §14: advance in frame-sized steps until drained; each
+                // step pumps a frame so timers/animations settle.
+                let plan = ClockService::plan_steps(dt);
+                let mut state = self
+                    .adapter
+                    .clock(Cmd::Probe)
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                for step in &plan {
+                    state = self
+                        .adapter
+                        .clock(Cmd::FastForward(*step))
+                        .map_err(|e| CoreError::Other(e.to_string()))?;
+                    self.pump();
+                    self.clock_service
+                        .record(LedgerCommand::FastForward, state, self.frame_seq, 1);
+                }
+                ClockReport {
+                    state,
+                    steps: plan.len() as u64,
+                }
+            }
+            Cmd::RunFor(dt) => {
+                if self.clock_service.paused() {
+                    return Err(CoreError::Other(
+                        "clock is paused: run_for cannot pace real time (§14)".into(),
+                    ));
+                }
+                let state = self
+                    .adapter
+                    .clock(Cmd::RunFor(dt))
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                self.pump();
+                self.clock_service
+                    .record(LedgerCommand::RunFor, state, self.frame_seq, 0);
+                ClockReport { state, steps: 0 }
+            }
+            Cmd::Pause => {
+                let state = self
+                    .adapter
+                    .clock(Cmd::Pause)
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                self.clock_service
+                    .record(LedgerCommand::Pause, state, self.frame_seq, 0);
+                ClockReport { state, steps: 0 }
+            }
+            Cmd::Resume => {
+                let state = self
+                    .adapter
+                    .clock(Cmd::Resume)
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                self.clock_service
+                    .record(LedgerCommand::Resume, state, self.frame_seq, 0);
+                ClockReport { state, steps: 0 }
+            }
+            Cmd::SetTime(t) => {
+                let state = self
+                    .adapter
+                    .clock(Cmd::SetTime(t))
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                self.clock_service
+                    .record(LedgerCommand::SetTime, state, self.frame_seq, 0);
+                ClockReport { state, steps: 0 }
+            }
+            Cmd::Probe => {
+                let state = self
+                    .adapter
+                    .clock(Cmd::Probe)
+                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                ClockReport { state, steps: 0 }
+            }
+        };
+        Ok(report)
+    }
+
+    /// The clock service ledger (§12 `clock.bin` payload for the trace).
+    pub fn clock_ledger(&self) -> &[crate::clock::ClockLedgerEntry] {
+        self.clock_service.ledger()
+    }
+
+    // ------------------------------------------------------------------
+    // State seams (§14 mock domain)
+
+    /// Register app-boot seams (the `#[seam]` + `register_seams!` output).
+    pub fn register_seams(&mut self, registry: &SeamRegistry) {
+        self.seams.merge(registry);
+    }
+
+    /// The registered seam ids (diagnostics; sorted).
+    pub fn seam_ids(&self) -> Vec<&str> {
+        self.seams.ids()
+    }
+
+    /// Choose which registered seam `reset_state(scope)` runs (default
+    /// `"reset_state"`).
+    pub fn with_reset_seam(&mut self, id: impl Into<String>) -> &mut Self {
+        self.reset_seam = id.into();
+        self
+    }
+
+    /// Mock-domain override (§7 `Mock::InstallSeam`): preset a canned
+    /// response for a seam. `None` = clear the canned response so the real
+    /// hook runs again.
+    pub fn set_seam_response(&mut self, id: impl Into<String>, response: Option<String>) {
+        self.seam_overrides.insert(id.into(), response);
+    }
+
+    /// Drop the override for a seam (§7 `Mock::Clear`).
+    pub fn clear_seam(&mut self, id: &str) {
+        self.seam_overrides.remove(id);
+    }
+
+    /// Run a registered seam once: the hook executes **inside the
+    /// adapter's runner context** via `run_in` (§14 "state writes need the
+    /// runner's context"), then the session pumps a frame so any UI effect
+    /// settles. Canned overrides win over the real hook.
+    pub fn run_seam(&mut self, id: &str, scope: &str) -> Result<String, CoreError> {
+        if let Some(Some(canned)) = self.seam_overrides.get(id) {
+            return Ok(canned.clone());
+        }
+        let hook = self.seams.get(id).ok_or_else(|| {
+            CoreError::Other(format!(
+                "no seam registered under `{id}` (registered: {:?})",
+                self.seams.ids()
+            ))
+        })?;
+        let task = crate::seams::compile_task(hook, scope.to_string());
+        let detail = self
+            .adapter
+            .run_in(task)
             .map_err(|e| CoreError::Other(e.to_string()))?;
-        self.settle(Instant::now() + Duration::from_secs(5));
-        Ok(())
+        self.pump();
+        Ok(detail)
+    }
+
+    /// Reset app state to a fixture scope (§14 "fixture parity with
+    /// Playwright contexts"). Runs the configured reset seam.
+    pub fn reset_state(&mut self, scope: &str) -> Result<String, CoreError> {
+        let id = self.reset_seam.clone();
+        self.run_seam(&id, scope)
+    }
+
+    /// Register an explicit test id for a node (`getByTestId`, §8.1) —
+    /// the kit exposes it for apps that mint ids outside the adapter.
+    pub fn register_test_id(&mut self, key: NodeKey, id: impl Into<String>) {
+        self.tree.register_test_id(key, id);
     }
 
     pub fn tree_seq(&self) -> u64 {
@@ -666,5 +845,187 @@ mod tests {
             session.adapter().virtual_time(),
             Some(Duration::from_secs(30))
         );
+    }
+
+    // --- M2: clock service (§14) ---------------------------------------
+
+    #[test]
+    fn clock_service_steps_fast_forward_and_ledgers() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let report = session
+            .clock(crate::adapter::ClockCmd::FastForward(Duration::from_secs(
+                1,
+            )))
+            .expect("stepped fast forward");
+        // 1 s at 60 Hz = 60 steps.
+        assert_eq!(report.steps, 60);
+        assert_eq!(report.state.virtual_time, Some(Duration::from_secs(1)));
+        // Every step is a ledger row with cumulative virtual time.
+        let ledger = session.clock_ledger();
+        assert_eq!(ledger.len(), 60);
+        let last = ledger.last().expect("ledger");
+        assert_eq!(last.virtual_time_us, 1_000_000);
+        assert_eq!(last.command, LedgerCommand::FastForward);
+    }
+
+    #[test]
+    fn clock_install_pause_resume_and_run_for_gate() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let report = session
+            .clock(crate::adapter::ClockCmd::InstallVirtual)
+            .expect("install");
+        assert_eq!(report.state.virtual_time, Some(Duration::ZERO));
+
+        let report = session
+            .clock(crate::adapter::ClockCmd::Pause)
+            .expect("pause");
+        assert!(report.state.paused);
+
+        let err = session
+            .clock(crate::adapter::ClockCmd::RunFor(Duration::from_millis(100)))
+            .expect_err("paused clock refuses real-time pacing");
+        assert!(err.to_string().contains("paused"), "{err}");
+
+        // Virtual jumps stay allowed while paused (determinism, §14).
+        session
+            .clock(crate::adapter::ClockCmd::FastForward(
+                Duration::from_millis(50),
+            ))
+            .expect("virtual jump while paused");
+
+        let report = session
+            .clock(crate::adapter::ClockCmd::Resume)
+            .expect("resume");
+        assert!(!report.state.paused);
+        session
+            .clock(crate::adapter::ClockCmd::RunFor(Duration::from_millis(100)))
+            .expect("run_for works after resume");
+    }
+
+    #[test]
+    fn clock_set_time_is_absolute() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let report = session
+            .clock(crate::adapter::ClockCmd::SetTime(Duration::from_millis(
+                120_000,
+            )))
+            .expect("set time");
+        assert_eq!(report.state.virtual_time, Some(Duration::from_secs(120)));
+        let probed = session
+            .clock(crate::adapter::ClockCmd::Probe)
+            .expect("probe");
+        assert_eq!(probed.state, report.state);
+        assert_eq!(probed.steps, 0, "probe applies no steps");
+    }
+
+    // --- M2: state seams (§14 mock domain) ------------------------------
+
+    #[derive(Debug, Default)]
+    struct AppDb {
+        rows: usize,
+        fixture: Option<String>,
+    }
+
+    fn app_seams() -> SeamRegistry {
+        let mut reg = SeamRegistry::new();
+        reg.register("reset_state", |ctx, scope| {
+            let db = ctx
+                .downcast_mut::<AppDb>()
+                .ok_or("wrong runner context type")?;
+            db.rows = 0;
+            db.fixture = Some(scope.to_string());
+            Ok(format!("db reset to {scope}"))
+        });
+        reg.register("seed_users", |ctx, scope| {
+            let db = ctx
+                .downcast_mut::<AppDb>()
+                .ok_or("wrong runner context type")?;
+            db.rows = 3;
+            db.fixture = Some(scope.to_string());
+            Ok("3 users seeded".into())
+        });
+        reg
+    }
+
+    fn seam_session() -> Session<crate::mock::MockAdapter> {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        session.register_seams(&app_seams());
+        session
+    }
+
+    fn seam_session_with_state() -> Session<crate::mock::MockAdapter> {
+        let fixture = Fixture::buttons();
+        let mut adapter = crate::mock::MockAdapter::with_fixture(&fixture);
+        adapter.push_frame(1);
+        adapter.push_frame(1);
+        adapter = adapter.with_state(AppDb {
+            rows: 42,
+            fixture: None,
+        });
+        let mut session = Session::new(adapter);
+        session.settle(Instant::now() + Duration::from_secs(1));
+        session.register_seams(&app_seams());
+        session
+    }
+
+    #[test]
+    fn seam_writes_the_runner_context_via_run_in() {
+        let mut session = seam_session_with_state();
+        let detail = session.reset_state("seed-42").expect("reset seam");
+        assert_eq!(detail, "db reset to seed-42");
+        let db = session
+            .adapter()
+            .state::<AppDb>()
+            .expect("runner context preserved");
+        assert_eq!(db.rows, 0, "the seam reset the app state");
+        assert_eq!(db.fixture.as_deref(), Some("seed-42"));
+    }
+
+    #[test]
+    fn seam_scope_is_passed_through() {
+        let mut session = seam_session_with_state();
+        let detail = session.run_seam("seed_users", "smoke").expect("seed");
+        assert_eq!(detail, "3 users seeded");
+        let db = session.adapter().state::<AppDb>().expect("context");
+        assert_eq!(db.rows, 3);
+        assert_eq!(db.fixture.as_deref(), Some("smoke"));
+    }
+
+    #[test]
+    fn canned_override_wins_over_the_real_hook() {
+        let mut session = seam_session_with_state();
+        session.set_seam_response("reset_state", Some("canned-ok".into()));
+        let detail = session.reset_state("seed-42").expect("override");
+        assert_eq!(detail, "canned-ok");
+        // The real hook never ran — state untouched.
+        let db = session.adapter().state::<AppDb>().expect("context");
+        assert_eq!(db.rows, 42);
+        // Clear restores the real hook.
+        session.clear_seam("reset_state");
+        let detail = session.reset_state("seed-42").expect("real hook");
+        assert_eq!(detail, "db reset to seed-42");
+    }
+
+    #[test]
+    fn unknown_seam_is_a_clean_error() {
+        let mut session = seam_session();
+        let err = session
+            .run_seam("missing", "")
+            .expect_err("unregistered seam");
+        assert!(err.to_string().contains("no seam registered"), "{err}");
+        assert!(err.to_string().contains("reset_state"), "names what exists");
+    }
+
+    #[test]
+    fn reset_seam_is_configurable() {
+        let mut session = seam_session_with_state();
+        session.with_reset_seam("seed_users");
+        let detail = session.reset_state("baseline").expect("seeds");
+        assert_eq!(detail, "3 users seeded");
+        assert_eq!(session.seam_ids(), vec!["reset_state", "seed_users"]);
     }
 }
