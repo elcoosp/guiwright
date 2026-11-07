@@ -19,6 +19,7 @@ import { encodeFrame, FrameReader, MAX_FRAME_BYTES } from "../src/framing.ts";
 import {
   ClockV1,
   ErrorCode,
+  GestureV1,
   GwpRequest,
   GwpResponse,
   InputEventV1,
@@ -45,8 +46,8 @@ const hexToBytes = (hex: string): Uint8Array => {
 
 test("golden manifest is the expected shape", () => {
   assert.equal(golden.schema, "gwp-golden/v1");
-  assert.ok(golden.requests.length >= 18, "every request variant is pinned");
-  assert.ok(golden.responses.length >= 14, "every response variant is pinned");
+  assert.ok(golden.requests.length >= 21, "every request variant is pinned");
+  assert.ok(golden.responses.length >= 15, "every response variant is pinned");
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -114,6 +115,31 @@ test("requests encode byte-identical to the Rust wire", () => {
     window_use: () => ({
       kind: "window",
       cmd: { kind: "use", handle: "a6000000-0000-0000-0000-000000000001" },
+    }),
+    gesture_click: () => ({
+      kind: "gesture",
+      cmd: {
+        kind: "click",
+        x: 12.5,
+        y: 30.0,
+        button: PointerButtonV1.Primary,
+        count: 2,
+      },
+    }),
+    gesture_drag: () => ({
+      kind: "gesture",
+      cmd: {
+        kind: "drag",
+        from_x: 10.0,
+        from_y: 10.0,
+        to_x: 110.0,
+        to_y: 60.0,
+        button: PointerButtonV1.Primary,
+      },
+    }),
+    gesture_key: () => ({
+      kind: "gesture",
+      cmd: { kind: "key", key: "Enter", modifiers: ["Shift"] },
     }),
     bye: () => ({ kind: "bye" }),
   };
@@ -185,14 +211,19 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-3), ["Bye", "Video", "Window"]);
+  assert.deepEqual(byName(requests).slice(-4), ["Bye", "Video", "Window", "Gesture"]);
   assert.deepEqual(
     Object.values(RequestV1),
     requests.map((v: any) => Number(v.index)),
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-3), ["VideoFile", "Windows", "WindowUsed"]);
+  assert.deepEqual(byName(responses).slice(-4), [
+    "VideoFile",
+    "Windows",
+    "WindowUsed",
+    "GestureDone",
+  ]);
   assert.deepEqual(
     Object.values(ResponseV1),
     responses.map((v: any) => Number(v.index)),
@@ -208,6 +239,10 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   assert.deepEqual(
     Object.values(WindowV1),
     domains.window.variants.map((v: any) => Number(v.index)),
+  );
+  assert.deepEqual(
+    Object.values(GestureV1),
+    domains.gesture.variants.map((v: any) => Number(v.index)),
   );
   assert.equal(schema.protocol_version, PROTO_VERSION);
 });
