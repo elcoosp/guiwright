@@ -18,7 +18,6 @@ use crate::adapter::{
 use guiwright_core::test_util::Fixture;
 
 /// A scriptable in-process adapter.
-#[derive(Debug)]
 pub struct MockAdapter {
     meta: AdapterMeta,
     updates: VecDeque<accesskit::TreeUpdate>,
@@ -35,6 +34,24 @@ pub struct MockAdapter {
     /// Number of pumps before the adapter reports no repaint requested
     /// (quiescence model). Zero = settled immediately.
     repaints_left: u32,
+    /// The runner context handed to seam tasks by `run_in` (§14 state
+    /// seams) — the app state the "UI thread" owns.
+    state: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl std::fmt::Debug for MockAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockAdapter")
+            .field("meta", &self.meta)
+            .field("pending_updates", &self.updates.len())
+            .field("pending_logical", &self.logical.len())
+            .field("pending_frames", &self.frames.len())
+            .field("seq", &self.seq)
+            .field("actions", &self.actions.len())
+            .field("clock", &self.clock)
+            .field("has_state", &self.state.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl MockAdapter {
@@ -73,7 +90,26 @@ impl MockAdapter {
                 paused: false,
             },
             repaints_left: 0,
+            state: None,
         }
+    }
+
+    /// Attach the runner context for state seams (§14): the `&mut dyn Any`
+    /// handed to `run_in` tasks. Must be `Send` because the mock may host
+    /// remote sessions (the server spawns a session thread).
+    pub fn with_state(mut self, state: impl std::any::Any + Send) -> Self {
+        self.state = Some(Box::new(state));
+        self
+    }
+
+    /// Read back the runner context (test-side assertions).
+    pub fn state<T: 'static>(&self) -> Option<&T> {
+        self.state.as_ref().and_then(|s| s.downcast_ref::<T>())
+    }
+
+    /// Mutate the runner context (test-side scripting).
+    pub fn state_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        self.state.as_mut().and_then(|s| s.downcast_mut::<T>())
     }
 
     /// Queue a tree diff to be delivered on the next pump.
@@ -193,10 +229,21 @@ impl FrameworkAdapter for MockAdapter {
                         .saturating_add(dt),
                 );
             }
+            ClockCmd::SetTime(t) => self.clock.virtual_time = Some(t),
             ClockCmd::Pause => self.clock.paused = true,
             ClockCmd::Resume => self.clock.paused = false,
+            ClockCmd::Probe => {}
         }
         Ok(self.clock)
+    }
+
+    fn run_in(&mut self, task: crate::seams::SeamTask) -> Result<String, AdapterError> {
+        let mut state = self.state.take().ok_or_else(|| {
+            AdapterError::Internal("no runner context attached (with_state missing)".into())
+        })?;
+        let result = task(state.as_mut_any());
+        self.state = Some(state);
+        result.map_err(AdapterError::Internal)
     }
 
     fn last_frame(&mut self) -> Option<crate::adapter::FrameRef> {
@@ -239,6 +286,16 @@ fn default_detail(action: &SemAction) -> String {
     match action {
         SemAction::Click => "clicked".to_string(),
         other => other.describe(),
+    }
+}
+
+/// `Box<dyn Any + Send>` → `&mut dyn Any` (the `run_in` context shape).
+trait AsMutAny {
+    fn as_mut_any(&mut self) -> &mut dyn std::any::Any;
+}
+impl AsMutAny for Box<dyn std::any::Any + Send> {
+    fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
+        &mut **self
     }
 }
 
@@ -292,5 +349,54 @@ mod tests {
             .unwrap();
         assert_eq!(state.virtual_time, Some(Duration::from_secs(30)));
         assert!(!state.paused);
+    }
+
+    #[test]
+    fn set_time_and_probe_are_lossless() {
+        let mut adapter = MockAdapter::bare();
+        let state = adapter
+            .clock(ClockCmd::SetTime(Duration::from_millis(1_500)))
+            .unwrap();
+        assert_eq!(state.virtual_time, Some(Duration::from_millis(1_500)));
+        let probed = adapter.clock(ClockCmd::Probe).unwrap();
+        assert_eq!(probed, state, "probe mutates nothing");
+        adapter.clock(ClockCmd::Pause).unwrap();
+        assert!(adapter.clock(ClockCmd::Probe).unwrap().paused);
+    }
+
+    /// §14 state seams: the seam writes app state through the runner
+    /// context (`run_in`), never through the session.
+    #[test]
+    fn run_in_writes_the_runner_context() {
+        #[derive(Debug, Default)]
+        struct AppDb {
+            rows: usize,
+            fixture: Option<String>,
+        }
+        let mut adapter = MockAdapter::bare().with_state(AppDb {
+            rows: 12,
+            fixture: None,
+        });
+        let task: crate::seams::SeamTask = Box::new(|ctx: &mut dyn std::any::Any| {
+            let db = ctx
+                .downcast_mut::<AppDb>()
+                .ok_or("wrong runner context type")?;
+            db.rows = 0;
+            db.fixture = Some("seed-42".into());
+            Ok("db reset to seed-42".into())
+        });
+        let detail = adapter.run_in(task).expect("seam executed");
+        assert_eq!(detail, "db reset to seed-42");
+        let db = adapter.state::<AppDb>().expect("context preserved");
+        assert_eq!(db.rows, 0);
+        assert_eq!(db.fixture.as_deref(), Some("seed-42"));
+    }
+
+    #[test]
+    fn run_in_without_context_is_loud() {
+        let mut adapter = MockAdapter::bare();
+        let task: crate::seams::SeamTask = Box::new(|_ctx: &mut dyn std::any::Any| Ok("x".into()));
+        let err = adapter.run_in(task).unwrap_err();
+        assert!(err.to_string().contains("with_state"), "{err}");
     }
 }
