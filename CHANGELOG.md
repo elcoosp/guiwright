@@ -8,6 +8,17 @@ Commits](https://www.conventionalcommits.org).
 
 ## Unreleased
 
+### Documentation
+- Add the M6 multi-window doc (docs/m6-multi-window.md): the §16 v0.4 row's scope, the grafted-subtree window model (handles = subtree TreeIds), the per-connection target semantics over the one shared session (§11), the adapter windows() contract and the recorded accesskit_consumer subtree-root restatement finding
+
+### Features
+- **core:** window targets and window-scoped resolution (§16 v0.4, M6) — `TreeService::windows()` enumerates AccessKit grafted subtrees as window targets (handle = the subtree TreeId string; a graft-free tree is one `main` target), `window_scope(handle)` validates handles against the tree (Ok(None) for `main`, `UnknownWindow` otherwise), and the session-owned scope filter narrows every resolution path — strict resolve, `resolve_all`, the waiters and `expect` — from one injection point; the two-window `MultiWindowFixture` (same-named buttons across windows, per-tree generations) pins the model
+- **driver:** the `FrameworkAdapter::windows()` surface — default one `main` target so every existing adapter compiles unchanged and honestly single-window (freya-testing's cap expressed, not worked around); multi-window adapters return one `WindowInfo` per window with handles that MUST equal the pushed subtree TreeIds (the tree is the scoping source of truth); the mock adapter gains the multi-window persona (`with_multi_window`, `push_subtree_update`, `set_window_focus`) and a shared-script pump channel for mid-session diffs
+- **driver:** the GWP `Window` domain — `window list` / `window use <handle>` replies (`Windows`, `WindowUsed`, `UnknownWindow`), per-connection targeting on the server bridge (each connection's `GwpBridge` records its own active handle after the session validates it — a failed `Use` applies nothing) and resolution-only scoping applied and cleared inside one rendezvous step; `Resolve` stamps the connection's target so strict mode, auto-wait and `expect` all see exactly that window's subtree
+- **cli:** `window list | window use <handle>` in the REPL — the multi-window debugging loop with an active-target marker, and `window use` works verbatim as `gwtest/v1` spec steps (the runner drives the same `Repl::step` core — no spec-format change)
+- **proto:** the append-only `Window` domain (§7, §16 v0.4) — `RequestV1::Window(WindowV1)` at discriminant 11 after `Video`, `ResponseV1::Windows`/`WindowUsed` at 12/13, `ErrorCode::UnknownWindow` at 8, the `WindowInfoV1 { handle, title, focused }` payload; the schemadoc gains the window domain table + error code and the TypeScript golden vectors gain `window_list`/`window_use`/`windows`/`window_used` — discriminant pins, schema golden and vendored copy move together
+- **clients:** `@guiwright/gwp` — `windowList()` / `windowUse(handle)` over the typed `WindowCmd`, the Window codec paths pinned byte-for-byte against the Rust golden frames, and the cross-language e2e lists + aims the demo app's single `main` target
+
 ### Benchmarks
 - **bench:** Bind the M3 §15.1 row — remote Resolve over loopback TCP (resolve_remote_tcp, the other-language-client transport, byte-identical to the UDS row) — and add the M3 micro-suite guard for the §10 video dedup hot path; both enforce in the release guard
 - **bench:** Bind the M2 §15.1 row — remote Resolve over a real UDS round-trip (resolve_remote_uds; the "remote benching lands" note) — and add the M2 micro-suite guard for viewer timeline replay; both enforce in the release guard
