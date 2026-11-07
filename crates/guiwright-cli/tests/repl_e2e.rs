@@ -463,3 +463,110 @@ async fn repl_window_domain() {
 
     handle.shutdown();
 }
+
+/// M7 (§9 input pipeline): `mouse` / `key` / `text` — the raw-input and
+/// gesture vocabulary. Coordinates are relative to the connection's active
+/// window target (the M6 `window use` story feeds straight in); the
+/// session synthesizes the raw batch driver-side (per-adapter pacing).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_input_and_gestures() {
+    let path = socket_path("repl-gestures.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // Gesture click: the synthesized batch (move→down→up) applies inside
+    // one frame; the detail names the synthesis.
+    let out = rendered(&repl.step("mouse click 10 20").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].starts_with("clicked at (10, 20) — 3 events @ frame "),
+        "{out:?}"
+    );
+
+    // Double-click (count = 2), a named button, and the drag ratchet
+    // (100 px @ 5 px/tick → 20 interpolated moves).
+    let out = rendered(&repl.step("mouse dblclick 4 8").await);
+    assert!(
+        out[0].starts_with("double-clicked at (4, 8) — 5 events @ frame "),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("mouse click 1 2 right").await);
+    assert!(
+        out[0].starts_with("clicked at (1, 2) — 3 events @ frame "),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("mouse drag 0 0 100 0").await);
+    assert!(
+        out[0].starts_with("dragged (0, 0) → (100, 0) — 22 events @ frame "),
+        "{out:?}"
+    );
+
+    // Wheel and the keyboard vocabulary.
+    let out = rendered(&repl.step("mouse wheel 0 -120").await);
+    assert!(
+        out[0].starts_with("wheeled (0, -120) — 1 event @ frame "),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("key Enter").await);
+    assert!(
+        out[0].starts_with("pressed Enter — 2 events @ frame "),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("key a ctrl shift").await);
+    assert!(
+        out[0].starts_with("pressed ctrl+shift+a — 2 events @ frame "),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("text héllo").await);
+    assert!(
+        out[0].starts_with("typed 5 chars — 1 event @ frame "),
+        "{out:?}"
+    );
+    // The quoting tokenizer keeps multi-word text one argument.
+    let out = rendered(&repl.step("text \"two words\"").await);
+    assert!(
+        out[0].starts_with("typed 9 chars — 1 event @ frame "),
+        "{out:?}"
+    );
+
+    // The raw primitive events ride the (pre-M7 dead) `Input` request.
+    for cmd in ["mouse move 5 6", "mouse down 1 2", "mouse up 1 2"] {
+        let out = rendered(&repl.step(cmd).await);
+        assert_eq!(out.len(), 1, "{cmd}: {out:?}");
+        assert!(out[0].starts_with("input queued @ frame "), "{cmd}: {out:?}");
+    }
+
+    // Usage errors are single error lines and leave the session usable.
+    for cmd in [
+        "mouse",
+        "mouse frobnicate",
+        "mouse click 10",
+        "mouse click abc 20",
+        "mouse drag 1 2 3",
+        "mouse wheel 0",
+        "key",
+        "text",
+    ] {
+        let out = rendered(&repl.step(cmd).await);
+        assert_eq!(out.len(), 1, "{cmd}: {out:?}");
+        assert!(out[0].starts_with("error:"), "{cmd}: {out:?}");
+    }
+    let out = rendered(&repl.step("ping").await);
+    assert_eq!(out, vec!["pong"], "session usable after errors");
+
+    // The help text names the new domains.
+    let out = rendered(&repl.step("help").await);
+    assert!(
+        out.iter().any(|l| l.contains("mouse click")),
+        "{out:?}"
+    );
+    assert!(out.iter().any(|l| l.contains("key <key>")), "{out:?}");
+
+    handle.shutdown();
+}
