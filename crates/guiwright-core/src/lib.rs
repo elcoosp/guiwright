@@ -38,7 +38,7 @@ pub mod tree;
 pub mod wait;
 
 pub use error::CoreError;
-pub use key::{Generation, NodeKey};
+pub use key::{Generation, MAIN_WINDOW, NodeKey};
 pub use selector::{Nth, Selector, TextMatch, TextPattern};
-pub use tree::{FrameInfo, Resolved, TreeDiffSummary, TreeService};
+pub use tree::{FrameInfo, Resolved, TreeDiffSummary, TreeService, WindowScope};
 pub use wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
