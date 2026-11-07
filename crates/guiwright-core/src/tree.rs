@@ -311,6 +311,17 @@ impl TreeService {
         self.index.test_ids.insert(id.into(), key);
     }
 
+    /// The registered test id of a node, if any (§13 codegen cost model —
+    /// `TestId` is the cheapest stable selector). Cold path: the registry
+    /// is small and the lookup runs once per recorded interaction.
+    pub fn test_id_of(&self, key: &NodeKey) -> Option<&str> {
+        self.index
+            .test_ids
+            .iter()
+            .find(|(_, k)| *k == key)
+            .map(|(id, _)| id.as_str())
+    }
+
     /// Visit every descendant (depth-first, excluding the node itself).
     pub fn descendants(&self, key: &NodeKey, visit: &mut impl FnMut(NodeKey, &NodeRef<'_>)) {
         let Some(node) = self.node(key) else {
