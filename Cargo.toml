@@ -13,6 +13,9 @@ members = [
     "crates/guiwright-adapter-freya",
     "crates/guiwright-macros",
     "crates/guiwright-kit",
+    "crates/guiwright-inspect",
+    "crates/guiwright-viewer",
+    "crates/guiwright-adapter-slint",
 ]
 
 [workspace.package]
@@ -64,6 +67,9 @@ guiwright-adapter-iced = { path = "crates/guiwright-adapter-iced", version = "0.
 guiwright-adapter-freya = { path = "crates/guiwright-adapter-freya", version = "0.1.0" }
 guiwright-macros = { path = "crates/guiwright-macros", version = "0.1.0" }
 guiwright-kit = { path = "crates/guiwright-kit", version = "0.1.0" }
+guiwright-inspect = { path = "crates/guiwright-inspect", version = "0.1.0" }
+guiwright-viewer = { path = "crates/guiwright-viewer", version = "0.1.0" }
+serde_json = "1.0.154"
 guiwright-core = { path = "crates/guiwright-core", version = "0.1.0" }
 guiwright-proto = { path = "crates/guiwright-proto", version = "0.1.0" }
 guiwright-driver = { path = "crates/guiwright-driver", version = "0.1.0" }
