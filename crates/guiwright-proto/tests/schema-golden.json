@@ -1,0 +1,297 @@
+{
+  "blob_side_channel": {
+    "decode": "lz4_flex::decompress_size_prepended",
+    "encoding": "lz4_flex::compress_prepend_size over postcard bytes",
+    "max_decompressed_bytes": 268435456
+  },
+  "codec": {
+    "name": "postcard",
+    "rules": [
+      "enum variants are the varint (LEB128, u32) of the variant index — tables below are the pinning contract",
+      "unsigned ints (u32/u64/usize) are LEB128 varints",
+      "signed ints (i16/i32/i64) are zigzag-varints (none appear in V1 payloads)",
+      "f32/f64 are 4/8 raw little-endian bytes",
+      "bool is one byte (0x00/0x01)",
+      "option<T> is a 0x00/0x01 tag byte followed by T when present",
+      "string and seq<T> are a varint length prefix followed by the items",
+      "structs encode fields in declaration order"
+    ]
+  },
+  "conversation": [
+    "client connects, sends Hello { proto_version, agent } as the FIRST frame",
+    "driver replies Welcome { proto_version, session_id, tree_seq, frame_seq, adapter } or Error { UnsupportedVersion }",
+    "any other first frame is rejected with Error { NotHandshaked }",
+    "each subsequent request is answered by exactly one response frame; queued events may be flushed between responses",
+    "Bye is answered by Bye and closes the connection"
+  ],
+  "description": "Binary-first CDP-style protocol: sessions -> targets (windows) -> domains; request/response + server-push events. This document is the contract for non-Rust clients (§16).",
+  "domains": {
+    "clock": {
+      "name": "ClockV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "InstallVirtual",
+          "payload": "—"
+        },
+        {
+          "index": 1,
+          "name": "FastForward",
+          "payload": "{ ms: u64 varint }"
+        },
+        {
+          "index": 2,
+          "name": "RunFor",
+          "payload": "{ ms: u64 varint }"
+        },
+        {
+          "index": 3,
+          "name": "Pause",
+          "payload": "—"
+        },
+        {
+          "index": 4,
+          "name": "Resume",
+          "payload": "—"
+        },
+        {
+          "index": 5,
+          "name": "SetTime",
+          "payload": "{ ms: u64 varint }"
+        },
+        {
+          "index": 6,
+          "name": "State",
+          "payload": "—"
+        }
+      ]
+    },
+    "inspect": {
+      "name": "InspectV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "StartRecording",
+          "payload": "—"
+        },
+        {
+          "index": 1,
+          "name": "StopRecording",
+          "payload": "—"
+        }
+      ]
+    },
+    "mock": {
+      "name": "MockV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "InstallSeam",
+          "payload": "{ id: string, response: option<string> }"
+        },
+        {
+          "index": 1,
+          "name": "Clear",
+          "payload": "{ id: string }"
+        },
+        {
+          "index": 2,
+          "name": "ResetState",
+          "payload": "{ scope: string }"
+        },
+        {
+          "index": 3,
+          "name": "Call",
+          "payload": "{ id: string, scope: string }"
+        }
+      ]
+    },
+    "video": {
+      "name": "VideoV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "Start",
+          "payload": "{ opts: VideoOptsV1 { fps: u32 varint (0 = driver default), dir: option<string> (client-owned artifact dir) } }"
+        },
+        {
+          "index": 1,
+          "name": "Stop",
+          "payload": "—"
+        }
+      ]
+    }
+  },
+  "error_codes": [
+    "UnsupportedVersion",
+    "NotHandshaked",
+    "UnknownNode",
+    "StaleGeneration",
+    "StrictModeViolation",
+    "Timeout",
+    "Unsupported",
+    "Internal"
+  ],
+  "events": [
+    {
+      "index": 0,
+      "name": "TreeChanged",
+      "payload": "{ seq: u64 varint }"
+    },
+    {
+      "index": 1,
+      "name": "FramePresented",
+      "payload": "{ seq: u64 varint, hash: u64 varint }"
+    },
+    {
+      "index": 2,
+      "name": "Log",
+      "payload": "{ record: string }"
+    }
+  ],
+  "framing": {
+    "body": "postcard-encoded payload",
+    "envelope": {
+      "events": "GwpEvent { V1 = 0 } (one variant)",
+      "requests": "GwpRequest { V1 = 0 } (one variant)",
+      "responses": "GwpResponse { V1 = 0 } (one variant)"
+    },
+    "max_frame_bytes": 67108864,
+    "prefix": "4-byte little-endian u32 body length"
+  },
+  "protocol_version": 1,
+  "requests": [
+    {
+      "index": 0,
+      "name": "Hello",
+      "payload": "{ proto_version: u32 varint, agent: string }"
+    },
+    {
+      "index": 1,
+      "name": "Ping",
+      "payload": "—"
+    },
+    {
+      "index": 2,
+      "name": "TreeSnapshot",
+      "payload": "—"
+    },
+    {
+      "index": 3,
+      "name": "Resolve",
+      "payload": "{ selector: SelectorV1, timeout_ms: u64 varint }"
+    },
+    {
+      "index": 4,
+      "name": "Action",
+      "payload": "{ node: NodeKeyV1, generation: u32 varint, action: SemActionV1, force: bool, timeout_ms: u64 varint }"
+    },
+    {
+      "index": 5,
+      "name": "Input",
+      "payload": "{ events: seq<InputEventV1> }"
+    },
+    {
+      "index": 6,
+      "name": "Clock",
+      "payload": "ClockV1 (see domains.clock)"
+    },
+    {
+      "index": 7,
+      "name": "Mock",
+      "payload": "MockV1 (see domains.mock)"
+    },
+    {
+      "index": 8,
+      "name": "Inspect",
+      "payload": "InspectV1 (see domains.inspect)"
+    },
+    {
+      "index": 9,
+      "name": "Bye",
+      "payload": "—"
+    },
+    {
+      "index": 10,
+      "name": "Video",
+      "payload": "VideoV1 (see domains.video)"
+    }
+  ],
+  "responses": [
+    {
+      "index": 0,
+      "name": "Welcome",
+      "payload": "{ proto_version: u32 varint, session_id: string, tree_seq: u64 varint, frame_seq: u64 varint, adapter: AdapterInfoV1 }"
+    },
+    {
+      "index": 1,
+      "name": "Pong",
+      "payload": "—"
+    },
+    {
+      "index": 2,
+      "name": "TreeSnapshot",
+      "payload": "{ tree_seq: u64 varint, node_count: u64 varint }"
+    },
+    {
+      "index": 3,
+      "name": "Resolved",
+      "payload": "{ node: NodeKeyV1, generation: u32 varint, rect: option<[f64; 4]> }"
+    },
+    {
+      "index": 4,
+      "name": "ActionDone",
+      "payload": "{ frame_seq: u64 varint, detail: string }"
+    },
+    {
+      "index": 5,
+      "name": "InputQueued",
+      "payload": "{ frame_seq: u64 varint }"
+    },
+    {
+      "index": 6,
+      "name": "ClockState",
+      "payload": "{ virtual_time_ms: option<u64 varint>, paused: bool, steps: u64 varint }"
+    },
+    {
+      "index": 7,
+      "name": "MockDone",
+      "payload": "{ id: string, detail: string }"
+    },
+    {
+      "index": 8,
+      "name": "Codegen",
+      "payload": "{ code: string, warnings: seq<string> }"
+    },
+    {
+      "index": 9,
+      "name": "Error",
+      "payload": "{ code: ErrorCode (u8), message: string }"
+    },
+    {
+      "index": 10,
+      "name": "Bye",
+      "payload": "—"
+    },
+    {
+      "index": 11,
+      "name": "VideoFile",
+      "payload": "{ path: string, frames: u64 varint, dropped: u64 varint, duration_ms: u64 varint }"
+    }
+  ],
+  "schema": "gwp-schema/v1",
+  "title": "Guiwright Protocol (GWP) wire schema",
+  "transports": [
+    {
+      "name": "uds",
+      "role": "default (same-host apps)",
+      "server": "GwpServerHandle::spawn (uds://path)"
+    },
+    {
+      "name": "tcp",
+      "role": "CI containers + other-language clients (M3)",
+      "server": "GwpServerHandle::spawn_tcp (host:port)"
+    }
+  ],
+  "video_default_fps": 25
+}
