@@ -213,6 +213,27 @@ guiwright test --tcp 127.0.0.1:41234 --shard 1/3 --retries 2 \
 
 Every step maps onto an existing GWP request — no protocol change. A step's error line fails the scenario; `expect <get-args…>` words failures as assertions. Failed scenarios re-run per `retries` (spec, scenario or `--retries`), passing on a retry reports `flaky`. `--list` prints the discovered scenarios (shard-aware) without touching the wire, and reports land as `report.json` (`gwrun/v1`), `junit.xml` (one suite per spec file) and a self-contained `report.html` (see `docs/m5-test-runner.md` and `crates/guiwright-cli/tests/runner_e2e.rs`).
 
+### Multi-window: targets per window (M6)
+
+A multi-window app exposes one target per window; each connection aims at its own target and locators see only that window's subtree — one driver session serves every connection (§11).
+
+```bash
+guiwright repl --uds /tmp/app.gwp
+```
+
+```text
+gw> window list
+window targets (2):
+  a6000000-0000-0000-0000-000000000001 Editor focused
+  a6000000-0000-0000-0000-000000000002 Preview
+gw> window use a6000000-0000-0000-0000-000000000001
+now targeting a6000000-0000-0000-0000-000000000001 (Editor)
+gw> get role button Save          # strict mode inside the editor window only
+resolved Button "Save" (generation 0) rect=[16,16 → 136,48]
+```
+
+`window use` works verbatim inside `gwtest/v1` spec steps (the runner drives the same REPL core), and the TypeScript client carries `windowList()` / `windowUse(handle)`. On the wire the `Window` domain appends after `Video` (discriminant 11 — the same append-only discipline as the M3 video domain; every pre-M6 client keeps its byte-exact encodings). Single-window adapters report exactly one `main` target and need no changes; window handles are the AccessKit subtree `TreeId`s the adapter already pushes (see `docs/m6-multi-window.md` and `crates/guiwright-driver/tests/multi_window.rs`).
+
 ### Supported adapters
 
 | Framework | Crate | Accessibility source | CI coverage |
@@ -227,7 +248,7 @@ Every step maps onto an existing GWP request — no protocol change. A step's er
 ## Status
 
 > [!NOTE]
-> Guiwright is a pre-release project at version 0.1.0, with milestones M0–M2 of the plan in [docs/architecture.md](docs/architecture.md) implemented across the workspace crates, M3 shipped as framework-free adapter engines (floem, gpui), the video recorder and the TypeScript client, M4 — the `guiwright-cli` crate (`repl`, `show-trace`, `bless`, `install-deps`) plus remote codegen recording (§13) — and M5 — the §16 v0.5 own runner: `guiwright test` discovers `gwtest/v1` scenario specs (REPL-language steps) and drives them over GWP with workers, retries with flaky detection, deterministic `--shard k/n` splitting and `gwrun/v1` JSON / JUnit / HTML reports. CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), runs the TypeScript client suite and the cross-language e2e, compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. The floem and gpui platform glue ships downstream (recorded constraints in the crate docs and `docs/m3-floem-contributions.md`). Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
+> Guiwright is a pre-release project at version 0.1.0, with milestones M0–M2 of the plan in [docs/architecture.md](docs/architecture.md) implemented across the workspace crates, M3 shipped as framework-free adapter engines (floem, gpui), the video recorder and the TypeScript client, M4 — the `guiwright-cli` crate (`repl`, `show-trace`, `bless`, `install-deps`) plus remote codegen recording (§13) — M5 — the §16 v0.5 own runner: `guiwright test` discovers `gwtest/v1` scenario specs (REPL-language steps) and drives them over GWP with workers, retries with flaky detection, deterministic `--shard k/n` splitting and `gwrun/v1` JSON / JUnit / HTML reports — and M6 — the §16 v0.4 multi-window row: the append-only `Window` domain over GWP (`window list` / `window use <handle>` in the REPL and in spec steps, `windowList()` / `windowUse()` in the TypeScript client), per-connection window targets over one shared driver session, and window-scoped resolution built on AccessKit's grafted-subtree window model (single-window adapters report one `main` target and compile unchanged). CI exercises the full test suite on Linux, macOS and Windows (Linux uses software Vulkan via lavapipe for render-dependent tests), runs the TypeScript client suite and the cross-language e2e, compile-verifies the feature-gated iced and freya harness glue, and enforces the perf budgets. The floem and gpui platform glue ships downstream (recorded constraints in the crate docs and `docs/m3-floem-contributions.md`). Crates are packaged by the release workflow into GitHub releases; crates.io publication is not yet automated. The MSRV is 1.85 and the workspace forbids unsafe code.
 
 ## Learn more
 
