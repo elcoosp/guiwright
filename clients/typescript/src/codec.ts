@@ -30,6 +30,8 @@ import {
   type WindowCmd,
   type WindowInfoV1,
   WindowV1,
+  type GestureCmd,
+  GestureV1,
 } from "./schema.ts";
 import { Decoder, Encoder } from "./postcard.ts";
 
@@ -105,6 +107,10 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
     case "window":
       enc.u32(RequestV1.Window);
       encodeWindowCmd(enc, req.cmd);
+      break;
+    case "gesture":
+      enc.u32(RequestV1.Gesture);
+      encodeGestureCmd(enc, req.cmd);
       break;
     case "bye":
       enc.u32(RequestV1.Bye);
@@ -297,6 +303,33 @@ function encodeWindowCmd(enc: Encoder, cmd: WindowCmd): void {
   }
 }
 
+function encodeGestureCmd(enc: Encoder, cmd: GestureCmd): void {
+  switch (cmd.kind) {
+    case "click":
+      enc.u32(GestureV1.Click).f64(cmd.x).f64(cmd.y).u32(cmd.button).u32(cmd.count);
+      break;
+    case "drag":
+      enc
+        .u32(GestureV1.Drag)
+        .f64(cmd.from_x)
+        .f64(cmd.from_y)
+        .f64(cmd.to_x)
+        .f64(cmd.to_y)
+        .u32(cmd.button);
+      break;
+    case "wheel":
+      enc.u32(GestureV1.Wheel).f64(cmd.dx).f64(cmd.dy);
+      break;
+    case "key":
+      enc.u32(GestureV1.Key).str(cmd.key).seqLen(cmd.modifiers.length);
+      for (const m of cmd.modifiers) enc.str(m);
+      break;
+    case "type":
+      enc.u32(GestureV1.Type).str(cmd.text);
+      break;
+  }
+}
+
 // --- Decoding ----------------------------------------------------------------
 
 export function decodeResponse(bytes: Uint8Array): GwpResponseT {
@@ -386,6 +419,11 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
     case 13: {
       const handle = dec.str();
       return { kind: "window_used", handle };
+    }
+    case 14: {
+      const frame_seq = dec.u64n();
+      const detail = dec.str();
+      return { kind: "gesture_done", frame_seq, detail };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
