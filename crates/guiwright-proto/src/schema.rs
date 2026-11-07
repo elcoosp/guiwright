@@ -70,6 +70,14 @@ pub enum RequestV1 {
     Inspect(InspectV1),
     /// Close the session cleanly.
     Bye,
+    /// Video domain (§7 `Video` + §10 "the trace recorder doubles as
+    /// video"): start/stop a frame recording of the session.
+    ///
+    /// Wire discipline: request/response variants are **append-only**
+    /// within a `V1` envelope — `Video` follows `Bye` (discriminant 10)
+    /// so every pre-M3 client keeps its byte-exact encodings; the
+    /// pinning tests below fail the build on any reordering.
+    Video(VideoV1),
 }
 
 /// `Clock { InstallVirtual | FastForward(ms) | RunFor(ms) | Pause | Resume |
@@ -122,6 +130,45 @@ pub enum InspectV1 {
     /// Stop and fetch the generated kit code.
     StopRecording,
 }
+
+/// `Video { Start(opts) | Stop }` → `VideoFile { path }` (§7, §10). The
+/// driver records presented frames between the two calls: hash-equality
+/// dedup drops static repetitions (§10 backpressure), fps paces the ring,
+/// and the encoder subprocess (ffmpeg) or PNG-sequence fallback finalizes
+/// the file at `Stop`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VideoV1 {
+    /// Start recording with these options (§10).
+    Start(VideoOptsV1),
+    /// Stop and finalize the recording file.
+    Stop,
+}
+
+/// Video recording options (§10).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VideoOptsV1 {
+    /// Target frame-rate cap. `0` selects the driver default (25 fps).
+    /// Frames presented faster than `1/fps` are collapsed by the
+    /// hash-equality dedup — a static UI records to keyframe + no-ops.
+    pub fps: u32,
+    /// Output directory for the recording (Playwright-style: the client
+    /// owns the artifact dir). `None` = the driver's default
+    /// (`GUIWRIGHT_VIDEO_DIR` or the OS temp dir). Relative paths resolve
+    /// against the driver process's cwd.
+    pub dir: Option<String>,
+}
+
+impl Default for VideoOptsV1 {
+    fn default() -> Self {
+        Self {
+            fps: VIDEO_DEFAULT_FPS,
+            dir: None,
+        }
+    }
+}
+
+/// Driver default frame-rate cap (§10: Playwright records ≈25 fps).
+pub const VIDEO_DEFAULT_FPS: u32 = 25;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ResponseV1 {
@@ -178,6 +225,17 @@ pub enum ResponseV1 {
         message: String,
     },
     Bye,
+    /// Video domain reply (§10): the finalized recording file. Append-only
+    /// wire discipline — see [`RequestV1::Video`]. `dropped` counts frames
+    /// shed by the §10 hash-equality backpressure (static UI compresses to
+    /// a keyframe + no-ops), `duration_ms` is the wall-clock span the
+    /// recording covers.
+    VideoFile {
+        path: String,
+        frames: u64,
+        dropped: u64,
+        duration_ms: u64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -604,5 +662,198 @@ mod tests {
             let back: MockV1 = postcard::from_bytes(&bytes).expect("decode");
             assert_eq!(cmd, back);
         }
+    }
+
+    /// §7 `Video` domain round-trip (M3, §10).
+    #[test]
+    fn video_domain_roundtrip() {
+        let requests = [
+            GwpRequest::V1(RequestV1::Video(VideoV1::Start(VideoOptsV1 {
+                fps: 30,
+                dir: Some("test-results/videos".into()),
+            }))),
+            GwpRequest::V1(RequestV1::Video(VideoV1::Start(VideoOptsV1::default()))),
+            GwpRequest::V1(RequestV1::Video(VideoV1::Stop)),
+        ];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let resp = GwpResponse::V1(ResponseV1::VideoFile {
+            path: "guiwright-smoke-1730889600.webm".into(),
+            frames: 42,
+            dropped: 7,
+            duration_ms: 1680,
+        });
+        let bytes = postcard::to_allocvec(&resp).expect("encode");
+        let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(resp, back);
+    }
+
+    /// postcard encodes enum variants as a varint of the variant index, so
+    /// **variant order is the wire format**. §7 "old clients get clean
+    /// errors" → within a `V1` envelope variants are append-only: pre-M3
+    /// requests keep discriminants 0–9 (`Bye` = 9) and `Video` appends at
+    /// 10; responses keep 0–10 (`Bye` = 10) and `VideoFile` appends at 11.
+    /// Reordering or inserting mid-enum fails this test — add new variants
+    /// at the end and extend the pin list instead.
+    #[test]
+    fn wire_discriminants_are_append_only() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            // The first byte(s) of a postcard enum are the varint variant
+            // index; every variant index pinned here is < 128 (single byte).
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+
+        // Requests (M0–M2 alphabet kept intact, M3 `Video` appended).
+        assert_eq!(
+            discriminant(&RequestV1::Hello {
+                proto_version: 1,
+                agent: String::new()
+            }),
+            0
+        );
+        assert_eq!(discriminant(&RequestV1::Ping), 1);
+        assert_eq!(discriminant(&RequestV1::TreeSnapshot), 2);
+        assert_eq!(
+            discriminant(&RequestV1::Resolve {
+                selector: SelectorV1::TestId(String::new()),
+                timeout_ms: 0
+            }),
+            3
+        );
+        assert_eq!(
+            discriminant(&RequestV1::Action {
+                node: NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                },
+                generation: 0,
+                action: SemActionV1::Click,
+                force: false,
+                timeout_ms: 0
+            }),
+            4
+        );
+        assert_eq!(discriminant(&RequestV1::Input { events: Vec::new() }), 5);
+        assert_eq!(discriminant(&RequestV1::Clock(ClockV1::State)), 6);
+        assert_eq!(
+            discriminant(&RequestV1::Mock(MockV1::Clear { id: String::new() })),
+            7
+        );
+        assert_eq!(
+            discriminant(&RequestV1::Inspect(InspectV1::StartRecording)),
+            8
+        );
+        assert_eq!(discriminant(&RequestV1::Bye), 9);
+        assert_eq!(discriminant(&RequestV1::Video(VideoV1::Stop)), 10);
+
+        // Responses.
+        assert_eq!(
+            discriminant(&ResponseV1::Welcome {
+                proto_version: 1,
+                session_id: String::new(),
+                tree_seq: 0,
+                frame_seq: 0,
+                adapter: AdapterInfoV1 {
+                    name: String::new(),
+                    framework: String::new(),
+                    framework_version: String::new(),
+                    caps: CapsV1::default()
+                }
+            }),
+            0
+        );
+        assert_eq!(discriminant(&ResponseV1::Pong), 1);
+        assert_eq!(
+            discriminant(&ResponseV1::TreeSnapshot {
+                tree_seq: 0,
+                node_count: 0
+            }),
+            2
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::Resolved {
+                node: NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                },
+                generation: 0,
+                rect: None
+            }),
+            3
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::ActionDone {
+                frame_seq: 0,
+                detail: String::new()
+            }),
+            4
+        );
+        assert_eq!(discriminant(&ResponseV1::InputQueued { frame_seq: 0 }), 5);
+        assert_eq!(
+            discriminant(&ResponseV1::ClockState {
+                virtual_time_ms: None,
+                paused: false,
+                steps: 0
+            }),
+            6
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::MockDone {
+                id: String::new(),
+                detail: String::new()
+            }),
+            7
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::Codegen {
+                code: String::new(),
+                warnings: Vec::new()
+            }),
+            8
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::Error {
+                code: ErrorCode::Internal,
+                message: String::new()
+            }),
+            9
+        );
+        assert_eq!(discriminant(&ResponseV1::Bye), 10);
+        assert_eq!(
+            discriminant(&ResponseV1::VideoFile {
+                path: String::new(),
+                frames: 0,
+                dropped: 0,
+                duration_ms: 0
+            }),
+            11
+        );
+
+        // Nested domain enums are pinned too — other-language clients
+        // hard-code these tables (clients/typescript).
+        assert_eq!(discriminant(&VideoV1::Start(VideoOptsV1::default())), 0);
+        assert_eq!(discriminant(&VideoV1::Stop), 1);
+        assert_eq!(discriminant(&ClockV1::InstallVirtual), 0);
+        assert_eq!(discriminant(&ClockV1::State), 6);
+        assert_eq!(
+            discriminant(&MockV1::InstallSeam {
+                id: String::new(),
+                response: None
+            }),
+            0
+        );
+        assert_eq!(
+            discriminant(&MockV1::Call {
+                id: String::new(),
+                scope: String::new()
+            }),
+            3
+        );
+        assert_eq!(discriminant(&InspectV1::StartRecording), 0);
+        assert_eq!(discriminant(&InspectV1::StopRecording), 1);
     }
 }
