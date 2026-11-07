@@ -35,8 +35,9 @@ id = "resolve_remote_uds"
 name = "Resolve locator, remote (UDS round-trip)"
 p50_us = 600
 p95_us = 3000
-notes = "incl. marshalling; bound at M1 when remote benching lands"
-m0_measurable = false
+notes = "incl. marshalling + session-thread rendezvous; bound at M2 (remote benching landed with the remote-mode spike)"
+m0_measurable = true
+sample = "resolve_remote_uds"
 
 [[budget]]
 id = "apply_semantic_action"
@@ -133,3 +134,12 @@ p95_us = 100
 notes = "GWP command envelope; M0 micro-suite guard"
 m0_measurable = true
 sample = "codec_roundtrip"
+
+[[budget]]
+id = "viewer_timeline_replay"
+name = "Viewer timeline replay (open + tree at last frame)"
+p50_us = 5000
+p95_us = 20000
+notes = "M2 micro-suite guard (15.7): gwtrace archive open + snapshot resolve, 1k nodes"
+m0_measurable = true
+sample = "viewer_timeline_replay"
