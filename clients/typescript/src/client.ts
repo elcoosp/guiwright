@@ -293,6 +293,33 @@ export class GwpClient {
     if (resp.kind !== "window_used") throw new Error(`expected WindowUsed, got ${resp.kind}`);
   }
 
+  // --- inspector overlay (§13, M8) --------------------------------------------
+
+  /**
+   * `inspect.overlay(enable)` — start/stop the live overlay session (§13):
+   * the adapter composites hover outlines + interactive-role badges from
+   * the tree indexes at present time, refreshed every frame while it is
+   * on. Adapters without an overlay surface reject with `Unsupported`.
+   */
+  async inspectOverlay(enable: boolean): Promise<void> {
+    this.assertHandshaked();
+    const cmd = enable ? { kind: "enable_overlay" as const } : { kind: "disable_overlay" as const };
+    const resp = await this.request({ kind: "inspect", cmd });
+    if (resp.kind !== "pong") throw new Error(`expected Pong, got ${resp.kind}`);
+  }
+
+  /**
+   * `inspect.highlight(node)` — aim the hover outline at a resolved node
+   * handle (§13); `null` clears the outline and keeps the overlay
+   * session. Resolve first (`resolve()`), then highlight the returned
+   * handle — the same conversation the REPL's `inspect <get-args…>` runs.
+   */
+  async inspectHighlight(node: NodeKey | null): Promise<void> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "inspect", cmd: { kind: "highlight", node } });
+    if (resp.kind !== "pong") throw new Error(`expected Pong, got ${resp.kind}`);
+  }
+
   // --- raw input & gestures (§9, M7) -----------------------------------------
 
   /**
