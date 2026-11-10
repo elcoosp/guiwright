@@ -52,13 +52,7 @@ fn gesture_click_synthesizes_move_down_up() {
     let logged = session.adapter().window_events();
     assert_eq!(logged.len(), 3);
     assert_eq!(logged[0].0, "main");
-    assert_eq!(
-        logged[0].1,
-        InputEvent::PointerMove {
-            x: 10.0,
-            y: 20.0
-        }
-    );
+    assert_eq!(logged[0].1, InputEvent::PointerMove { x: 10.0, y: 20.0 });
     assert_eq!(
         logged[1].1,
         InputEvent::PointerDown {
@@ -148,10 +142,7 @@ fn drag_interpolates_moves_with_the_pacing_ratchet() {
         )
         .expect("drag applies");
     assert_eq!(outcome.events, 22, "down + 20 moves + up");
-    assert_eq!(
-        outcome.detail,
-        "dragged (10, 10) → (110, 10) — 22 events"
-    );
+    assert_eq!(outcome.detail, "dragged (10, 10) → (110, 10) — 22 events");
     let logged = session.adapter().window_events();
     assert_eq!(
         logged[0].1,
@@ -163,17 +154,8 @@ fn drag_interpolates_moves_with_the_pacing_ratchet() {
     );
     // First ratchet step lands one ratchet along the path; the last move
     // lands exactly on the target so the release coordinates are honest.
-    assert_eq!(
-        logged[1].1,
-        InputEvent::PointerMove { x: 15.0, y: 10.0 }
-    );
-    assert_eq!(
-        logged[20].1,
-        InputEvent::PointerMove {
-            x: 110.0,
-            y: 10.0
-        }
-    );
+    assert_eq!(logged[1].1, InputEvent::PointerMove { x: 15.0, y: 10.0 });
+    assert_eq!(logged[20].1, InputEvent::PointerMove { x: 110.0, y: 10.0 });
     assert_eq!(
         logged[21].1,
         InputEvent::PointerUp {
@@ -185,7 +167,9 @@ fn drag_interpolates_moves_with_the_pacing_ratchet() {
 
     // The adapter's pacing table drives the synthesis: 25 px ratchet →
     // 4 moves for the same 100 px drag.
-    let mut slow = Session::new(SlowDragAdapter(MockAdapter::with_fixture(&Fixture::buttons())));
+    let mut slow = Session::new(SlowDragAdapter(MockAdapter::with_fixture(
+        &Fixture::buttons(),
+    )));
     settle(&mut slow);
     let outcome = slow
         .perform_gesture(
@@ -242,7 +226,10 @@ fn key_and_type_gestures_synthesize_keyboard_events() {
             None,
         )
         .expect("type applies");
-    assert_eq!(outcome.events, 1, "one text commit; per-adapter translation");
+    assert_eq!(
+        outcome.events, 1,
+        "one text commit; per-adapter translation"
+    );
     assert_eq!(outcome.detail, "typed 5 chars — 1 event");
     assert_eq!(
         session.adapter().window_events()[2].1,
@@ -269,7 +256,10 @@ fn wheel_gesture_routes_one_wheel_event() {
     assert_eq!(outcome.detail, "wheeled (0, -120) — 1 event");
     assert_eq!(
         session.adapter().window_events()[0].1,
-        InputEvent::Wheel { dx: 0.0, dy: -120.0 }
+        InputEvent::Wheel {
+            dx: 0.0,
+            dy: -120.0
+        }
     );
 }
 
@@ -279,23 +269,19 @@ fn send_input_routes_raw_events_to_the_active_target() {
     settle(&mut session);
 
     let frame = session
-        .send_input(
-            vec![InputEvent::PointerMove { x: 1.0, y: 2.0 }],
-            None,
-        )
+        .send_input(vec![InputEvent::PointerMove { x: 1.0, y: 2.0 }], None)
         .expect("raw batch applies");
     assert!(frame >= 1);
     let logged = session.adapter().window_events();
     assert_eq!(logged.len(), 1);
     assert_eq!(logged[0].0, "main");
-    assert_eq!(
-        logged[0].1,
-        InputEvent::PointerMove { x: 1.0, y: 2.0 }
-    );
+    assert_eq!(logged[0].1, InputEvent::PointerMove { x: 1.0, y: 2.0 });
 
     // An empty batch is an honest no-op: one rendezvous, nothing injected.
     let before = session.adapter().window_events().len();
-    session.send_input(Vec::new(), None).expect("empty batch ok");
+    session
+        .send_input(Vec::new(), None)
+        .expect("empty batch ok");
     assert_eq!(session.adapter().window_events().len(), before);
 }
 
@@ -308,9 +294,15 @@ fn input_and_gestures_validate_the_window_target() {
     // Unknown handles fail clean — the tree is the source of truth (§16
     // v0.4) — and a failed gesture applies nothing.
     let err = session
-        .perform_gesture(click(1.0, 2.0, 1), Some("00000000-0000-0000-0000-00000000dead"))
+        .perform_gesture(
+            click(1.0, 2.0, 1),
+            Some("00000000-0000-0000-0000-00000000dead"),
+        )
         .expect_err("unknown window");
-    assert!(matches!(err, guiwright_core::CoreError::UnknownWindow { .. }), "{err}");
+    assert!(
+        matches!(err, guiwright_core::CoreError::UnknownWindow { .. }),
+        "{err}"
+    );
     assert!(session.adapter().window_events().is_empty());
 
     // An explicit target routes there; the default (None) is the session's
@@ -498,11 +490,10 @@ async fn unknown_window_gesture_fails_clean_over_the_wire() {
 
     // Close the window: the next rendezvous delivers the update and the
     // target stops resolving (the tree is the source of truth, §16 v0.4).
-    scripts
-        .lock()
-        .expect("scripts")
-        .push(fx.close_w2_update());
-    conn.request(RequestV1::Ping).await.expect("rendezvous pump");
+    scripts.lock().expect("scripts").push(fx.close_w2_update());
+    conn.request(RequestV1::Ping)
+        .await
+        .expect("rendezvous pump");
 
     // The stale target never reaches the adapter: the wire error carries
     // the UnknownWindow code (pre-M6 clients see a clean error).
@@ -537,4 +528,137 @@ fn spawn_with_log(
         MockAdapter::with_fixture(&fixture).with_input_log(Arc::clone(&log))
     })
     .expect("server binds")
+}
+
+// ---------------------------------------------------------------------------
+// Codegen recording (§13 over §9): the gesture vocabulary records as kit
+// code while a recording is active — the promise the semantic-action path
+// carried since M0 ("raw input is recorded in the gesture milestone").
+// ---------------------------------------------------------------------------
+
+#[test]
+fn codegen_records_the_gesture_vocabulary() {
+    let mut session = Session::new(MockAdapter::with_fixture(&Fixture::buttons()));
+    settle(&mut session);
+
+    session.codegen_start().expect("recording starts");
+    session
+        .perform_gesture(click(10.0, 20.0, 1), None)
+        .expect("click applies");
+    session
+        .perform_gesture(
+            Gesture::Wheel {
+                dx: 0.0,
+                dy: -120.0,
+            },
+            None,
+        )
+        .expect("wheel applies");
+    session
+        .perform_gesture(
+            Gesture::Key {
+                key: "Enter".into(),
+                modifiers: vec![],
+            },
+            None,
+        )
+        .expect("key applies");
+    session
+        .send_input(vec![InputEvent::PointerMove { x: 30.0, y: 40.0 }], None)
+        .expect("raw move applies");
+    let (code, warnings) = session.codegen_stop().expect("recording stops");
+    assert_eq!(code.lines().count(), 4, "{code}");
+    assert!(code.contains("app.mouse().click(10.0, 20.0);"), "{code}");
+    assert!(code.contains("app.mouse().wheel(0.0, -120.0);"), "{code}");
+    assert!(code.contains("app.keyboard().press(\"Enter\");"), "{code}");
+    assert!(code.contains("app.mouse().move_to(30.0, 40.0);"), "{code}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn codegen_records_window_targets_chords_and_high_counts() {
+    let fx = MultiWindowFixture::default();
+    let mut session = Session::new(MockAdapter::with_multi_window(&fx));
+    settle(&mut session);
+    let w2 = fx.w2.0.to_string();
+
+    session.codegen_start().expect("recording starts");
+    // An explicit window target records the `in_window` chain — the
+    // recorded line replays into the same window it drove.
+    session
+        .perform_gesture(
+            Gesture::Click {
+                x: 5.0,
+                y: 6.0,
+                button: PointerButton::Primary,
+                count: 2,
+            },
+            Some(&w2),
+        )
+        .expect("dblclick applies");
+    session
+        .perform_gesture(
+            Gesture::Key {
+                key: "KeyA".into(),
+                modifiers: vec!["Control".into()],
+            },
+            None,
+        )
+        .expect("chord applies");
+    session
+        .perform_gesture(Gesture::Type { text: "ada".into() }, None)
+        .expect("type applies");
+    // A count>2 click has no kit equivalent — recorded with a warning.
+    session
+        .perform_gesture(click(1.0, 2.0, 3), None)
+        .expect("triple click applies");
+    let (code, warnings) = session.codegen_stop().expect("recording stops");
+    assert!(
+        code.contains(&format!(
+            "app.mouse().in_window({w2:?}).dblclick(5.0, 6.0);"
+        )),
+        "{code}"
+    );
+    assert!(
+        code.contains("app.keyboard().press_with(\"KeyA\", [\"Control\"]);"),
+        "{code}"
+    );
+    assert!(
+        code.contains("app.keyboard().type_text(\"ada\");"),
+        "{code}"
+    );
+    assert!(code.contains("app.mouse().click(1.0, 2.0);"), "{code}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("no kit equivalent"), "{warnings:?}");
+}
+
+#[test]
+fn codegen_inactive_gestures_record_nothing() {
+    let mut session = Session::new(MockAdapter::with_fixture(&Fixture::buttons()));
+    settle(&mut session);
+    session
+        .perform_gesture(click(10.0, 20.0, 1), None)
+        .expect("click applies without a recorder");
+    // No recording active: nothing to stop, nothing recorded.
+    assert!(session.codegen_stop().is_err(), "no recorder");
+}
+
+#[test]
+fn failed_gestures_record_nothing() {
+    let fx = MultiWindowFixture::default();
+    let mut session = Session::new(MockAdapter::with_multi_window(&fx));
+    settle(&mut session);
+    session.codegen_start().expect("recording starts");
+    let dead = "a6000000-dead-beef-0000-000000000000";
+    assert!(
+        session
+            .perform_gesture(click(10.0, 20.0, 1), Some(dead))
+            .is_err(),
+        "dead window rejected"
+    );
+    let (code, _) = session.codegen_stop().expect("recording stops");
+    assert!(
+        code.is_empty(),
+        "a rejected gesture records no line: {code}"
+    );
 }
