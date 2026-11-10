@@ -1,7 +1,7 @@
 //! Embedded masonry adapter integration tests (architecture §4.2).
 //!
 //! A real windowless `TestHarness` driven through the adapter — Flex root,
-//! Button + Label + TextInput — via the standard
+//! `Button` + `Label` + `TextInput` — via the standard
 //! [`guiwright_driver::Session`] (embedded == remote semantics, §5.1).
 
 use std::time::{Duration, Instant};
@@ -83,8 +83,8 @@ fn synthetic_pointer_click_targets_save() {
     let (mut session, _save_id) = counter_session();
     let resolved = session.resolve(&save()).expect("resolve");
     let rect = resolved.bounds.expect("bounds");
-    let cx = (rect.x0 + rect.x1) / 2.0;
-    let cy = (rect.y0 + rect.y1) / 2.0;
+    let cx = f64::midpoint(rect.x0, rect.x1);
+    let cy = f64::midpoint(rect.y0, rect.y1);
 
     // Real pointer pipeline: move → down → up (§9 fidelity rule).
     session
