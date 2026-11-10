@@ -16,7 +16,7 @@ use guiwright_core::test_util::Fixture;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
 
-/// Leak a temp dir so paths survive until process end (the repl_e2e
+/// Leak a temp dir so paths survive until process end (the `repl_e2e`
 /// helper pattern).
 fn leak_dir(tag: &str) -> PathBuf {
     let dir = Box::leak(Box::new(tempfile::tempdir().expect("tmpdir")));
@@ -146,8 +146,7 @@ steps = ["expect role button Nope"]
     // The spec's 150 ms deadline was honored (not the 5000 ms default).
     assert!(
         record.duration_ms < 2_000,
-        "record {:?}, wall {wall:?}",
-        record
+        "record {record:?}, wall {wall:?}"
     );
     assert!(wall.as_millis() < 4_000, "{wall:?}");
 }
@@ -221,7 +220,7 @@ async fn list_mode_needs_no_live_app_and_is_shard_aware() {
     let listed = outcome.listed.expect("list mode returns ids");
     assert_eq!(listed.len(), 4);
     assert!(listed[0].ends_with(":: save the document"), "{listed:?}");
-    assert!(outcome.report.scenarios.is_empty());
+    assert_eq!(outcome.report.scenarios.len(), 0);
     assert!(!outcome.failed);
 
     // Shard 2/2 lists the interleaved second half, deterministically.
@@ -405,6 +404,7 @@ steps = ["expect role button Nope"]
 /// M5 promise), so `window use` + scoped locators are declarative too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn window_steps_run_in_specs() {
+    use guiwright_cli::report::ScenarioStatus::*;
     use guiwright_core::test_util::MultiWindowFixture;
 
     let fx = MultiWindowFixture::new();
@@ -473,7 +473,6 @@ steps = [
             .unwrap_or_else(|| panic!("scenario {name} missing"))
             .status
     };
-    use ScenarioStatus::*;
     // Unscoped, the two same-named Saves stay a strict-mode violation.
     assert_eq!(status_of("unscoped strict violation"), Failed);
     // Scoped to the editor: its Save resolves; the preview-only label
