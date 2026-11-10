@@ -5,6 +5,8 @@
 //! [`TextMatch::exact`] is set, in which case the match is exact and
 //! case-sensitive (Playwright's `exact: true`).
 
+use std::fmt::Write;
+
 use accesskit::Role;
 
 /// A text matching rule (Playwright `TextMatch` analog).
@@ -155,7 +157,7 @@ pub enum Nth {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selector {
     /// `getByRole(role, name?)` — name matches the accessible name
-    /// (labelled_by aware, via the consumer's label resolution).
+    /// (`labelled_by` aware, via the consumer's label resolution).
     Role { role: Role, name: Option<TextMatch> },
     /// `getByLabel(text)` — matches the node's accessible label.
     Label(TextMatch),
@@ -292,15 +294,17 @@ impl Selector {
             } => {
                 let mut s = source.render();
                 if let Some(t) = has_text {
-                    s += &format!(".filter(hasText={})", render_match(t));
+                    let _ = write!(s, ".filter(hasText={})", render_match(t));
                 }
                 if let Some(sel) = has_not {
-                    s += &format!(".filter(hasNot={})", sel.render());
+                    let _ = write!(s, ".filter(hasNot={})", sel.render());
                 }
                 match nth {
-                    Some(Nth::First) => s += ".first()",
-                    Some(Nth::Last) => s += ".last()",
-                    Some(Nth::Index(i)) => s += &format!(".nth({i})"),
+                    Some(Nth::First) => s.push_str(".first()"),
+                    Some(Nth::Last) => s.push_str(".last()"),
+                    Some(Nth::Index(i)) => {
+                        let _ = write!(s, ".nth({i})");
+                    }
                     None => {}
                 }
                 s
