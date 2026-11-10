@@ -5,7 +5,7 @@
 //! in the root tree carry a `tree_id` property naming the subtree that holds
 //! the window's content. The consumer grafts them into one walkable tree, so
 //! every node keeps a per-window identity (`NodeKey::AccessKit { tree, node }`
-//! — the TreeId IS the window identity). These tests pin the tree-level half
+//! — the `TreeId` IS the window identity). These tests pin the tree-level half
 //! of the feature: window enumeration and window-scoped resolution.
 
 use accesskit::{NodeId, Point, Rect, Role, TreeId};
@@ -237,7 +237,7 @@ fn fixture_updates_are_ordered_root_first() {
 }
 
 /// Guard against accidental fixture drift: node reuse across windows is the
-/// POINT of the fixture (keys must not collide because TreeIds differ).
+/// POINT of the fixture (keys must not collide because `TreeId`s differ).
 #[test]
 fn fixture_windows_reuse_local_node_ids() {
     let fx = MultiWindowFixture::new();
