@@ -54,6 +54,22 @@
       "name": "inspect_start"
     },
     {
+      "frame_hex": "03000000000802",
+      "name": "inspect_enable_overlay"
+    },
+    {
+      "frame_hex": "03000000000803",
+      "name": "inspect_disable_overlay"
+    },
+    {
+      "frame_hex": "160000000008040100a600000000000000000000000000000102",
+      "name": "inspect_highlight"
+    },
+    {
+      "frame_hex": "0400000000080400",
+      "name": "inspect_highlight_clear"
+    },
+    {
       "frame_hex": "19000000000a001e0113746573742d726573756c74732f766964656f73",
       "name": "video_start"
     },
