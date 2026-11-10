@@ -10,6 +10,8 @@
 //! unchanged. Rejections print as error lines and never abort the
 //! session — a debugging tool must survive its user's mistakes.
 
+use std::fmt::Write;
+
 use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
@@ -128,18 +130,32 @@ impl Repl {
         }
         let tokens = match tokenize(trimmed) {
             Ok(tokens) => tokens,
-            Err(err) => return self.err(err),
+            Err(err) => return Self::err(err),
         };
         match self.execute(&tokens).await {
             Ok(lines) => StepOutcome {
                 lines,
                 exit: self.exit_requested,
             },
-            Err(err) => self.err(err),
+            Err(err) => Self::err(err),
         }
     }
 
-    fn err(&self, message: impl Into<String>) -> StepOutcome {
+    /// The `last` line: the current node's identity + rect (§8.2 output).
+    fn render_current(node: Option<&CurrentNode>) -> Line {
+        match node {
+            Some(node) => {
+                let mut text = format!("{} (generation {})", node.describe, node.generation);
+                if let Some([x0, y0, x1, y1]) = node.rect {
+                    let _ = write!(text, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+                }
+                Line::Ok(text)
+            }
+            None => Line::Info("no node resolved — run `get …` first".into()),
+        }
+    }
+
+    fn err(message: impl Into<String>) -> StepOutcome {
         StepOutcome {
             lines: vec![Line::Err(message.into())],
             exit: false,
@@ -155,7 +171,7 @@ impl Repl {
 
     async fn execute(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
         match tokens[0].as_str() {
-            "help" | "?" => Ok(self.help()),
+            "help" | "?" => Ok(Self::help()),
             "ping" => {
                 self.request(RequestV1::Ping).await?;
                 Ok(vec![Line::Ok("pong".into())])
@@ -174,16 +190,7 @@ impl Repl {
                 self.timeout_ms = ms;
                 Ok(vec![Line::Ok(format!("timeout = {ms} ms"))])
             }
-            "last" => Ok(vec![match &self.current {
-                Some(node) => {
-                    let mut text = format!("{} (generation {})", node.describe, node.generation);
-                    if let Some([x0, y0, x1, y1]) = node.rect {
-                        text.push_str(&format!(" rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]"));
-                    }
-                    Line::Ok(text)
-                }
-                None => Line::Info("no node resolved — run `get …` first".into()),
-            }]),
+            "last" => Ok(vec![Self::render_current(self.current.as_ref())]),
             "get" => self.get_command(tokens).await,
             "expect" => {
                 // The runner's assertion wording over the same resolve
@@ -314,7 +321,7 @@ impl Repl {
             } => {
                 let mut rendered = format!("resolved {describe} (generation {generation})");
                 if let Some([x0, y0, x1, y1]) = rect {
-                    rendered.push_str(&format!(" rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]"));
+                    let _ = write!(rendered, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
                 }
                 self.current = Some(CurrentNode {
                     node,
@@ -446,7 +453,7 @@ impl Repl {
     /// the raw batch from its adapter's pacing table.
     async fn mouse_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
         match tokens.get(1).map(String::as_str) {
-            Some("click") | Some("dblclick") => {
+            Some("click" | "dblclick") => {
                 let count = if tokens[1] == "dblclick" { 2 } else { 1 };
                 let (x, y) = two_nums(tokens, 2, "mouse click <x> <y> [right|middle]")?;
                 let button = pointer_button(tokens.get(4))?;
@@ -552,9 +559,7 @@ impl Repl {
                 paused,
                 steps,
             } => {
-                let time = virtual_time_ms
-                    .map(|ms| format!("{ms}ms"))
-                    .unwrap_or_else(|| "wall".into());
+                let time = virtual_time_ms.map_or_else(|| "wall".into(), |ms| format!("{ms}ms"));
                 Ok(vec![Line::Ok(format!(
                     "clock: virtual={time} paused={paused} steps={steps}"
                 ))])
@@ -675,7 +680,7 @@ impl Repl {
 
     // --- help -------------------------------------------------------------------------
 
-    fn help(&self) -> Vec<Line> {
+    fn help() -> Vec<Line> {
         [
             "commands:",
             "  ping                        liveness probe",
@@ -808,9 +813,7 @@ fn parse_num(token: &str, what: &str) -> Result<f64, String> {
 
 /// Two f64 arguments starting at `start` (e.g. `mouse click <x> <y>`).
 fn two_nums(tokens: &[String], start: usize, usage: &str) -> Result<(f64, f64), String> {
-    let x = tokens
-        .get(start)
-        .ok_or_else(|| format!("usage: {usage}"))?;
+    let x = tokens.get(start).ok_or_else(|| format!("usage: {usage}"))?;
     let y = tokens
         .get(start + 1)
         .ok_or_else(|| format!("usage: {usage}"))?;
@@ -818,11 +821,7 @@ fn two_nums(tokens: &[String], start: usize, usage: &str) -> Result<(f64, f64), 
 }
 
 /// Four f64 arguments starting at `start` (e.g. `mouse drag <x1> <y1> <x2> <y2>`).
-fn four_nums(
-    tokens: &[String],
-    start: usize,
-    usage: &str,
-) -> Result<(f64, f64, f64, f64), String> {
+fn four_nums(tokens: &[String], start: usize, usage: &str) -> Result<(f64, f64, f64, f64), String> {
     let (x1, y1) = two_nums(tokens, start, usage)?;
     let x2 = tokens
         .get(start + 2)
@@ -836,12 +835,10 @@ fn four_nums(
 /// The optional trailing button word (`right` / `middle`); default primary.
 fn pointer_button(token: Option<&String>) -> Result<PointerButtonV1, String> {
     match token.map(String::as_str) {
-        None | Some("left") | Some("primary") => Ok(PointerButtonV1::Primary),
-        Some("right") | Some("secondary") => Ok(PointerButtonV1::Secondary),
+        None | Some("left" | "primary") => Ok(PointerButtonV1::Primary),
+        Some("right" | "secondary") => Ok(PointerButtonV1::Secondary),
         Some("middle") => Ok(PointerButtonV1::Middle),
-        Some(other) => Err(format!(
-            "unknown button `{other}` — left | right | middle"
-        )),
+        Some(other) => Err(format!("unknown button `{other}` — left | right | middle")),
     }
 }
 
