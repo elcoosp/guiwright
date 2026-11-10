@@ -21,7 +21,11 @@ fn socket_path(tag: &str) -> std::path::PathBuf {
 
 /// Rendered output of one step (what the front-end would print).
 fn rendered(outcome: &guiwright_cli::StepOutcome) -> Vec<String> {
-    outcome.lines.iter().map(|line| line.render()).collect()
+    outcome
+        .lines
+        .iter()
+        .map(guiwright_cli::Line::render)
+        .collect()
 }
 
 fn ok_line(outcome: &guiwright_cli::StepOutcome) -> &str {
@@ -77,9 +81,9 @@ async fn full_repl_session_over_uds() {
 
     // Blank lines and comments produce no output.
     let empty = repl.step("   ").await;
-    assert!(empty.lines.is_empty());
+    assert_eq!(empty.lines.len(), 0);
     let comment = repl.step("# a comment").await;
-    assert!(comment.lines.is_empty());
+    assert_eq!(comment.lines.len(), 0);
 
     // Liveness.
     assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
@@ -106,121 +110,12 @@ async fn full_repl_session_over_uds() {
         vec!["error: no node resolved — run `get …` first"]
     );
 
-    // Locator resolution (§8): lowercase role canonicalizes; the rect is
-    // the fixture's Save button bounds.
-    let save = repl.step("get role button Save").await;
-    assert_eq!(
-        ok_line(&save),
-        "resolved Button \"Save\" (generation 0) rect=[16,16 → 136,48]"
-    );
-    assert!(repl.current().is_some());
+    // Locator + action surface (§8/§15.4), clock + mock domains (§14).
+    locator_and_action_surface(&mut repl).await;
+    clock_and_mock_domains(&mut repl).await;
 
-    // `last` shows the current handle.
-    assert_eq!(
-        rendered(&repl.step("last").await),
-        vec![r#"Button "Save" (generation 0) rect=[16,16 → 136,48]"#]
-    );
-
-    // Actions apply at a frame boundary (§15.4).
-    let click = repl.step("click").await;
-    let line = ok_line(&click);
-    assert!(
-        line.starts_with(r#"Button "Save": clicked (frame "#),
-        "{line}"
-    );
-    assert!(line.ends_with(')'), "{line}");
-
-    // Strict-mode violation: two buttons match — a single error line and
-    // a usable session (§8.2).
-    let ambiguous = repl.step("get role Button").await;
-    assert_eq!(ambiguous.lines.len(), 1);
-    assert!(
-        rendered(&ambiguous)[0].starts_with("error: strict-mode:"),
-        "{:?}",
-        rendered(&ambiguous)
-    );
-
-    // Fill flows through SetValue on the email input.
-    let email = repl.step("get role TextInput Email").await;
-    assert_eq!(
-        ok_line(&email),
-        "resolved TextInput \"Email\" (generation 0) rect=[16,128 → 256,156]"
-    );
-    let fill = repl.step("fill ada@lovelace.dev").await;
-    let line = ok_line(&fill);
-    assert!(line.starts_with(r#"TextInput "Email": "#), "{line}");
-    assert!(line.contains("(frame "), "{line}");
-
-    // Quoted arguments survive spaces.
-    let welcome = repl.step(r#"get text "Welcome, Ada""#).await;
-    assert_eq!(
-        ok_line(&welcome),
-        "resolved text \"Welcome, Ada\" (generation 0) rect=[16,96 → 216,120]"
-    );
-
-    // Clock domain (§14): install + stepped fast-forward, reported in ms.
-    assert_eq!(
-        rendered(&repl.step("clock install").await),
-        vec!["clock: virtual=0ms paused=false steps=0"]
-    );
-    let ff = repl.step("clock ff 50").await;
-    let line = ok_line(&ff);
-    // 50ms folds into frame-sized 16.67ms steps and settles between them.
-    assert!(
-        line.starts_with("clock: virtual=50ms paused=false steps="),
-        "{line}"
-    );
-    assert!(!line.ends_with("steps=0"), "{line}");
-
-    // Mock domain (§14 state seams): canned override → clear → real hook
-    // → reset, exactly the M2 spike flow over REPL commands.
-    assert_eq!(
-        rendered(&repl.step("mock install seed_users canned").await),
-        vec!["mock seed_users: seam override installed"]
-    );
-    assert_eq!(
-        rendered(&repl.step("mock call seed_users demo").await),
-        vec!["mock seed_users: canned"]
-    );
-    assert_eq!(
-        rendered(&repl.step("mock clear seed_users").await),
-        vec!["mock seed_users: seam override cleared"]
-    );
-    assert_eq!(
-        rendered(&repl.step("mock call seed_users demo").await),
-        vec!["mock seed_users: 3 users seeded"]
-    );
-    assert_eq!(
-        rendered(&repl.step("mock reset fresh").await),
-        vec!["mock fresh: state reset to fresh"]
-    );
-
-    // Codegen over the wire (§13, M4): recorded actions emit kit code.
-    assert_eq!(
-        rendered(&repl.step("codegen start").await).len(),
-        1,
-        "start acknowledges"
-    );
-    let _ = repl.step("get role Button Save").await;
-    let _ = repl.step("click").await;
-    let stop = repl.step("codegen stop").await;
-    assert_eq!(
-        ok_line(&stop),
-        "codegen: 1 line(s), 0 warning(s)",
-        "{:?}",
-        rendered(&stop)
-    );
-    assert_eq!(
-        rendered(&stop)[1],
-        r#"app.get_by_role(Role::Button, "Save").click();"#
-    );
-
-    // Codegen stop without a recording is a clean error.
-    let stop_again = repl.step("codegen stop").await;
-    assert_eq!(
-        rendered(&stop_again),
-        vec!["error: Internal: no codegen recording is active"]
-    );
+    // Codegen recording (§13, M4 + the §13-over-§9 gesture vocabulary).
+    codegen_recording(&mut repl).await;
 
     // Timeout path (§8.2): a short deadline surfaces the server-side
     // auto-wait failure as one error line.
@@ -270,7 +165,9 @@ async fn repl_conversation_over_tcp() {
     .expect("tcp server binds");
     let addr = match handle.endpoint() {
         guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
-        other => panic!("expected TCP endpoint, got {other:?}"),
+        guiwright_driver::server::Endpoint::Uds(_) => {
+            panic!("expected TCP endpoint")
+        }
     };
 
     let mut repl = Repl::connect(&ConnectTarget::Tcp(addr.to_string()))
@@ -419,7 +316,7 @@ async fn repl_window_domain() {
         .expect("w2 line");
     assert!(w2_line.contains("Preview"), "{w2_line}");
     assert!(
-        !out.iter().any(|l| l.starts_with("*")),
+        !out.iter().any(|l| l.starts_with('*')),
         "no active target yet: {out:?}"
     );
 
@@ -539,7 +436,10 @@ async fn repl_input_and_gestures() {
     for cmd in ["mouse move 5 6", "mouse down 1 2", "mouse up 1 2"] {
         let out = rendered(&repl.step(cmd).await);
         assert_eq!(out.len(), 1, "{cmd}: {out:?}");
-        assert!(out[0].starts_with("input queued @ frame "), "{cmd}: {out:?}");
+        assert!(
+            out[0].starts_with("input queued @ frame "),
+            "{cmd}: {out:?}"
+        );
     }
 
     // Usage errors are single error lines and leave the session usable.
@@ -562,11 +462,163 @@ async fn repl_input_and_gestures() {
 
     // The help text names the new domains.
     let out = rendered(&repl.step("help").await);
-    assert!(
-        out.iter().any(|l| l.contains("mouse click")),
-        "{out:?}"
-    );
+    assert!(out.iter().any(|l| l.contains("mouse click")), "{out:?}");
     assert!(out.iter().any(|l| l.contains("key <key>")), "{out:?}");
 
     handle.shutdown();
+}
+
+/// The §8 locator/action surface over one session: resolution, `last`,
+/// frame-boundary actions, strict mode, `fill`, quoted arguments.
+async fn locator_and_action_surface(repl: &mut Repl) {
+    // Lowercase role canonicalizes; the rect is the fixture's Save button
+    // bounds.
+    let save = repl.step("get role button Save").await;
+    assert_eq!(
+        ok_line(&save),
+        "resolved Button \"Save\" (generation 0) rect=[16,16 → 136,48]"
+    );
+    assert!(repl.current().is_some());
+
+    // `last` shows the current handle.
+    assert_eq!(
+        rendered(&repl.step("last").await),
+        vec![r#"Button "Save" (generation 0) rect=[16,16 → 136,48]"#]
+    );
+
+    // Actions apply at a frame boundary (§15.4).
+    let click = repl.step("click").await;
+    let line = ok_line(&click);
+    assert!(
+        line.starts_with(r#"Button "Save": clicked (frame "#),
+        "{line}"
+    );
+    assert!(line.ends_with(')'), "{line}");
+
+    // Strict-mode violation: two buttons match — a single error line and
+    // a usable session (§8.2).
+    let ambiguous = repl.step("get role Button").await;
+    assert_eq!(ambiguous.lines.len(), 1);
+    assert!(
+        rendered(&ambiguous)[0].starts_with("error: strict-mode:"),
+        "{:?}",
+        rendered(&ambiguous)
+    );
+
+    // Fill flows through SetValue on the email input.
+    let email = repl.step("get role TextInput Email").await;
+    assert_eq!(
+        ok_line(&email),
+        "resolved TextInput \"Email\" (generation 0) rect=[16,128 → 256,156]"
+    );
+    let fill = repl.step("fill ada@lovelace.dev").await;
+    let line = ok_line(&fill);
+    assert!(line.starts_with(r#"TextInput "Email": "#), "{line}");
+    assert!(line.contains("(frame "), "{line}");
+
+    // Quoted arguments survive spaces.
+    let welcome = repl.step(r#"get text "Welcome, Ada""#).await;
+    assert_eq!(
+        ok_line(&welcome),
+        "resolved text \"Welcome, Ada\" (generation 0) rect=[16,96 → 216,120]"
+    );
+}
+
+/// The §14 clock + mock domains over one session: stepped fast-forward,
+/// canned seams → clear → real hook → reset (the M2 spike flow).
+async fn clock_and_mock_domains(repl: &mut Repl) {
+    // Clock (§14): install + stepped fast-forward, reported in ms.
+    assert_eq!(
+        rendered(&repl.step("clock install").await),
+        vec!["clock: virtual=0ms paused=false steps=0"]
+    );
+    let ff = repl.step("clock ff 50").await;
+    let line = ok_line(&ff);
+    // 50ms folds into frame-sized 16.67ms steps and settles between them.
+    assert!(
+        line.starts_with("clock: virtual=50ms paused=false steps="),
+        "{line}"
+    );
+    assert_ne!(line.chars().last(), Some('0'), "{line}");
+
+    // Mock domain (§14 state seams): canned override → clear → real hook
+    // → reset, exactly the M2 spike flow over REPL commands.
+    assert_eq!(
+        rendered(&repl.step("mock install seed_users canned").await),
+        vec!["mock seed_users: seam override installed"]
+    );
+    assert_eq!(
+        rendered(&repl.step("mock call seed_users demo").await),
+        vec!["mock seed_users: canned"]
+    );
+    assert_eq!(
+        rendered(&repl.step("mock clear seed_users").await),
+        vec!["mock seed_users: seam override cleared"]
+    );
+    assert_eq!(
+        rendered(&repl.step("mock call seed_users demo").await),
+        vec!["mock seed_users: 3 users seeded"]
+    );
+    assert_eq!(
+        rendered(&repl.step("mock reset fresh").await),
+        vec!["mock fresh: state reset to fresh"]
+    );
+}
+
+/// The §13 codegen surface over one session: locator actions record as
+/// kit code, stop-without-recording is a clean error, and the gesture
+/// vocabulary (§13 over §9) records as `app.mouse()` / `app.keyboard()`
+/// calls.
+async fn codegen_recording(repl: &mut Repl) {
+    // Locator actions record as kit code (§13, M4).
+    assert_eq!(
+        rendered(&repl.step("codegen start").await).len(),
+        1,
+        "start acknowledges"
+    );
+    let _ = repl.step("get role Button Save").await;
+    let _ = repl.step("click").await;
+    let stop = repl.step("codegen stop").await;
+    assert_eq!(
+        ok_line(&stop),
+        "codegen: 1 line(s), 0 warning(s)",
+        "{:?}",
+        rendered(&stop)
+    );
+    assert_eq!(
+        rendered(&stop)[1],
+        r#"app.get_by_role(Role::Button, "Save").click();"#
+    );
+
+    // Codegen stop without a recording is a clean error.
+    let stop_again = repl.step("codegen stop").await;
+    assert_eq!(
+        rendered(&stop_again),
+        vec!["error: Internal: no codegen recording is active"]
+    );
+
+    // The gesture vocabulary records too (§13 over §9): the REPL's mouse /
+    // key commands land as kit code while a recording runs.
+    assert_eq!(
+        rendered(&repl.step("codegen start").await).len(),
+        1,
+        "start acknowledges"
+    );
+    let _ = repl.step("mouse click 10 20").await;
+    let _ = repl.step("key Enter").await;
+    let stop_gestures = repl.step("codegen stop").await;
+    assert_eq!(
+        ok_line(&stop_gestures),
+        "codegen: 2 line(s), 0 warning(s)",
+        "{:?}",
+        rendered(&stop_gestures)
+    );
+    assert_eq!(
+        rendered(&stop_gestures)[1],
+        "app.mouse().click(10.0, 20.0);"
+    );
+    assert_eq!(
+        rendered(&stop_gestures)[2],
+        "app.keyboard().press(\"Enter\");"
+    );
 }
