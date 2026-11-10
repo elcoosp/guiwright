@@ -518,95 +518,18 @@ impl TreeService {
             .collect())
     }
 
-    /// Index-first candidate generation (§8.2 step 1).
+    /// Index-first candidate generation (§8.2 step 1): one arm per
+    /// selector family, each extracted into its own `*_candidates` method
+    /// so the dispatch stays readable and every index stays next to the
+    /// query that owns it.
     fn candidate_keys(&self, selector: &Selector) -> Result<Vec<NodeKey>, CoreError> {
         if self.tree.is_none() {
             return Ok(Vec::new());
         }
         match selector {
-            Selector::Role { role, name } => {
-                let mut out = match name {
-                    None => self.index.by_role.get(role).cloned().unwrap_or_default(),
-                    Some(m) if m.exact && !m.ignore_case => {
-                        // Exact case-sensitive: hash lookup misses case
-                        // variants, so scan the role bucket.
-                        self.index
-                            .by_role
-                            .get(role)
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|k| self.role_name_matches(k, m))
-                            .collect()
-                    }
-                    Some(m) if m.exact && m.ignore_case => self
-                        .index
-                        .by_role_name
-                        .get(&(*role, m.pattern.as_str().to_lowercase()))
-                        .cloned()
-                        .unwrap_or_default(),
-                    Some(m) => self
-                        .index
-                        .by_role
-                        .get(role)
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|k| self.role_name_matches(k, m))
-                        .collect(),
-                };
-                out.sort_dedup();
-                Ok(out)
-            }
-            Selector::Label(m) => {
-                let mut out = match m.exact && m.ignore_case {
-                    true => self
-                        .index
-                        .by_label
-                        .get(&m.pattern.as_str().to_lowercase())
-                        .cloned()
-                        .unwrap_or_default(),
-                    false => self
-                        .index
-                        .by_label
-                        .values()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<_>>(),
-                };
-                if !(m.exact && m.ignore_case) {
-                    out.retain(|k| self.label_matches(k, m));
-                }
-                out.sort_dedup();
-                Ok(out)
-            }
-            Selector::Text(m) => {
-                // Text matches label *or* value (Playwright matches visible
-                // text; AccessKit exposes text through labels and values).
-                let mut out: Vec<NodeKey> = Vec::new();
-                if m.exact && m.ignore_case {
-                    let needle = m.pattern.as_str().to_lowercase();
-                    out.extend(
-                        self.index
-                            .by_label
-                            .get(&needle)
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
-                    out.extend(
-                        self.index
-                            .by_value
-                            .get(&needle)
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
-                } else {
-                    out.extend(self.index.all.iter().copied());
-                }
-                out.retain(|k| self.text_matches(k, m));
-                out.sort_dedup();
-                Ok(out)
-            }
+            Selector::Role { role, name } => Ok(self.role_candidates(*role, name.as_ref())),
+            Selector::Label(m) => Ok(self.label_candidates(m)),
+            Selector::Text(m) => Ok(self.text_candidates(m)),
             Selector::TestId(id) => Ok(self
                 .index
                 .test_ids
@@ -614,90 +537,197 @@ impl TreeService {
                 .copied()
                 .map(|k| vec![k])
                 .unwrap_or_default()),
-            Selector::Value(m) => {
-                let mut out = match m.exact && m.ignore_case {
-                    true => self
-                        .index
-                        .by_value
-                        .get(&m.pattern.as_str().to_lowercase())
-                        .cloned()
-                        .unwrap_or_default(),
-                    false => self
-                        .index
-                        .by_value
-                        .values()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<_>>(),
-                };
-                if !(m.exact && m.ignore_case) {
-                    out.retain(|k| self.value_matches(k, m));
-                }
-                out.sort_dedup();
-                Ok(out)
-            }
-            Selector::All(chain) => {
-                let mut current = self.resolve_all(&chain[0])?;
-                for link in &chain[1..] {
-                    let mut next = Vec::new();
-                    for parent in &current {
-                        self.descendants(&parent.key, &mut |key, _| {
-                            if self.matches_selector(key, link) && !next.contains(&key) {
-                                next.push(key);
-                            }
-                        });
-                    }
-                    current = next
-                        .into_iter()
-                        .map(|key| Resolved {
-                            key,
-                            generation: self.generation(&key),
-                            bounds: self.node(&key).and_then(|n| n.bounding_box()),
-                        })
-                        .collect();
-                }
-                Ok(current.into_iter().map(|r| r.key).collect())
-            }
+            Selector::Value(m) => Ok(self.value_candidates(m)),
+            Selector::All(chain) => self.all_candidates(chain),
             Selector::Filter {
                 source,
                 has_text,
                 has_not,
                 nth,
             } => {
-                let mut candidates = self.resolve_all(source)?;
-                if let Some(t) = has_text {
-                    candidates.retain(|r| self.subtree_has_text(&r.key, t));
-                }
-                if let Some(inner) = has_not {
-                    candidates.retain(|r| {
-                        // Exclude nodes whose subtree matches the inner selector.
-                        !self.subtree_matches_selector(&r.key, inner)
-                    });
-                }
-                if let Some(nth) = nth {
-                    let mut ordered = candidates;
-                    ordered.sort_by_key(|r| self.document_order(&r.key));
-                    match nth {
-                        Nth::First => candidates = ordered.into_iter().take(1).collect(),
-                        Nth::Last => {
-                            candidates = ordered
-                                .into_iter()
-                                .next_back()
-                                .map(|r| vec![r])
-                                .unwrap_or_default()
-                        }
-                        Nth::Index(i) => {
-                            candidates = ordered
-                                .into_iter()
-                                .nth(*i)
-                                .map(|r| vec![r])
-                                .unwrap_or_default()
-                        }
-                    }
-                }
-                Ok(candidates.into_iter().map(|r| r.key).collect())
+                self.filter_candidates(source, has_text.as_ref(), has_not.as_deref(), nth.as_ref())
             }
         }
+    }
+
+    /// `getByRole` candidates: the role bucket, narrowed by the name
+    /// match (exact case-sensitive scans, the case-insensitive hash, or
+    /// the pattern filter — §8.2).
+    fn role_candidates(&self, role: Role, name: Option<&TextMatch>) -> Vec<NodeKey> {
+        let Some(m) = name else {
+            return self.index.by_role.get(&role).cloned().unwrap_or_default();
+        };
+        let mut out = match m {
+            m if m.exact && !m.ignore_case => {
+                // Exact case-sensitive: hash lookup misses case
+                // variants, so scan the role bucket.
+                self.index
+                    .by_role
+                    .get(&role)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|k| self.role_name_matches(k, m))
+                    .collect()
+            }
+            m if m.exact && m.ignore_case => self
+                .index
+                .by_role_name
+                .get(&(role, m.pattern.as_str().to_lowercase()))
+                .cloned()
+                .unwrap_or_default(),
+            m => self
+                .index
+                .by_role
+                .get(&role)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|k| self.role_name_matches(k, m))
+                .collect(),
+        };
+        out.sort_dedup();
+        out
+    }
+
+    /// `getByLabel` candidates: the label hash for the exact
+    /// case-insensitive path, the whole label index otherwise (§8.2).
+    fn label_candidates(&self, m: &TextMatch) -> Vec<NodeKey> {
+        let mut out = if m.exact && m.ignore_case {
+            self.index
+                .by_label
+                .get(&m.pattern.as_str().to_lowercase())
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.index
+                .by_label
+                .values()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        if !(m.exact && m.ignore_case) {
+            out.retain(|k| self.label_matches(k, m));
+        }
+        out.sort_dedup();
+        out
+    }
+
+    /// `getByText` candidates: text matches label *or* value (Playwright
+    /// matches visible text; AccessKit exposes text through labels and
+    /// values).
+    fn text_candidates(&self, m: &TextMatch) -> Vec<NodeKey> {
+        let mut out: Vec<NodeKey> = Vec::new();
+        if m.exact && m.ignore_case {
+            let needle = m.pattern.as_str().to_lowercase();
+            out.extend(
+                self.index
+                    .by_label
+                    .get(&needle)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            out.extend(
+                self.index
+                    .by_value
+                    .get(&needle)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+        } else {
+            out.extend(self.index.all.iter().copied());
+        }
+        out.retain(|k| self.text_matches(k, m));
+        out.sort_dedup();
+        out
+    }
+
+    /// `getByValue` candidates (the label path over the value index).
+    fn value_candidates(&self, m: &TextMatch) -> Vec<NodeKey> {
+        let mut out = if m.exact && m.ignore_case {
+            self.index
+                .by_value
+                .get(&m.pattern.as_str().to_lowercase())
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.index
+                .by_value
+                .values()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        if !(m.exact && m.ignore_case) {
+            out.retain(|k| self.value_matches(k, m));
+        }
+        out.sort_dedup();
+        out
+    }
+
+    /// Chained `All` candidates: resolve the head, then narrow through
+    /// every link's subtree (§8.2 "filter chains").
+    fn all_candidates(&self, chain: &[Selector]) -> Result<Vec<NodeKey>, CoreError> {
+        let mut current = self.resolve_all(&chain[0])?;
+        for link in &chain[1..] {
+            let mut next = Vec::new();
+            for parent in &current {
+                self.descendants(&parent.key, &mut |key, _| {
+                    if self.matches_selector(key, link) && !next.contains(&key) {
+                        next.push(key);
+                    }
+                });
+            }
+            current = next
+                .into_iter()
+                .map(|key| Resolved {
+                    key,
+                    generation: self.generation(&key),
+                    bounds: self.node(&key).and_then(|n| n.bounding_box()),
+                })
+                .collect();
+        }
+        Ok(current.into_iter().map(|r| r.key).collect())
+    }
+
+    /// `Filter` candidates: `has_text` / `has_not` narrowing over the source
+    /// resolution, then the document-order `nth` pick (§8.1 filters).
+    fn filter_candidates(
+        &self,
+        source: &Selector,
+        has_text: Option<&TextMatch>,
+        has_not: Option<&Selector>,
+        nth: Option<&Nth>,
+    ) -> Result<Vec<NodeKey>, CoreError> {
+        let mut candidates = self.resolve_all(source)?;
+        if let Some(t) = has_text {
+            candidates.retain(|r| self.subtree_has_text(&r.key, t));
+        }
+        if let Some(inner) = has_not {
+            candidates.retain(|r| {
+                // Exclude nodes whose subtree matches the inner selector.
+                !self.subtree_matches_selector(&r.key, inner)
+            });
+        }
+        if let Some(nth) = nth {
+            let mut ordered = candidates;
+            ordered.sort_by_key(|r| self.document_order(&r.key));
+            candidates = match nth {
+                Nth::First => ordered.into_iter().take(1).collect(),
+                Nth::Last => ordered
+                    .into_iter()
+                    .next_back()
+                    .map(|r| vec![r])
+                    .unwrap_or_default(),
+                Nth::Index(i) => ordered
+                    .into_iter()
+                    .nth(*i)
+                    .map(|r| vec![r])
+                    .unwrap_or_default(),
+            };
+        }
+        Ok(candidates.into_iter().map(|r| r.key).collect())
     }
 
     /// Does `key` itself satisfy `selector`? (single-node predicate,
@@ -829,10 +859,10 @@ impl TreeService {
             role: node
                 .as_ref()
                 .map_or("?".into(), |n| format!("{:?}", n.role())),
-            name: node.as_ref().and_then(|n| n.label()),
+            name: node.as_ref().and_then(NodeRef::label),
             bounds: node
                 .as_ref()
-                .and_then(|n| n.bounding_box())
+                .and_then(NodeRef::bounding_box)
                 .map(|r| format!("{r:?}")),
         }
     }
