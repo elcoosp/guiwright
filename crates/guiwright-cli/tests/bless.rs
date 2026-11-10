@@ -78,7 +78,7 @@ fn bless_promotes_artifacts_and_removes_diffs() {
 
     // A second run finds nothing.
     let again = bless_dir(root, false).expect("idempotent");
-    assert!(again.is_empty());
+    assert_eq!(again.len(), 0);
 }
 
 #[test]
