@@ -237,3 +237,55 @@ fn dynamic_ui_update_is_observed_by_waiters() {
         .to_be_visible()
         .expect("greeting appears after the state change");
 }
+
+/// The inspector overlay composites inside the pass (§13, M8): the
+/// frame digest changes once the overlay session paints the highlight —
+/// the "overlay on top of the app's scene at present time" contract,
+/// observed through the same hash the stability checks consume.
+#[test]
+fn inspect_overlay_paints_into_the_pass() {
+    use accesskit::Role;
+
+    let (mut session, _state) = counter_session();
+
+    // The digest before the overlay session: a static app re-presents
+    // identical frames (same pass shape, no overlay shapes).
+    let baseline = last_frame_digest(&mut session);
+
+    // Highlight the Save button: the session hands the plan to the
+    // adapter and the next pass composites outline + badges.
+    let facts = session
+        .inspect_highlight(&Selector::role_named(Role::Button, "Save"))
+        .expect("highlight resolves");
+    assert_eq!(facts.name.as_deref(), Some("Save"));
+    assert!(
+        session.adapter().overlay().is_some(),
+        "the adapter holds the plan"
+    );
+    let with_overlay = last_frame_digest(&mut session);
+    assert_ne!(
+        baseline, with_overlay,
+        "the overlay's outline + badge shapes changed the scene digest"
+    );
+
+    // Disabling stops compositing: the digest returns to the app-only
+    // scene.
+    session.inspect_disable_overlay().expect("overlay off");
+    assert!(session.adapter().overlay().is_none());
+    let after_disable = last_frame_digest(&mut session);
+    assert_eq!(
+        baseline, after_disable,
+        "the scene is back to the app-only digest"
+    );
+}
+
+/// The adapter's frame digest of one fresh pump (the §10 scene hash),
+/// as integrated by the tree service.
+fn last_frame_digest(session: &mut Session<EguiAdapter>) -> u64 {
+    session.pump();
+    session
+        .tree()
+        .last_frame()
+        .map(|info| info.hash)
+        .expect("every egui pump presents one frame")
+}
