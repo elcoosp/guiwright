@@ -47,11 +47,11 @@ pub struct TraceArchive {
     pub meta: TraceMeta,
     pub events: Vec<ArchiveEvent>,
     pub logs: Vec<String>,
-    /// `trees/<seq>.bin` — frame_seq → snapshot (postcard+LZ4).
+    /// `trees/<seq>.bin` — `frame_seq` → snapshot (postcard+LZ4).
     pub snapshots: BTreeMap<u64, TreeSnapshot>,
     /// `trees/diff.bin` — sequential diffs (recovered blob boundaries).
     pub diffs: Vec<TreeDiffRecord>,
-    /// `index.bin` — frame_seq → offsets (O(1) random access, §12).
+    /// `index.bin` — `frame_seq` → offsets (O(1) random access, §12).
     pub frame_index: Vec<FrameIndexEntry>,
     /// `clock.bin` — virtual-time ledger (§14).
     pub clock: Vec<ClockJump>,
@@ -108,7 +108,7 @@ impl TraceArchive {
         for name in zip
             .file_names()
             .filter_map(Result::ok)
-            .map(|n| n.into_owned().to_string())
+            .map(std::borrow::Cow::into_owned)
             .collect::<Vec<_>>()
         {
             let Some(rest) = name.strip_prefix("trees/") else {
@@ -149,7 +149,7 @@ impl TraceArchive {
         for name in zip
             .file_names()
             .filter_map(Result::ok)
-            .map(|n| n.into_owned().to_string())
+            .map(std::borrow::Cow::into_owned)
             .collect::<Vec<_>>()
         {
             let Some(rest) = name.strip_prefix("frames/") else {
