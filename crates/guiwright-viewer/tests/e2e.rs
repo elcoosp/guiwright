@@ -157,13 +157,14 @@ fn full_pipeline_recorder_to_html() {
 
 #[test]
 fn schema_mismatch_is_rejected() {
+    use std::io::Write as _;
+
     let tmp = tempfile::tempdir().expect("tmp");
     let path = tmp.path().join("foreign.zip");
     let file = std::fs::File::create(&path).expect("create");
     let mut zip = zip::ZipWriter::new(file);
     zip.start_file("meta.json", zip::write::SimpleFileOptions::default())
         .expect("start");
-    use std::io::Write as _;
     zip.write_all(br#"{"schema":"other/v9"}"#).expect("write");
     zip.finish().expect("finish");
 
@@ -189,8 +190,8 @@ fn empty_run_opens_with_no_content() {
     recorder.stop().expect("archive written");
 
     let archive = TraceArchive::open(&path).expect("archive opens");
-    assert!(archive.diffs.is_empty());
-    assert!(archive.events.is_empty());
+    assert_eq!(archive.diffs.len(), 0);
+    assert_eq!(archive.events.len(), 0);
     let timeline = Timeline::from_archive(&archive);
     assert!(timeline.is_empty(), "no frames recorded");
 }
