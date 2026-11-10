@@ -13,7 +13,8 @@ use guiwright_bench::budgets::{Budget, CI_HEADROOM, budgets};
 
 fn percentile(samples: &mut [Duration], p: f64) -> Duration {
     samples.sort_unstable();
-    let idx = ((samples.len() as f64 - 1.0) * p).round() as usize;
+    let idx = usize::try_from(((samples.len() as f64 - 1.0) * p).round() as i64)
+        .unwrap_or(samples.len().saturating_sub(1));
     samples.get(idx).copied().unwrap_or(Duration::ZERO)
 }
 
