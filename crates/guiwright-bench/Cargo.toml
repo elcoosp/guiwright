@@ -21,6 +21,7 @@ twox-hash.workspace = true
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
 guiwright-viewer.workspace = true
+guiwright-kit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
 
 [dev-dependencies]
@@ -33,3 +34,6 @@ harness = false
 [[bench]]
 name = "codec"
 harness = false
+
+[lints]
+workspace = true
