@@ -20,7 +20,7 @@ use guiwright_core::{CoreError, NodeKey, Selector};
 
 use crate::adapter::{ActionOutcome, FrameDeadline, FrameworkAdapter, InputEvent, SemAction};
 use crate::clock::{ClockReport, ClockService, LedgerCommand};
-use crate::gesture::{Gesture, synthesize};
+use crate::gesture::{Gesture, codegen_call, codegen_event_call, codegen_line, synthesize};
 use crate::seams::SeamRegistry;
 use guiwright_trace::video::{VideoOptions, VideoRecorder, VideoSummary};
 
@@ -62,18 +62,8 @@ fn gesture_detail(gesture: &Gesture, events: usize) -> String {
         format!("{events} events")
     };
     match gesture {
-        Gesture::Click {
-            x,
-            y,
-            count: 1,
-            ..
-        } => format!("clicked at ({x}, {y}) — {n}"),
-        Gesture::Click {
-            x,
-            y,
-            count: 2,
-            ..
-        } => format!("double-clicked at ({x}, {y}) — {n}"),
+        Gesture::Click { x, y, count: 1, .. } => format!("clicked at ({x}, {y}) — {n}"),
+        Gesture::Click { x, y, count: 2, .. } => format!("double-clicked at ({x}, {y}) — {n}"),
         Gesture::Click { x, y, count, .. } => {
             format!("clicked ×{count} at ({x}, {y}) — {n}")
         }
@@ -83,9 +73,7 @@ fn gesture_detail(gesture: &Gesture, events: usize) -> String {
             to_x,
             to_y,
             ..
-        } => format!(
-            "dragged ({from_x}, {from_y}) → ({to_x}, {to_y}) — {n}"
-        ),
+        } => format!("dragged ({from_x}, {from_y}) → ({to_x}, {to_y}) — {n}"),
         Gesture::Wheel { dx, dy } => format!("wheeled ({dx}, {dy}) — {n}"),
         Gesture::Key { key, modifiers } if modifiers.is_empty() => {
             format!("pressed {key} — {n}")
@@ -271,7 +259,7 @@ impl<A: FrameworkAdapter> Session<A> {
             std::process::id(),
             guiwright_trace::video::epoch_ms()
         ));
-        let recorder = VideoRecorder::start(path, VideoOptions::new(fps))
+        let recorder = VideoRecorder::start(path, &VideoOptions::new(fps))
             .map_err(|e| CoreError::Other(format!("video start: {e}")))?;
         self.video = Some(recorder);
         Ok(())
@@ -339,8 +327,9 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Record one applied GWP action into the codegen recorder (§13
     /// "captured at the adapter tap"): facts come from the session's tree
     /// service, the §13 cost model picks the minimal stable selector.
-    /// `Scroll` is a raw-input gesture (§9), not a locator action — it is
-    /// not recorded (recorded in the gesture milestone).
+    /// `Scroll` is a raw-input gesture (§9) with no target node — the
+    /// gesture vocabulary records through `perform_gesture`/`send_input`
+    /// instead (the §13-over-§9 path).
     ///
     /// Called with the *pre-action* tree state: the node is exactly what
     /// the client targeted, before the action's own side effects land.
@@ -500,8 +489,21 @@ impl<A: FrameworkAdapter> Session<A> {
         window: Option<&str>,
     ) -> Result<u64, CoreError> {
         let target = self.input_target(window)?;
+        // §13 over §9: raw pointer primitives record while a codegen
+        // recording runs (keyboard primitives ride the gesture vocabulary,
+        // see `codegen_event_call`). Rendered before the batch moves into
+        // the adapter, landed after the rendezvous pump confirms it.
+        let recorded: Vec<_> = if self.codegen.is_some() {
+            events.iter().filter_map(codegen_event_call).collect()
+        } else {
+            Vec::new()
+        };
         self.inject(events, &target)?;
         self.pump();
+        for (surface, call) in recorded {
+            let line = codegen_line(surface, &call, window);
+            self.codegen_input_line(line, None);
+        }
         Ok(self.frame_seq)
     }
 
@@ -525,11 +527,33 @@ impl<A: FrameworkAdapter> Session<A> {
         let count = events.len();
         self.inject(events, &target)?;
         self.pump();
+        // §13 over §9: the applied gesture records as kit code (the
+        // promise the semantic-action path carried since M0 — raw input is
+        // recorded in the gesture milestone). Recorded only after the
+        // batch actually applied; a failed gesture records nothing.
+        if self.codegen.is_some() {
+            let (surface, call, warning) = codegen_call(&gesture);
+            let line = codegen_line(surface, &call, window);
+            self.codegen_input_line(line, warning);
+        }
         Ok(GestureOutcome {
             applied_at_frame: self.frame_seq,
             events: count,
             detail: gesture_detail(&gesture, count),
         })
+    }
+
+    /// Land one raw-input codegen line (§13): pre-rendered by the
+    /// [`crate::gesture`] renderer, no selector to validate.
+    fn codegen_input_line(&mut self, line: String, warning: Option<String>) {
+        let Some(mut recorder) = self.codegen.take() else {
+            return;
+        };
+        if let Some(warning) = warning {
+            recorder.warn(warning);
+        }
+        recorder.record_raw(line);
+        self.codegen = Some(recorder);
     }
 
     /// Forward a synthesized/raw batch through the adapter's window-aware
