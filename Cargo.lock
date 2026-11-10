@@ -1823,6 +1823,7 @@ dependencies = [
  "criterion",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-kit",
  "guiwright-proto",
  "guiwright-shot",
  "guiwright-trace",
@@ -1893,6 +1894,7 @@ name = "guiwright-kit"
 version = "0.1.0"
 dependencies = [
  "accesskit 0.25.2",
+ "accesskit_consumer 0.39.2",
  "guiwright-core",
  "guiwright-driver",
  "guiwright-inspect",
