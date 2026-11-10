@@ -34,7 +34,9 @@ pub use adapter::{
     PumpOutcome, SemAction, WindowInfo,
 };
 pub use clock::{ClockLedgerEntry, ClockReport, ClockService, FRAME_STEP, LedgerCommand};
-pub use gesture::{Gesture, synthesize};
+pub use gesture::{
+    CodegenSurface, Gesture, codegen_call, codegen_event_call, codegen_line, synthesize,
+};
 pub use seams::{SeamFn, SeamRegistry, SeamTask};
 pub use server::{GwpServerHandle, spawn_session_server};
 pub use session::{ActionOpts, GestureOutcome, Session};
