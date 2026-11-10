@@ -177,19 +177,19 @@ fn color_to_paint(color: Color) -> tiny_skia::Paint<'static> {
 
 /// A rounded-rect path (tiny-skia-path 0.12 has no `push_round_rect`).
 fn round_rect_path(rect: tiny_skia::Rect, radius: f32) -> Option<tiny_skia::Path> {
-    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
-    let (x, y) = (rect.left(), rect.top());
-    let (w, h) = (rect.width(), rect.height());
+    let rad = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let (left, top) = (rect.left(), rect.top());
+    let (width, height) = (rect.width(), rect.height());
     let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(x + r, y);
-    pb.line_to(x + w - r, y);
-    pb.quad_to(x + w, y, x + w, y + r);
-    pb.line_to(x + w, y + h - r);
-    pb.quad_to(x + w, y + h, x + w - r, y + h);
-    pb.line_to(x + r, y + h);
-    pb.quad_to(x, y + h, x, y + h - r);
-    pb.line_to(x, y + r);
-    pb.quad_to(x, y, x + r, y);
+    pb.move_to(left + rad, top);
+    pb.line_to(left + width - rad, top);
+    pb.quad_to(left + width, top, left + width, top + rad);
+    pb.line_to(left + width, top + height - rad);
+    pb.quad_to(left + width, top + height, left + width - rad, top + height);
+    pb.line_to(left + rad, top + height);
+    pb.quad_to(left, top + height, left, top + height - rad);
+    pb.line_to(left, top + rad);
+    pb.quad_to(left, top, left + rad, top);
     pb.close();
     pb.finish()
 }
