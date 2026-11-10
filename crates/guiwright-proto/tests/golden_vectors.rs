@@ -148,6 +148,31 @@ fn service_requests() -> Vec<(&'static str, RequestV1)> {
             "inspect_start",
             RequestV1::Inspect(InspectV1::StartRecording),
         ),
+        // M8 (§13): the overlay/highlight half of the Inspect domain.
+        (
+            "inspect_enable_overlay",
+            RequestV1::Inspect(InspectV1::EnableOverlay),
+        ),
+        (
+            "inspect_disable_overlay",
+            RequestV1::Inspect(InspectV1::DisableOverlay),
+        ),
+        (
+            "inspect_highlight",
+            RequestV1::Inspect(InspectV1::Highlight {
+                node: Some(NodeKeyV1::AccessKit {
+                    tree: [
+                        0xa6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x01,
+                    ],
+                    node: 2,
+                }),
+            }),
+        ),
+        (
+            "inspect_highlight_clear",
+            RequestV1::Inspect(InspectV1::Highlight { node: None }),
+        ),
         (
             "video_start",
             RequestV1::Video(VideoV1::Start(VideoOptsV1 {
