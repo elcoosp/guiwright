@@ -109,7 +109,7 @@ fn build_payload<'a>(archive: &'a TraceArchive, timeline: &'a Timeline) -> Paylo
         })
         .collect();
 
-    let logs = archive.logs.iter().map(|l| l.as_str()).collect();
+    let logs = archive.logs.iter().map(String::as_str).collect();
 
     Payload {
         test: &archive.meta.test,
