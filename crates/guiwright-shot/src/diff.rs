@@ -1,6 +1,6 @@
 //! The per-pixel visual metric (§10): pixelwise **weighted squared YIQ
-//! distance** (the dify semantics kittest adopted, §10 "adopt
-//! egui_kittest/dify semantics") plus a `max_failed_pixels` budget.
+//! distance** (the `dify` semantics kittest adopted, §10 "adopt
+//! `egui_kittest`/`dify` semantics) plus a `max_failed_pixels` budget.
 //!
 //! RGB → YIQ (NTSC), then the weighted squared channel distance
 //! `0.5053·Δy² + 0.299·Δi² + 0.1957·Δq²`. A pixel fails when its distance
@@ -21,15 +21,15 @@ const W_I: f32 = 0.299;
 const W_Q: f32 = 0.1957;
 
 /// RGB (0-255) → YIQ components (scaled to 0-1 domain first).
-fn rgb_to_yiq(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
-    let (r, g, b) = (
-        f32::from(r) / 255.0,
-        f32::from(g) / 255.0,
-        f32::from(b) / 255.0,
+fn rgb_to_yiq(red: u8, green: u8, blue: u8) -> (f32, f32, f32) {
+    let (red, green, blue) = (
+        f32::from(red) / 255.0,
+        f32::from(green) / 255.0,
+        f32::from(blue) / 255.0,
     );
-    let y = 0.299 * r + 0.587 * g + 0.114 * b;
-    let i = 0.5959 * r - 0.2746 * g - 0.3213 * b;
-    let q = 0.2115 * r - 0.5227 * g + 0.3112 * b;
+    let y = 0.299 * red + 0.587 * green + 0.114 * blue;
+    let i = 0.5959 * red - 0.2746 * green - 0.3213 * blue;
+    let q = 0.2115 * red - 0.5227 * green + 0.3112 * blue;
     (y, i, q)
 }
 
@@ -59,7 +59,7 @@ pub struct DiffReport {
 }
 
 impl DiffReport {
-    /// Budget check: §10 "max_failed_pixels budget".
+    /// Budget check: §10 "`max_failed_pixels` budget".
     pub fn passes(&self, max_failed_pixels: usize) -> bool {
         self.failed_pixels <= max_failed_pixels
     }
@@ -114,7 +114,9 @@ pub fn diff_image(baseline: &Image, report: &DiffReport, threshold: f32) -> Imag
     for d in &report.distances {
         if *d > threshold {
             let t = (d / threshold).min(4.0); // saturate past 4× the tolerance
-            let intensity = (128.0 * t).min(255.0) as u8;
+            // Round + clamp in f32, convert through TryFrom — no truncating
+            // or sign-losing `as` casts on the render path.
+            let intensity = u8::try_from((128.0 * t).min(255.0).round() as i64).unwrap_or(u8::MAX);
             rgba.extend_from_slice(&[intensity, 0, 0, 255]);
         } else {
             rgba.extend_from_slice(&[255, 255, 255, 255]);
