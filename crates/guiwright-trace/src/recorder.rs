@@ -156,7 +156,7 @@ impl TraceRecorder {
         let writer_flag = Arc::clone(&stop_flag);
         let join = std::thread::Builder::new()
             .name("gw-trace-writer".into())
-            .spawn(move || writer_loop(rx, options, writer_flag))
+            .spawn(move || writer_loop(&rx, &options, &writer_flag))
             .expect("spawn gw-trace-writer");
         let sink = TraceSink(tx.clone());
         (
@@ -178,8 +178,8 @@ impl TraceRecorder {
         };
         match tx.try_send(record) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => self.dropped += 1,
-            Err(TrySendError::Disconnected(_)) => {}
+            // Full ring (§12 backpressure) or a stopped writer: shed.
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => self.dropped += 1,
         }
     }
 
@@ -280,11 +280,11 @@ impl TraceRecorder {
 }
 
 fn writer_loop(
-    rx: Receiver<Record>,
-    options: TraceOptions,
-    stop_flag: Arc<AtomicBool>,
+    rx: &Receiver<Record>,
+    options: &TraceOptions,
+    stop_flag: &AtomicBool,
 ) -> Result<TraceFile, TraceError> {
-    Writer::new(options).run(rx, &stop_flag)
+    Writer::new(options.clone()).run(rx, stop_flag)
 }
 
 struct Writer {
@@ -328,7 +328,7 @@ impl Writer {
 
     fn run(
         mut self,
-        rx: Receiver<Record>,
+        rx: &Receiver<Record>,
         stop_flag: &AtomicBool,
     ) -> Result<TraceFile, TraceError> {
         // Poll-based drain: records until the stop flag (or sender EOF for
@@ -436,17 +436,17 @@ impl Writer {
         }
         let file = std::fs::File::create(&self.options.output_path)?;
         let mut zip = zip::ZipWriter::new(file);
-        write_archive(
-            &mut zip,
-            &meta_json,
-            &self.events,
-            &self.logs,
-            &self.snapshots,
-            &self.diffs,
-            &self.frames,
-            &self.clock,
-            &self.index,
-        )?;
+        write_archive(ArchiveInputs {
+            zip: &mut zip,
+            meta_json: &meta_json,
+            events: &self.events,
+            logs: &self.logs,
+            snapshots: &self.snapshots,
+            diffs: &self.diffs,
+            frames: &self.frames,
+            clock: &self.clock,
+            index: &self.index,
+        })?;
         let file = zip.finish().map_err(|e| TraceError::Zip(e.to_string()))?;
         let archive_bytes = file.metadata()?.len();
 
@@ -459,21 +459,36 @@ impl Writer {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_archive(
-    zip: &mut zip::ZipWriter<std::fs::File>,
-    meta_json: &str,
-    events: &[String],
-    logs: &[String],
-    snapshots: &[(u64, Vec<u8>)],
-    diffs: &[Vec<u8>],
-    frames: &VecDeque<FrameRecord>,
-    clock: &[ClockJump],
-    index: &[FrameIndexEntry],
-) -> Result<(), TraceError> {
+/// The archive writer's inputs (§12 layout): one `stop()`'s payload slices.
+/// A struct, not nine positional arguments — the field names carry the
+/// layout, and the caller reads like the file list it produces.
+struct ArchiveInputs<'a> {
+    zip: &'a mut zip::ZipWriter<std::fs::File>,
+    meta_json: &'a str,
+    events: &'a [String],
+    logs: &'a [String],
+    snapshots: &'a [(u64, Vec<u8>)],
+    diffs: &'a [Vec<u8>],
+    frames: &'a VecDeque<FrameRecord>,
+    clock: &'a [ClockJump],
+    index: &'a [FrameIndexEntry],
+}
+
+fn write_archive(inputs: ArchiveInputs<'_>) -> Result<(), TraceError> {
+    let ArchiveInputs {
+        zip,
+        meta_json,
+        events,
+        logs,
+        snapshots,
+        diffs,
+        frames,
+        clock,
+        index,
+    } = inputs;
     // Stored entries — compression lives in the payloads (postcard+LZ4),
     // the writer thread never re-compresses compressed records (§12).
-    let options: zip::write::SimpleFileOptions = Default::default();
+    let options = zip::write::SimpleFileOptions::default();
     let mut put = |name: &str, data: &[u8]| -> Result<(), TraceError> {
         zip.start_file(name, options)
             .map_err(|e| TraceError::Zip(e.to_string()))?;
