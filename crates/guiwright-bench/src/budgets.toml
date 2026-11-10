@@ -170,3 +170,12 @@ p95_us = 50
 notes = "§9 synthesis hot path: pacing-ratchet interpolation + event batch per gesture request; M7 micro-suite guard"
 m0_measurable = true
 sample = "gesture_synthesis"
+
+[[budget]]
+id = "kit_input_click"
+name = "Kit embedded input (one app.mouse().click end-to-end)"
+p50_us = 50
+p95_us = 300
+notes = "§9 pipeline, kit side: handle → synthesis → per-window injection → rendezvous pump; embedded-input guard"
+m0_measurable = true
+sample = "kit_input_click"
