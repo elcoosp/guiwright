@@ -72,6 +72,11 @@ pub struct MasonryAdapter<W: Widget> {
     /// False when masonry's wgpu rasterizer has no device (GPU-less host,
     /// §11: CI provisions lavapipe). Tree refresh works regardless.
     gpu_available: bool,
+    /// The inspector overlay plan (§13, M8): converted to draw ops on
+    /// demand (the `VisualLayerPlan` attachment rides the adapter
+    /// integration pass — the plan → op conversion is the stable
+    /// surface, see `overlay`).
+    overlay: Option<guiwright_inspect::overlay::OverlayPlan>,
 }
 
 impl<W: Widget> std::fmt::Debug for MasonryAdapter<W> {
@@ -141,6 +146,7 @@ impl<W: Widget> MasonryAdapter<W> {
             frame_seq: 0,
             clock_paused: false,
             gpu_available: true,
+            overlay: None,
         };
         me.refresh();
         me
@@ -157,6 +163,16 @@ impl<W: Widget> MasonryAdapter<W> {
 
     pub fn harness_mut(&mut self) -> &mut TestHarness<W> {
         &mut self.harness
+    }
+
+    /// The overlay plan → draw ops (§13, M8): the list the harness
+    /// renders at the top layer at present time. Empty when no overlay
+    /// session is on (or nothing has bounds).
+    pub fn overlay_draw_ops(&self) -> Vec<overlay::OverlayDrawOp> {
+        self.overlay
+            .as_ref()
+            .map(overlay::overlay_draw_ops)
+            .unwrap_or_default()
     }
 
     /// Run one pass: refresh the a11y tree, rasterize pixels, rebuild the
@@ -327,6 +343,18 @@ impl<W: Widget> FrameworkAdapter for MasonryAdapter<W> {
                     .process_text_event(TextEvent::Keyboard(KeyboardEvent::key_up(k, c)));
             }
         }
+        Ok(())
+    }
+
+    /// The masonry adapter has an overlay surface (§13, M8): the plan is
+    /// stored and converted to `VisualLayerPlan` draw ops on demand (see
+    /// [`MasonryAdapter::overlay_draw_ops`]; the layer attachment rides
+    /// the adapter integration pass).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay = plan.cloned();
         Ok(())
     }
 
