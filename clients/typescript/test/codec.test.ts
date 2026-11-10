@@ -106,6 +106,16 @@ test("requests encode byte-identical to the Rust wire", () => {
     }),
     mock_call: () => ({ kind: "mock", cmd: { kind: "call", id: "seed_users", scope: "smoke" } }),
     inspect_start: () => ({ kind: "inspect", cmd: { kind: "start_recording" } }),
+    inspect_enable_overlay: () => ({ kind: "inspect", cmd: { kind: "enable_overlay" } }),
+    inspect_disable_overlay: () => ({ kind: "inspect", cmd: { kind: "disable_overlay" } }),
+    inspect_highlight: () => ({
+      kind: "inspect",
+      cmd: {
+        kind: "highlight",
+        node: { kind: "accesskit", tree: "a6000000000000000000000000000001", node: 2 },
+      },
+    }),
+    inspect_highlight_clear: () => ({ kind: "inspect", cmd: { kind: "highlight", node: null } }),
     video_start: () => ({
       kind: "video",
       cmd: { kind: "start", opts: { fps: 30, dir: "test-results/videos" } },
