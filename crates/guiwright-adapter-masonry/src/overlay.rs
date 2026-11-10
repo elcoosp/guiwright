@@ -63,15 +63,17 @@ mod tests {
         };
         let ops = overlay_draw_ops(&plan);
         assert_eq!(ops.len(), 3);
-        assert!(
-            matches!(ops[0], OverlayDrawOp::HoverOutline { rect } if rect == [10.0, 20.0, 90.0, 60.0])
-        );
+        let [x0, y0, x1, y1] = match &ops[0] {
+            OverlayDrawOp::HoverOutline { rect } => *rect,
+            OverlayDrawOp::Badge { .. } => panic!("expected HoverOutline, got Badge"),
+        };
+        assert_eq!((x0, y0, x1, y1), (10.0, 20.0, 90.0, 60.0));
         assert!(matches!(&ops[1], OverlayDrawOp::Badge { text, .. } if text.contains("#save")));
         assert!(matches!(ops[2], OverlayDrawOp::Badge { .. }));
     }
 
     #[test]
     fn empty_plan_produces_no_ops() {
-        assert!(overlay_draw_ops(&OverlayPlan::default()).is_empty());
+        assert_eq!(overlay_draw_ops(&OverlayPlan::default()).len(), 0);
     }
 }
