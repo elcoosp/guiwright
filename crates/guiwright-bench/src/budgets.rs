@@ -91,6 +91,11 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("video_frame_dedup", crate::samples::video_frame_dedup),
     ("gesture_synthesis", crate::samples::gesture_synthesis),
     ("kit_input_click", crate::samples::kit_input_click),
+    ("inspect_overlay_plan", crate::samples::inspect_overlay_plan),
+    (
+        "locator_element_screenshot",
+        crate::samples::locator_element_screenshot,
+    ),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
