@@ -7,6 +7,8 @@
 //! check runs while recording: ambiguous selectors become warnings, not
 //! broken tests.
 
+use std::fmt::Write;
+
 use guiwright_core::NodeKey;
 use guiwright_core::selector::{Selector, TextMatch};
 use guiwright_core::tree::TreeService;
@@ -100,6 +102,7 @@ impl CodegenRecorder {
     ) -> Result<RecordedLine, CodegenError> {
         let choice = choose_selector(tree, facts)?;
         let narrowed = choice.narrowed;
+        let kind = choice.tier.kind();
         if narrowed {
             self.warnings.push(format!(
                 "selector `{}` resolved to more than one node — recorded with .first()",
@@ -117,11 +120,25 @@ impl CodegenRecorder {
         };
         let line = RecordedLine {
             code: call,
-            selector_kind: choice.kind,
+            selector_kind: kind,
             narrowed,
         };
         self.lines.push(line.clone());
         Ok(line)
+    }
+
+    /// Record one pre-rendered raw-input line (§13 over §9): the
+    /// gesture vocabulary has no selector to validate — the driver's
+    /// renderer composes the call (`app.mouse().click(10, 20);`), the
+    /// recorder lands it verbatim with `selector_kind = "raw"`.
+    pub fn record_raw(&mut self, line: impl Into<String>) -> RecordedLine {
+        let line = RecordedLine {
+            code: line.into(),
+            selector_kind: "raw",
+            narrowed: false,
+        };
+        self.lines.push(line.clone());
+        line
     }
 
     /// Strict-mode warnings collected while recording (§13).
@@ -156,14 +173,27 @@ impl CodegenRecorder {
     }
 }
 
-/// The chosen selector: minimal cost that is live in the tree.
+/// The chosen selector: minimal cost that is live in the tree. `tier`
+/// is the §13 cost rank AND the recorded-line label source (`kind`).
 #[derive(Clone, Debug)]
 struct Choice {
     selector: Selector,
-    kind: &'static str,
     narrowed: bool,
-    #[allow(dead_code)]
     tier: CostTier,
+}
+
+impl CostTier {
+    /// The `RecordedLine::selector_kind` label for this tier.
+    fn kind(self) -> &'static str {
+        match self {
+            CostTier::TestId => "testid",
+            CostTier::RoleName => "role_name",
+            CostTier::Label => "label",
+            CostTier::Value => "value",
+            CostTier::Text => "text",
+            CostTier::RoleFirst => "role_first",
+        }
+    }
 }
 
 /// §13 cost model: `TestId` > role+accessible-name > label > text, with
@@ -176,7 +206,6 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
         let selector = Selector::test_id(id.clone());
         return Ok(Choice {
             selector,
-            kind: "testid",
             narrowed: false,
             tier: CostTier::TestId,
         });
@@ -185,7 +214,7 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
     if let (Some(role), Some(name)) = (facts.role.as_deref(), facts.name.as_deref()) {
         if let Some(role) = parse_role(role) {
             let selector = Selector::role_named(role, TextMatch::exact(name));
-            if let Some(choice) = checked(tree, selector, "role_name", CostTier::RoleName) {
+            if let Some(choice) = checked(tree, selector, CostTier::RoleName) {
                 return Ok(choice);
             }
         }
@@ -193,21 +222,21 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
     // Tier 2 — label.
     if let Some(label) = facts.label.as_deref() {
         let selector = Selector::label(TextMatch::exact(label));
-        if let Some(choice) = checked(tree, selector, "label", CostTier::Label) {
+        if let Some(choice) = checked(tree, selector, CostTier::Label) {
             return Ok(choice);
         }
     }
     // Tier 2.5 — value (inputs: the value often outlives labels).
     if let Some(value) = facts.value.as_deref() {
         let selector = Selector::value(TextMatch::exact(value));
-        if let Some(choice) = checked(tree, selector, "value", CostTier::Value) {
+        if let Some(choice) = checked(tree, selector, CostTier::Value) {
             return Ok(choice);
         }
     }
     // Tier 3 — text content.
     if let Some(name) = facts.name.as_deref() {
         let selector = Selector::text(TextMatch::exact(name));
-        if let Some(choice) = checked(tree, selector, "text", CostTier::Text) {
+        if let Some(choice) = checked(tree, selector, CostTier::Text) {
             return Ok(choice);
         }
     }
@@ -216,7 +245,6 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
         let selector = Selector::role(role).first();
         return Ok(Choice {
             selector,
-            kind: "role_first",
             narrowed: true,
             tier: CostTier::RoleFirst,
         });
@@ -228,19 +256,13 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
 
 /// Validate a candidate: resolvable against the live tree, unique or
 /// narrowed explicitly (§13 strict-mode warnings while recording).
-fn checked(
-    tree: &TreeService,
-    selector: Selector,
-    kind: &'static str,
-    tier: CostTier,
-) -> Option<Choice> {
+fn checked(tree: &TreeService, selector: Selector, tier: CostTier) -> Option<Choice> {
     match tree.resolve_all(&selector) {
         Ok(matches) if !matches.is_empty() => {
             let narrowed = matches.len() > 1;
             let selector = if narrowed { selector.first() } else { selector };
             Some(Choice {
                 selector,
-                kind,
                 narrowed,
                 tier,
             })
@@ -283,7 +305,9 @@ fn locator_code(choice: &Choice, _facts: &NodeFacts) -> String {
     match nth {
         Some(guiwright_core::selector::Nth::First) => code.push_str(".first()"),
         Some(guiwright_core::selector::Nth::Last) => code.push_str(".last()"),
-        Some(guiwright_core::selector::Nth::Index(i)) => code.push_str(&format!(".nth({i})")),
+        Some(guiwright_core::selector::Nth::Index(i)) => {
+            let _ = write!(code, ".nth({i})");
+        }
         None => {}
     }
     code
@@ -506,6 +530,27 @@ mod tests {
             .record("click", None, &facts(2, Role::Label, "Welcome, Ada"), &tree)
             .expect("recorded");
         assert_eq!(line.selector_kind, "role_name", "{}", line.code);
+    }
+
+    /// Raw-input vocabulary (§13 over §9): pre-rendered lines land
+    /// verbatim, `selector_kind` = `"raw"`, no narrowing and no tree
+    /// validation (there is no selector to validate).
+    #[test]
+    fn record_raw_lands_the_line_verbatim() {
+        let tree = fixture_tree();
+        let mut rec = CodegenRecorder::new();
+        rec.record("click", None, &facts(2, Role::Button, "Save"), &tree)
+            .expect("locator line");
+        let line = rec.record_raw("app.mouse().click(10, 20);");
+        assert_eq!(line.code, "app.mouse().click(10, 20);");
+        assert_eq!(line.selector_kind, "raw");
+        assert!(!line.narrowed);
+        let (code, warnings) = rec.finish();
+        assert_eq!(
+            code,
+            "app.get_by_role(Role::Button, \"Save\").click();\napp.mouse().click(10, 20);\n"
+        );
+        assert_eq!(warnings.len(), 0);
     }
 
     #[test]
