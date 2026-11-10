@@ -1869,6 +1869,7 @@ name = "guiwright-driver"
 version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
+ "accesskit_consumer 0.39.2",
  "guiwright-core",
  "guiwright-inspect",
  "guiwright-proto",
