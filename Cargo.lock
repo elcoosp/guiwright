@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-egui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "egui",
@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-floem"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1756,7 +1756,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-freya"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "freya-testing",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-gpui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-iced"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1790,7 +1790,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-masonry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.31.0",
@@ -1807,7 +1807,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-slint"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1817,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-bench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "criterion",
@@ -1837,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "guiwright-core",
  "guiwright-driver",
@@ -1854,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.39.2",
@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-inspect"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-kit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.39.2",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1921,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -1938,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-shot"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "png 0.18.1",
  "serde",
@@ -1948,7 +1948,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-trace"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "guiwright-shot",
  "lz4_flex",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-viewer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "guiwright-trace",
  "lz4_flex",
