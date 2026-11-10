@@ -28,10 +28,10 @@ pub struct IntrospectionItem {
     pub id: SlintId,
     /// Display text / accessible name (Text, Button caption, …).
     pub text: Option<String>,
-    /// Editable content (TextInput, LineEdit).
+    /// Editable content (`TextInput`, `LineEdit`).
     pub value: Option<String>,
     /// Element name from `SLINT_EMIT_DEBUG_INFO=1` builds — the natural
-    /// test id (§4.4 "debug_info build flag" + §8.1).
+    /// test id (§4.4 `debug_info` build flag + §8.1).
     pub test_id: Option<String>,
     /// Visible bounds, window-relative physical px (§9).
     pub bounds: Option<[f64; 4]>,
@@ -175,15 +175,14 @@ impl SlintTreeBuilder {
     }
 
     /// Fold one introspection pass into a [`LogicalTreeDiff`].
-    pub fn rebuild(&mut self, root: IntrospectionItem) -> LogicalTreeDiff {
+    pub fn rebuild(&mut self, root: &IntrospectionItem) -> LogicalTreeDiff {
         let mut nodes: Vec<(NodeId, Node)> = Vec::new();
         let mut live: HashMap<u64, Slot> = HashMap::new();
         let mut focus: Option<NodeId> = None;
         let mut removed: Vec<u64> = Vec::new();
         let mut test_ids: Vec<(u64, String)> = Vec::new();
 
-        let root_node_id = self.walk(&root, &mut nodes, &mut live, &mut focus, &mut test_ids);
-        let root_node_id = root_node_id.unwrap_or(NodeId(0));
+        let root_node_id = self.walk(root, &mut nodes, &mut live, &mut focus, &mut test_ids);
 
         for handle in self.slots.keys() {
             if !live.contains_key(handle) {
@@ -220,7 +219,6 @@ impl SlintTreeBuilder {
         NodeId(id)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn walk(
         &mut self,
         item: &IntrospectionItem,
@@ -228,7 +226,7 @@ impl SlintTreeBuilder {
         live: &mut HashMap<u64, Slot>,
         focus: &mut Option<NodeId>,
         test_ids: &mut Vec<(u64, String)>,
-    ) -> Option<NodeId> {
+    ) -> NodeId {
         let handle = item.id.to_handle();
         let was_live = self.slots.contains_key(&handle);
         let node_id = if was_live {
@@ -260,9 +258,7 @@ impl SlintTreeBuilder {
 
         let mut child_ids = Vec::with_capacity(item.children.len());
         for child in &item.children {
-            if let Some(child_id) = self.walk(child, nodes, live, focus, test_ids) {
-                child_ids.push(child_id);
-            }
+            child_ids.push(self.walk(child, nodes, live, focus, test_ids));
         }
         node.set_children(child_ids);
 
@@ -275,7 +271,7 @@ impl SlintTreeBuilder {
                 role,
             },
         );
-        Some(node_id)
+        node_id
     }
 }
 
@@ -309,7 +305,7 @@ mod tests {
     #[test]
     fn synthesizes_roles_labels_and_test_ids() {
         let mut builder = SlintTreeBuilder::new("slint");
-        let diff = builder.rebuild(sample_window());
+        let diff = builder.rebuild(&sample_window());
 
         // Roles: window → button → text_input → container → text.
         let roles: Vec<Role> = diff.update.nodes.iter().map(|(_, n)| n.role()).collect();
@@ -338,7 +334,7 @@ mod tests {
     #[test]
     fn identity_is_stable_and_actions_route_back() {
         let mut builder = SlintTreeBuilder::new("slint");
-        let first = builder.rebuild(sample_window());
+        let first = builder.rebuild(&sample_window());
         let btn_handle = SlintId::new(0, 1).to_handle();
         let minted = first
             .update
@@ -349,7 +345,7 @@ mod tests {
             .expect("button minted");
 
         // A second pass keeps the binding (no re-mint).
-        let second = builder.rebuild(sample_window());
+        let second = builder.rebuild(&sample_window());
         let minted_again = second
             .update
             .nodes
@@ -366,12 +362,12 @@ mod tests {
     #[test]
     fn removal_bumps_generation_aba_guard() {
         let mut builder = SlintTreeBuilder::new("slint");
-        builder.rebuild(sample_window());
+        builder.rebuild(&sample_window());
         assert_eq!(builder.generation(SlintId::new(0, 1)), 0);
 
         // The button leaves the tree.
         let shrunk = IntrospectionItem::new("Window", SlintId::new(0, 0));
-        let diff = builder.rebuild(shrunk);
+        let diff = builder.rebuild(&shrunk);
         assert!(diff.removed.contains(&SlintId::new(0, 1).to_handle()));
         assert_eq!(
             builder.generation(SlintId::new(0, 1)),
@@ -380,7 +376,7 @@ mod tests {
         );
 
         // It returns: fresh NodeId (no stale aliasing).
-        let back = builder.rebuild(sample_window());
+        let back = builder.rebuild(&sample_window());
         assert_eq!(builder.generation(SlintId::new(0, 1)), 1);
         let _ = back;
     }
@@ -390,7 +386,7 @@ mod tests {
         let mut builder = SlintTreeBuilder::new("slint");
         let item = IntrospectionItem::new("Window", SlintId::new(0, 0))
             .with_child(IntrospectionItem::new("LineEdit", SlintId::new(0, 1)).focused());
-        let diff = builder.rebuild(item);
+        let diff = builder.rebuild(&item);
         // Focus lands on the LineEdit's minted id, not the window root.
         let minted_edit = diff
             .update
