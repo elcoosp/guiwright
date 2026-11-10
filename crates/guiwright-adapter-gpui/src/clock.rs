@@ -23,7 +23,7 @@ pub enum GpuiClockStep {
     /// (virtual) deadline, then flush a frame. The clock service issues
     /// one round per frame-sized step (§14).
     DispatchRound { advance_ms: u64 },
-    /// Bookkeeping: pause/resume gate the driver's run_for, not GPUI.
+    /// Bookkeeping: pause/resume gate the driver's `run_for`, not GPUI.
     MarkPaused { paused: bool },
 }
 
@@ -84,7 +84,7 @@ mod tests {
             plan(ClockCmd::Resume),
             vec![GpuiClockStep::MarkPaused { paused: false }]
         );
-        assert!(plan(ClockCmd::Probe).is_empty());
+        assert_eq!(plan(ClockCmd::Probe).len(), 0);
     }
 
     #[test]
