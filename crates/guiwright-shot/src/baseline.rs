@@ -99,8 +99,7 @@ impl BaselineStore {
         let stem = base.file_stem().unwrap_or_default().to_string_lossy();
         let dir = base
             .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         (
             dir.join(format!("{stem}.new.png")),
             dir.join(format!("{stem}.diff.png")),
@@ -130,7 +129,7 @@ impl BaselineStore {
 
         let Some(bytes) = baseline_bytes else {
             if bless != BlessMode::Off {
-                self.write(&path, actual)?;
+                Self::write(&path, actual)?;
                 return Ok(SnapshotOutcome::Blessed { forced: false });
             }
             return Err(ShotError::Config(format!(
@@ -153,7 +152,7 @@ impl BaselineStore {
             .expect("shape checked above — diff cannot be None");
 
         if bless == BlessMode::Force {
-            self.write(&path, actual)?;
+            Self::write(&path, actual)?;
             return Ok(SnapshotOutcome::Blessed { forced: true });
         }
 
@@ -165,11 +164,11 @@ impl BaselineStore {
 
         // Failing run: emit `.new.png` + `.diff.png` (§10), then fail.
         let (new_path, diff_path) = self.artifact_paths(name, renderer);
-        self.write(&new_path, actual)?;
-        let rendered = diff_image(&baseline, &report, tolerance.threshold);
-        self.write(&diff_path, &rendered)?;
+        Self::write(&new_path, actual)?;
+        let diff_render = diff_image(&baseline, &report, tolerance.threshold);
+        Self::write(&diff_path, &diff_render)?;
         if bless == BlessMode::Failing {
-            self.write(&path, actual)?;
+            Self::write(&path, actual)?;
             return Ok(SnapshotOutcome::Blessed { forced: false });
         }
         Err(ShotError::Config(format!(
@@ -180,7 +179,7 @@ impl BaselineStore {
         )))
     }
 
-    fn write(&self, path: &Path, image: &Image) -> Result<(), ShotError> {
+    fn write(path: &Path, image: &Image) -> Result<(), ShotError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
