@@ -8,8 +8,8 @@
 //!
 //! The runner glue executes through the verified public surface only:
 //! `TestingRunner::{sync_and_update, send_event, find, render_to_file}` —
-//! semantic actions ride `AccessibilityTree::handle_action` (Focus/Blur/
-//! ScrollIntoView native; the rest as `EventName::AccessibilityAction`,
+//! semantic actions ride `AccessibilityTree::handle_action` (`Focus`/`Blur`/
+//! `ScrollIntoView` native; the rest as `EventName::AccessibilityAction`,
 //! §4.3).
 
 use accesskit::NodeId;
@@ -31,8 +31,8 @@ pub trait TestingSeam {
     fn send_event(&mut self, event: crate::platform::PlatformEvent) -> Result<(), AdapterError>;
     /// The accessibility ids that left the tree this step.
     fn removed_ids(&mut self) -> Vec<u64>;
-    /// Native semantic handling on the AccessibilityTree (§4.3: Focus /
-    /// Blur / ScrollIntoView handled natively, the rest routed as
+    /// Native semantic handling on the `AccessibilityTree` (§4.3: `Focus` /
+    /// `Blur` / `ScrollIntoView` handled natively, the rest routed as
     /// `EventName::AccessibilityAction`).
     fn handle_action(&mut self, freya_id: u64, action: &SemAction) -> Result<String, AdapterError>;
     /// Screen size in logical px.
@@ -343,7 +343,10 @@ mod tests {
             4,
             "ctrl-down, a-down, a-up, ctrl-up: {entries:?}"
         );
-        assert!(keys[0].contains("phase: Down") && keys[0].contains("ctrl"));
+        assert!(
+            keys[0].contains("phase: Down") && keys[0].contains("ctrl"),
+            "first is ctrl-down: {keys:?}"
+        );
         assert!(keys[2].contains("phase: Up") && keys[2].contains("\"a\""));
         assert!(keys[3].contains("ctrl"), "modifier releases last (reverse)");
     }
