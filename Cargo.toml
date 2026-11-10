@@ -85,10 +85,39 @@ missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
-# Pragmatic M0 policy: documented in CONTRIBUTING rationale
+# Pedantic rides the workspace table (§17 policy): every carve-out lives
+# here with its rationale — in-code #[allow] attributes are forbidden
+# (see CONTRIBUTING.md, "Lint policy").
+pedantic = { level = "warn", priority = -1 }
+# The kit/driver API is a fluent builder/DSL surface (handles, locators,
+# `expect` chains, selector narrowing): must_use on every accessor call
+# is noise, not signal — consuming-builder semantics are documented per
+# method (both members of the must_use pair).
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+# Pragmatic M0 policy, carried forward: §8 selector vocabulary repeats
+# module names by design (`Selector`/`resolve`), and the library surface
+# predates `# Errors`/`# Panics` doc sections (tracked for the v0.2 doc
+# pass — the architecture §13 cost model, not error semantics, is the
+# v0.1 contract).
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# §10/§15 quantization paths convert rounded-and-clamped floats to their
+# integer domain by design (the §10 pixel ramp, the µs budget rows):
+# every value is range-guarded at the expression, and Rust has no
+# TryFrom for float→int, so the guarded `as` IS the documented
+# conversion. Rewriting it any other way hides the intent.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+# The kit's `expect(locator).to_be_visible()` surface keeps the
+# Playwright §16 shape: the `to_*` assertion methods consume the pending
+# builder by value (single-shot assertions — see kit/app.rs).
+wrong_self_convention = "allow"
+# The §6.2 capability matrix rides the wire as a plain flag struct
+# (`Caps` / `CapsV1`, six capability booleans): bitflag crates would
+# change the wire format for no gain at this size.
+struct_excessive_bools = "allow"
 
 [profile.bench]
 debug = true
