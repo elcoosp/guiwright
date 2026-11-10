@@ -150,7 +150,12 @@ mod tests {
     #[test]
     fn modifiers_normalize_sorted_and_deduped() {
         assert_eq!(
-            normalize_modifiers(&["Shift".into(), "CTRL".into(), " ctrl ".into(), "".into()]),
+            normalize_modifiers(&[
+                "Shift".into(),
+                "CTRL".into(),
+                " ctrl ".into(),
+                String::new()
+            ]),
             vec!["ctrl", "shift"]
         );
     }
