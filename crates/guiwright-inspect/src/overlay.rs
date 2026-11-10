@@ -6,6 +6,8 @@
 //! painter layer after the pass; masonry/freya: overlay layer; iced:
 //! `Operation`-returned rects; slint: top-level overlay window).
 
+use std::fmt::Write;
+
 use guiwright_core::NodeKey;
 
 /// Window-relative physical rect (AccessKit convention, §9).
@@ -23,7 +25,10 @@ impl OverlayRect {
     }
 
     pub fn center(&self) -> (f64, f64) {
-        ((self.x0 + self.x1) / 2.0, (self.y0 + self.y1) / 2.0)
+        (
+            f64::midpoint(self.x0, self.x1),
+            f64::midpoint(self.y0, self.y1),
+        )
     }
 }
 
@@ -91,9 +96,9 @@ impl OverlayPlan {
             }
             let mut text = fact.role.clone().unwrap_or_else(|| "?".into());
             if let Some(id) = &fact.test_id {
-                text.push_str(&format!(" #{id}"));
+                let _ = write!(text, " #{id}");
             } else if let Some(name) = &fact.name {
-                text.push_str(&format!(" \u{201c}{name}\u{201d}"));
+                let _ = write!(text, " \u{201c}{name}\u{201d}");
             }
             let (cx, cy) = OverlayRect::new(x0, y0, x1, y1).center();
             plan.badges.push(Badge { text, at: (cx, cy) });
