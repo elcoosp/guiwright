@@ -18,7 +18,7 @@ pub enum SlintClockStep {
     /// Bookkeeping only: the testing backend is always virtual, so
     /// install is a no-op marker (the trace still records it, §12).
     MarkInstalled,
-    /// Bookkeeping: pause/resume gate the driver's run_for, not slint.
+    /// Bookkeeping: pause/resume gate the driver's `run_for`, not slint.
     MarkPaused { paused: bool },
 }
 
@@ -74,6 +74,6 @@ mod tests {
 
     #[test]
     fn probe_needs_no_slint_action() {
-        assert!(plan(ClockCmd::Probe).is_empty());
+        assert_eq!(plan(ClockCmd::Probe).len(), 0);
     }
 }
