@@ -8,9 +8,9 @@
 //!   "stable selectors require apps to set `.a11y_id(AccessibilityId(n))`";
 //!   auto ids are a process counter, so the bridge is the single place
 //!   that owns the mapping).
-//! * [`keys`] — key sequences with modifiers **and explicit KeyUp** (§4.3
-//!   gap: "press_key sends KeyDown only — we drive raw PlatformEvent::
-//!   Keyboard with modifiers+KeyUp").
+//! * [`keys`] — key sequences with modifiers **and explicit `KeyUp`** (§4.3
+//!   gap: "`press_key` sends `KeyDown` only — we drive raw
+//!   `PlatformEvent::Keyboard` with modifiers+KeyUp").
 //! * [`buffer`] — frame-quantized event ordering (§4.3: "input is
 //!   frame-quantized by ragnarok's `EventBuffer` — respect
 //!   press→sync→move→release ordering").
