@@ -44,11 +44,10 @@ impl TestContext {
     /// The workspace root comes from nextest's `NEXTEST_WORKSPACE_ROOT`,
     /// falling back to `CARGO_MANIFEST_DIR` (plain cargo test).
     pub fn artifacts_dir(&self) -> PathBuf {
-        let root = non_empty("NEXTEST_WORKSPACE_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
-            });
+        let root = non_empty("NEXTEST_WORKSPACE_ROOT").map_or_else(
+            || PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default()),
+            PathBuf::from,
+        );
         root.join("target")
             .join("guiwright")
             .join(self.run_id.clone().unwrap_or_else(|| "local".into()))
@@ -119,7 +118,7 @@ mod tests {
             rendered.contains("local/login_flow/attempt-1/traces/guiwright-login_flow-"),
             "{rendered}"
         );
-        assert!(rendered.ends_with(".zip"));
+        assert!(rendered.to_lowercase().ends_with(".zip"));
         assert!(
             ctx.baseline_dir()
                 .to_string_lossy()
