@@ -129,7 +129,7 @@ mod tests {
         let err = reg.register("save", 9).expect_err("duplicate");
         assert!(err.to_string().contains("save"), "{err}");
         assert!(
-            err.to_string().contains("7"),
+            err.to_string().contains('7'),
             "names the existing view: {err}"
         );
         // The original registration is untouched.
