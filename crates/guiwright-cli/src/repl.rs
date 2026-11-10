@@ -237,6 +237,7 @@ impl Repl {
             }
             "clock" => self.clock_command(tokens).await,
             "mock" => self.mock_command(tokens).await,
+            "inspect" => self.inspect_command(tokens).await,
             "codegen" => self.codegen_command(tokens).await,
             "video" => self.video_command(tokens).await,
             "window" => self.window_command(tokens).await,
@@ -267,6 +268,57 @@ impl Repl {
             other => Err(format!(
                 "unknown command `{other}` — type `help` for the command list"
             )),
+        }
+    }
+
+    // --- inspector overlay (§13, M8) ---------------------------------------
+
+    /// `inspect on | off | clear | <get-args…>` (§13): the live overlay
+    /// session. `inspect <get-args…>` resolves like `get` (same bookkeeping,
+    /// so `last`/actions keep working) and aims the hover outline at the
+    /// resolved handle — the REPL's inspect-the-tree loop. Every command
+    /// maps 1:1 onto an `Inspect` request; the overlay itself composites
+    /// server-side at present time.
+    async fn inspect_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        match tokens.get(1).map(String::as_str) {
+            Some("on") => {
+                self.request(RequestV1::Inspect(InspectV1::EnableOverlay))
+                    .await?;
+                Ok(vec![Line::Ok(
+                    "inspect: overlay on — badges track interactive nodes".into(),
+                )])
+            }
+            Some("off") => {
+                self.request(RequestV1::Inspect(InspectV1::DisableOverlay))
+                    .await?;
+                Ok(vec![Line::Ok("inspect: overlay off".into())])
+            }
+            Some("clear") => {
+                self.request(RequestV1::Inspect(InspectV1::Highlight { node: None }))
+                    .await?;
+                Ok(vec![Line::Ok("inspect: outline cleared".into())])
+            }
+            Some(_) => {
+                // `inspect <get-args…>`: the exact `get` resolution path,
+                // then `Highlight` with the resolved handle.
+                let mut get_tokens = vec!["get".to_string()];
+                get_tokens.extend_from_slice(&tokens[1..]);
+                let mut lines = self.get_command(&get_tokens).await?;
+                let node = self.current.as_ref().map(|current| current.node.clone());
+                let describe = self
+                    .current
+                    .as_ref()
+                    .map(|current| current.describe.clone())
+                    .unwrap_or_default();
+                self.request(RequestV1::Inspect(InspectV1::Highlight { node }))
+                    .await?;
+                lines.push(Line::Ok(format!("highlighted {describe}")));
+                Ok(lines)
+            }
+            None => Err(
+                "`inspect` needs `on`, `off`, `clear` or get-args — e.g. `inspect role Button Save"
+                    .into(),
+            ),
         }
     }
 
@@ -701,6 +753,8 @@ impl Repl {
             "  clock install | ff <ms> | runfor <ms> | pause | resume | set <ms> | state",
             "  mock install <id> [response] | clear <id> | call <id> [scope]",
             "  mock reset <scope>",
+            "  inspect on | off | clear   the §13 overlay session",
+            "  inspect <get-args…>        resolve + highlight the node",
             "  window list                 the session's window targets",
             "  window use <handle>         aim this connection at one target",
             "  codegen start | stop        record actions as kit code (§13)",
