@@ -1,9 +1,9 @@
-//! Guiwright FrameworkAdapter for Masonry/Xilem (architecture §4.2, M0
+//! Guiwright `FrameworkAdapter` for Masonry/Xilem (architecture §4.2, M0
 //! embedded scope).
 //!
 //! Wraps [`masonry_testing::TestHarness`] — the windowless, byte-deterministic
-//! harness (§11 "RenderRoot + vello_cpu, windowless by construction"). One
-//! pump = one virtual `AnimFrame` tick + one vello_cpu pass, which also
+//! harness (§11 "`RenderRoot` + `vello_cpu`, windowless by construction"). One
+//! pump = one virtual `AnimFrame` tick + one `vello_cpu` pass, which also
 //! refreshes the AccessKit tree.
 //!
 //! Level-1 facts this adapter relies on (verified against masonry 0.4):
@@ -42,6 +42,22 @@ use twox_hash::xxhash3_64::Hasher as Xxh3;
 /// One pump's virtual frame duration (60 fps).
 const FRAME_MS: u64 = 16;
 
+/// One consumer-tree walk → flattened masonry-node list (§15.2: the
+/// driver's consumer diffs the normalized update at O(changes)).
+fn walk_tree(
+    state: &accesskit_consumer::TreeState,
+    id: m21::NodeId,
+    nodes: &mut Vec<(m21::NodeId, m21::Node)>,
+) {
+    let Some(node) = state.node_by_id(id) else {
+        return;
+    };
+    nodes.push((id, node.data().clone()));
+    for child in node.child_ids() {
+        walk_tree(state, child, nodes);
+    }
+}
+
 /// Windowless masonry adapter (§4.2 "Embed (headless)").
 pub struct MasonryAdapter<W: Widget> {
     harness: TestHarness<W>,
@@ -56,6 +72,15 @@ pub struct MasonryAdapter<W: Widget> {
     /// False when masonry's wgpu rasterizer has no device (GPU-less host,
     /// §11: CI provisions lavapipe). Tree refresh works regardless.
     gpu_available: bool,
+}
+
+impl<W: Widget> std::fmt::Debug for MasonryAdapter<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MasonryAdapter")
+            .field("meta", &self.meta)
+            .field("frame_seq", &self.frame_seq)
+            .finish_non_exhaustive()
+    }
 }
 
 mod normalize;
@@ -144,29 +169,26 @@ impl<W: Widget> MasonryAdapter<W> {
         // (§11: CI provisions lavapipe for real pixels).
         let mut pixels_hash = 0u64;
         let mut harness = std::panic::AssertUnwindSafe(&mut self.harness);
-        match std::panic::catch_unwind(move || harness.render()) {
-            Ok(img) => {
-                self.gpu_available = true;
-                self.pixel_size = (img.width(), img.height());
-                pixels_hash = {
-                    let mut hasher = Xxh3::default();
-                    // Strided sample of pixel rows (§15.5: full hash on the
-                    // writer thread, strided here for the cheap signal).
-                    let stride = 4 * img.width().max(1) as usize;
-                    let bytes = img.as_raw();
-                    for chunk in bytes.chunks(stride.max(1)) {
-                        hasher.write(chunk);
-                    }
-                    hasher.finish()
-                };
-                self.last_pixels = Some(img.into_raw().into());
-            }
-            Err(_) => {
-                self.gpu_available = false;
-                self.last_pixels = None;
-                // Stable digest: visual-change signaling rides the tree
-                // diffs on GPU-less hosts (M0 scope).
-            }
+        if let Ok(img) = std::panic::catch_unwind(move || harness.render()) {
+            self.gpu_available = true;
+            self.pixel_size = (img.width(), img.height());
+            pixels_hash = {
+                let mut hasher = Xxh3::default();
+                // Strided sample of pixel rows (§15.5: full hash on the
+                // writer thread, strided here for the cheap signal).
+                let stride = 4 * img.width().max(1) as usize;
+                let bytes = img.as_raw();
+                for chunk in bytes.chunks(stride.max(1)) {
+                    hasher.write(chunk);
+                }
+                hasher.finish()
+            };
+            self.last_pixels = Some(img.into_raw().into());
+        } else {
+            self.gpu_available = false;
+            self.last_pixels = None;
+            // Stable digest: visual-change signaling rides the tree
+            // diffs on GPU-less hosts (M0 scope).
         }
 
         // Full TreeUpdate re-serialization from the harness's consumer tree
@@ -177,20 +199,7 @@ impl<W: Widget> MasonryAdapter<W> {
         let tree = self.harness.access_tree();
         let state = tree.state();
         let mut nodes: Vec<(m21::NodeId, m21::Node)> = Vec::with_capacity(64);
-        fn walk(
-            state: &accesskit_consumer::TreeState,
-            id: m21::NodeId,
-            nodes: &mut Vec<(m21::NodeId, m21::Node)>,
-        ) {
-            let Some(node) = state.node_by_id(id) else {
-                return;
-            };
-            nodes.push((id, node.data().clone()));
-            for child in node.child_ids() {
-                walk(state, child, nodes);
-            }
-        }
-        walk(state, state.root_id(), &mut nodes);
+        walk_tree(state, state.root_id(), &mut nodes);
         normalize::fixup_accessible_names(&mut nodes);
         let update_raw = m21::TreeUpdate {
             nodes,
@@ -346,7 +355,8 @@ impl<W: Widget> FrameworkAdapter for MasonryAdapter<W> {
 
     fn clock(&mut self, cmd: ClockCmd) -> Result<ClockState, AdapterError> {
         match cmd {
-            ClockCmd::InstallVirtual => {} // already virtual (§14 masonry row)
+            // Already virtual (§14 masonry row); Probe reads via the reply.
+            ClockCmd::InstallVirtual | ClockCmd::Probe => {}
             ClockCmd::FastForward(dt) => {
                 // Advance in frame-sized steps so rewrite passes and timers
                 // settle at each frame (§14 "fast_forward(dt) = advance in
@@ -365,13 +375,12 @@ impl<W: Widget> FrameworkAdapter for MasonryAdapter<W> {
                 // approximate current virtual time (the harness tracks a
                 // plain tick counter, §14 masonry row).
                 let current = Duration::from_millis(self.frame_seq.saturating_mul(FRAME_MS));
-                if t > current {
-                    self.harness.animate_ms((t - current).as_millis() as u64);
+                if let Some(delta) = t.checked_sub(current) {
+                    self.harness.animate_ms(delta.as_millis() as u64);
                 }
             }
             ClockCmd::Pause => self.clock_paused = true,
             ClockCmd::Resume => self.clock_paused = false,
-            ClockCmd::Probe => {}
         }
         Ok(ClockState {
             virtual_time: Some(Duration::from_millis(
