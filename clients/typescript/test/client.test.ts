@@ -66,6 +66,12 @@ function startMockServer(): Promise<{ port: number; close: () => void }> {
         resp(Array.from(enc.finish()));
         return;
       }
+      if (variant === 8) {
+        // Inspect(…) → Pong (§13 M8 overlay/highlight surface; the mock
+        // server acknowledges the domain like the real driver does).
+        resp([0, 1]);
+        return;
+      }
       if (variant === 9) {
         // Bye → Bye
         resp([0, 10]);
@@ -114,6 +120,17 @@ test("handshake, ping, clock and a typed rejection over real TCP", async () => {
         return true;
       },
     );
+
+    // Inspector overlay (§13, M8): enable → highlight → clear → disable,
+    // the exact conversation the REPL runs.
+    await client.inspectOverlay(true);
+    await client.inspectHighlight({
+      kind: "accesskit",
+      tree: "a6000000000000000000000000000001",
+      node: 2,
+    });
+    await client.inspectHighlight(null);
+    await client.inspectOverlay(false);
 
     await client.close();
   } finally {
