@@ -18,7 +18,7 @@ pub enum FloemClockStep {
     /// Bookkeeping: the harness clock is virtual from the first tick, so
     /// install is a marker (the trace records it, §12).
     MarkInstalled,
-    /// Bookkeeping: pause/resume gate the driver's run_for, not floem.
+    /// Bookkeeping: pause/resume gate the driver's `run_for`, not floem.
     MarkPaused { paused: bool },
 }
 
@@ -77,6 +77,6 @@ mod tests {
             plan(ClockCmd::Resume),
             vec![FloemClockStep::MarkPaused { paused: false }]
         );
-        assert!(plan(ClockCmd::Probe).is_empty());
+        assert_eq!(plan(ClockCmd::Probe).len(), 0);
     }
 }
