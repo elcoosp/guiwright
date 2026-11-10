@@ -46,7 +46,11 @@ const REQUESTS: &[Variant] = &[
         "Action",
         "{ node: NodeKeyV1, generation: u32 varint, action: SemActionV1, force: bool, timeout_ms: u64 varint }",
     ),
-    v(5, "Input", "{ events: seq<InputEventV1> } — injected into the sending connection's active window target (M7) → InputQueued"),
+    v(
+        5,
+        "Input",
+        "{ events: seq<InputEventV1> } — injected into the sending connection's active window target (M7) → InputQueued",
+    ),
     v(6, "Clock", "ClockV1 (see domains.clock)"),
     v(7, "Mock", "MockV1 (see domains.mock)"),
     v(8, "Inspect", "InspectV1 (see domains.inspect)"),
