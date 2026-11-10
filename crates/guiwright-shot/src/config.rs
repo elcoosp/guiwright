@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn per_os_overrides_win() {
         let cfg = parse_config(
-            r#"
+            r"
             [screenshots]
             threshold = 0.6
             max_failed_pixels = 0
@@ -129,7 +129,7 @@ mod tests {
             [screenshots.macos]
             threshold = 1.5
             max_failed_pixels = 8
-            "#,
+            ",
         )
         .expect("parse");
         let mac = cfg.screenshots.effective_for("macos");
@@ -143,13 +143,13 @@ mod tests {
     #[test]
     fn override_fields_fall_back_independently() {
         let cfg = parse_config(
-            r#"
+            r"
             [screenshots]
             threshold = 0.6
 
             [screenshots.windows]
             max_failed_pixels = 4
-            "#,
+            ",
         )
         .expect("parse");
         let win = cfg.screenshots.effective_for("windows");
