@@ -24,7 +24,7 @@ fn full_thousand_update() -> accesskit::TreeUpdate {
     let mut group = accesskit::Node::new(Role::Group);
     group.set_children(
         (0..BUTTONS)
-            .map(|i| accesskit::NodeId(2 + i as u64))
+            .map(|i| accesskit::NodeId(2 + u64::from(i)))
             .collect::<Vec<_>>(),
     );
     let mut nodes = vec![
@@ -40,7 +40,7 @@ fn full_thousand_update() -> accesskit::TreeUpdate {
             x1: f64::from((((i % 20) * 40) + 38) as i16),
             y1: f64::from((((i / 20) * 20) + 18) as i16),
         });
-        nodes.push((accesskit::NodeId(2 + i as u64), btn));
+        nodes.push((accesskit::NodeId(2 + u64::from(i)), btn));
     }
     accesskit::TreeUpdate {
         nodes,
@@ -75,7 +75,7 @@ pub fn resolve_cached_index() -> Duration {
     })
 }
 
-/// §15.1 "Tree diff apply (1k nodes)" — consumer ChangeHandler fan-out.
+/// §15.1 "Tree diff apply (1k nodes)" — consumer `ChangeHandler` fan-out.
 /// §15.1 "Tree diff apply (1k nodes)" — measures only the apply; setup is
 /// excluded by measuring `Instant::now()` after the tree is built.
 pub fn tree_diff_apply_1k() -> Duration {
@@ -115,7 +115,7 @@ pub fn snapshot_serialize() -> Duration {
                 Some(SnapshotNode {
                     id: match key {
                         guiwright_core::NodeKey::AccessKit { node, .. } => node.0,
-                        _ => 0,
+                        guiwright_core::NodeKey::Logical { .. } => 0,
                     },
                     role: format!("{:?}", node.role()),
                     label: node.label(),
@@ -131,7 +131,7 @@ pub fn snapshot_serialize() -> Duration {
     })
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct SnapshotNode {
     id: u64,
     role: String,
@@ -140,7 +140,7 @@ pub struct SnapshotNode {
     bounds: Option<[f64; 4]>,
 }
 
-/// §15.1 "TreeChanged diff blob (LZ4)" — compress a diff payload.
+/// §15.1 "`TreeChanged` diff blob (LZ4)" — compress a diff payload.
 pub fn diff_blob_lz4() -> Duration {
     BENCH_TREE.with(|svc| {
         // Serialize the raw node ids of the current tree (the diff payload shape).
@@ -199,6 +199,7 @@ pub fn codec_roundtrip() -> Duration {
 /// 1 tree diff) through the bounded ring. The writer thread is off the
 /// critical path — this is the pure `try_send` cost the app feels.
 pub fn trace_write_amplification() -> Duration {
+    const FRAMES: u64 = 256;
     use guiwright_trace::schema::AdapterRecord;
     use guiwright_trace::{TraceOptions, TraceRecorder};
     use std::time::Instant;
@@ -224,7 +225,6 @@ pub fn trace_write_amplification() -> Duration {
     let png = vec![7u8; 4096];
 
     let started = Instant::now();
-    const FRAMES: u64 = 256;
     for i in 0..FRAMES {
         recorder.event(i, "action", "click @ (12, 8)");
         recorder.frame(i, 0x1000 + i, png.clone());
@@ -256,6 +256,7 @@ pub fn element_screenshot_crop() -> Duration {
 /// rendezvous included). The server is spawned once per sample with the
 /// mock adapter; the measured operation is the client call only.
 pub fn resolve_remote_uds() -> Duration {
+    const ITERATIONS: u32 = 64;
     use guiwright_core::test_util::Fixture;
     use guiwright_driver::mock::MockAdapter;
     use guiwright_driver::server::GwpServerHandle;
@@ -291,7 +292,6 @@ pub fn resolve_remote_uds() -> Duration {
             }),
         };
 
-        const ITERATIONS: u32 = 64;
         // Warm the index once (the §15.1 row is the cached-index path).
         for _ in 0..4 {
             let resp = client
@@ -388,6 +388,7 @@ pub fn viewer_timeline_replay() -> Duration {
 /// the M3 transport other-language clients drive (§7 "TCP for CI
 /// containers"; byte-identical to the UDS row, only the socket differs).
 pub fn resolve_remote_tcp() -> Duration {
+    const ITERATIONS: u32 = 64;
     use guiwright_core::test_util::Fixture;
     use guiwright_driver::mock::MockAdapter;
     use guiwright_driver::server::GwpServerHandle;
@@ -398,7 +399,6 @@ pub fn resolve_remote_tcp() -> Duration {
 
     let fixture = Fixture::buttons();
     let runtime = Runtime::new().expect("bench runtime");
-
     let (measured, handle) = runtime.block_on(async {
         let handle = GwpServerHandle::spawn_tcp(
             std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -408,7 +408,9 @@ pub fn resolve_remote_tcp() -> Duration {
         .expect("bench tcp server binds");
         let addr = match handle.endpoint() {
             guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
-            other => unreachable!("spawn_tcp reports a TCP endpoint, got {other:?}"),
+            guiwright_driver::server::Endpoint::Uds(_) => {
+                unreachable!("spawn_tcp reports a TCP endpoint")
+            }
         };
         let mut client = Client::connect(&addr.to_string())
             .await
@@ -424,7 +426,6 @@ pub fn resolve_remote_tcp() -> Duration {
             }),
         };
 
-        const ITERATIONS: u32 = 64;
         for _ in 0..4 {
             let resp = client
                 .request(RequestV1::Resolve {
@@ -459,6 +460,7 @@ pub fn resolve_remote_tcp() -> Duration {
 /// measured window is the `push_frame` loop only (encoding runs on the
 /// writer thread, off the session path, §15.4).
 pub fn video_frame_dedup() -> Duration {
+    const FRAMES: u64 = 512;
     use guiwright_trace::video::{EncoderChoice, VideoOptions, VideoRecorder};
     use std::time::Instant;
 
@@ -467,11 +469,10 @@ pub fn video_frame_dedup() -> Duration {
     let mut options = VideoOptions::new(25);
     options.encoder = EncoderChoice::PngSequence;
     let mut recorder =
-        VideoRecorder::start(dir.join("bench.frames"), options).expect("bench recorder");
+        VideoRecorder::start(dir.join("bench.frames"), &options).expect("bench recorder");
 
     let frame: std::sync::Arc<[u8]> =
         std::sync::Arc::from(vec![7u8; 64 * 64 * 4].into_boxed_slice());
-    const FRAMES: u64 = 512;
     // Half the frames repeat the previous hash (a static UI compresses to
     // keyframe + no-ops, §10); the others change.
     let started = Instant::now();
@@ -515,5 +516,31 @@ pub fn gesture_synthesis() -> Duration {
     let elapsed = start.elapsed();
     assert_eq!(drag_events.len(), 42, "down + 40 ratchet moves + up");
     assert_eq!(click_events.len(), 5, "move + down/up ×2");
+    elapsed
+}
+
+// --- Kit embedded-input sample (§9 over the kit) -----------------------------
+
+/// §9 input pipeline, kit side: one `app.mouse().click(x, y)` through the
+/// embedded surface — handle → session gesture synthesis (the §9 recipes,
+/// adapter pacing) → per-window injection → rendezvous pump. The launch
+/// and settle stay outside the measured span; the measured operation is
+/// one click, the hot path every embedded input command rides.
+pub fn kit_input_click() -> Duration {
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("kit_input_click", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    let outcome = app.mouse().click(10.0, 20.0).expect("bench click applies");
+    let elapsed = start.elapsed();
+    assert_eq!(outcome.events, 3, "move + down + up");
     elapsed
 }
