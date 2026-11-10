@@ -12,7 +12,7 @@ fn linux_recipe_names_the_ci_packages() {
         return;
     }
     let commands = platform_deps().expect("linux recipe");
-    assert!(!commands.is_empty());
+    assert_ne!(commands.len(), 0);
     let joined = commands.join("\n");
     for package in [
         "libwayland-client0",
