@@ -1,5 +1,5 @@
-//! Proc macros for Guiwright (§5.2 `guiwright-kit`: "#[guiwright::test],
-//! fixtures").
+//! Proc macros for Guiwright (§5.2 `guiwright-kit`: `#[guiwright::test]`,
+//! `#[guiwright_kit::seam]`, fixtures).
 //!
 //! `#[test]` turns a plain function taking `&mut App` into a `#[test]`
 //! that launches the embedded harness (§5.1 "embedded mode: guiwright-kit
@@ -62,16 +62,13 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = &input.attrs;
     let output = &input.sig.output;
     let body = &input.block;
-    let app_arg = match input.sig.inputs.first() {
-        Some(first) => first,
-        None => {
-            return syn::Error::new_spanned(
-                &input.sig,
-                "#[guiwright_kit::test] functions must take exactly one argument: `app: &mut guiwright_kit::App`",
-            )
-            .to_compile_error()
-            .into();
-        }
+    let Some(app_arg) = input.sig.inputs.first() else {
+        return syn::Error::new_spanned(
+            &input.sig,
+            "#[guiwright_kit::test] functions must take exactly one argument: `app: &mut guiwright_kit::App`",
+        )
+        .to_compile_error()
+        .into();
     };
 
     // Unit bodies report `()`; Result bodies propagate the error message
@@ -159,9 +156,15 @@ pub fn register_seams(input: TokenStream) -> TokenStream {
         let reg_fn = quote::format_ident!("__gw_seam_{}", n);
         quote! { #reg_fn(&mut __gw_registry); }
     });
+    // `mut` only when seams are registered — an empty `register_seams![]`
+    // must not emit unused-mut warnings into the app's crate.
+    let registry = if names.is_empty() {
+        quote! { let __gw_registry = ::guiwright_kit::SeamRegistry::new(); }
+    } else {
+        quote! { let mut __gw_registry = ::guiwright_kit::SeamRegistry::new(); }
+    };
     quote! {{
-        #[allow(unused_mut)]
-        let mut __gw_registry = ::guiwright_kit::SeamRegistry::new();
+        #registry
         #(#calls)*
         __gw_registry
     }}
@@ -226,7 +229,8 @@ fn seam_call(input: &ItemFn) -> (TokenStream2, TokenStream2) {
 
     let call = match (&state_ty, has_scope) {
         (None, false) => quote! { let __gw_result = #name(); },
-        (None, true) => unreachable!("validated"),
+        // Both validated-shape holes: `#[seam]` rejects these combos.
+        (None, true) | (Some(None), _) => unreachable!("validated"),
         (Some(Some(ty)), false) => quote! {
             let __gw_state = __gw_ctx
                 .downcast_mut::<#ty>()
@@ -239,7 +243,6 @@ fn seam_call(input: &ItemFn) -> (TokenStream2, TokenStream2) {
                 .ok_or("wrong runner context type")?;
             let __gw_result = #name(__gw_state, __gw_scope);
         },
-        (Some(None), _) => unreachable!("validated"),
     };
 
     // `Result<(), E>` → detail "ok"; `Result<String, E>` → the string.
