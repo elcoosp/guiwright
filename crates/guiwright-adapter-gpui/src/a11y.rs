@@ -5,7 +5,7 @@
 //! semantics differ per platform (§18 "AccessKit laziness/activation
 //! semantics differ"). The §18 mitigation is the contract here: "adapters
 //! force-enable at driver attach (`update_if_active`-compatible;
-//! ActivationHandler with immediate activation for tests)".
+//! `ActivationHandler` with immediate activation for tests)".
 //!
 //! Once active, per-frame `TreeUpdate`s flow through
 //! `PlatformWindow::a11y_tree_update` with node bounds recorded per
@@ -89,9 +89,10 @@ impl A11yHybrid {
             ..DiffStats::default()
         };
         for (id, node) in &update.nodes {
-            match self.bounds.contains_key(&id.0) {
-                true => stats.nodes_updated += 1,
-                false => stats.nodes_added += 1,
+            if self.bounds.contains_key(&id.0) {
+                stats.nodes_updated += 1;
+            } else {
+                stats.nodes_added += 1;
             }
             if let Some(rect) = node.bounds() {
                 self.bounds
@@ -149,7 +150,7 @@ mod tests {
                 })
                 .collect(),
             tree: full.then(|| TreeInfo {
-                root: NodeId(nodes.first().map(|(id, _)| *id).unwrap_or(0)),
+                root: NodeId(nodes.first().map_or(0, |(id, _)| *id)),
                 toolkit_name: Some("gpui-test".into()),
                 toolkit_version: None,
             }),
