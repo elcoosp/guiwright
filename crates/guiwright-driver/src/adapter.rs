@@ -369,4 +369,22 @@ pub trait FrameworkAdapter: 'static {
         let _ = task;
         Err(AdapterError::Unsupported("run_in (state seams, §14)"))
     }
+
+    /// Inspector overlay (§13, M8): composite this plan on top of the
+    /// app's scene **at present time** — hover outline + role/TestId
+    /// badges from the tree indexes. `None` stops compositing (the
+    /// overlay session ended). The plan is *data* (§15.4): producing it
+    /// never triggers an extra pass, and the adapter paints it inside its
+    /// current pass (egui: painter layer after the app closure; masonry:
+    /// the `VisualLayerPlan` overlay layer — see each adapter's overlay
+    /// module). Default = the adapter has no overlay surface
+    /// (capability-matrix row says no, §6.2): the Inspect domain reports
+    /// `Unsupported` instead of silently drawing nothing.
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        let _ = plan;
+        Err(AdapterError::Unsupported("inspect overlay (§13)"))
+    }
 }
