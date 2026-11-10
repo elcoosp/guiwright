@@ -194,7 +194,7 @@ pub enum WindowV1 {
     /// Aim this connection at a window target → `WindowUsed`, or
     /// `Error { UnknownWindow }` when the handle is unknown (never existed
     /// or closed). The node identities of `Action` are already
-    /// window-unique (NodeKey carries the TreeId), so scoping concerns
+    /// window-unique (`NodeKey` carries the `TreeId`), so scoping concerns
     /// resolution only.
     Use { handle: String },
 }
@@ -851,7 +851,10 @@ mod tests {
                 to_y: 60.0,
                 button: PointerButtonV1::Primary,
             })),
-            GwpRequest::V1(RequestV1::Gesture(GestureV1::Wheel { dx: 0.0, dy: -120.0 })),
+            GwpRequest::V1(RequestV1::Gesture(GestureV1::Wheel {
+                dx: 0.0,
+                dy: -120.0,
+            })),
             GwpRequest::V1(RequestV1::Gesture(GestureV1::Key {
                 key: "Enter".into(),
                 modifiers: vec!["Shift".into()],
@@ -887,14 +890,20 @@ mod tests {
     /// at the end and extend the pin list instead.
     #[test]
     fn wire_discriminants_are_append_only() {
+        request_pins();
+        response_pins();
+        service_pins();
+        nested_domain_pins();
+    }
+
+    /// Request variant indices, pinned for other-language clients.
+    fn request_pins() {
         fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
             // The first byte(s) of a postcard enum are the varint variant
             // index; every variant index pinned here is < 128 (single byte).
             let bytes = postcard::to_allocvec(value).expect("encode");
             u64::from(bytes[0])
         }
-
-        // Requests (M0–M2 alphabet kept intact, M3 `Video` appended).
         assert_eq!(
             discriminant(&RequestV1::Hello {
                 proto_version: 1,
@@ -942,8 +951,16 @@ mod tests {
             discriminant(&RequestV1::Gesture(GestureV1::Wheel { dx: 0.0, dy: 0.0 })),
             12
         );
+    }
 
-        // Responses.
+    /// Response variant indices, pinned for other-language clients.
+    fn response_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            // The first byte(s) of a postcard enum are the varint variant
+            // index; every variant index pinned here is < 128 (single byte).
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
         assert_eq!(
             discriminant(&ResponseV1::Welcome {
                 proto_version: 1,
@@ -985,6 +1002,16 @@ mod tests {
             }),
             4
         );
+    }
+
+    /// Clock / mock / codegen / error / video service replies, in wire order.
+    fn service_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            // The first byte(s) of a postcard enum are the varint variant
+            // index; every variant index pinned here is < 128 (single byte).
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
         assert_eq!(discriminant(&ResponseV1::InputQueued { frame_seq: 0 }), 5);
         assert_eq!(
             discriminant(&ResponseV1::ClockState {
@@ -1044,8 +1071,16 @@ mod tests {
             }),
             14
         );
+    }
 
-        // Nested domain enums are pinned too — other-language clients
+    /// Nested domain + `ErrorCode` indices, pinned for other-language clients.
+    fn nested_domain_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            // The first byte(s) of a postcard enum are the varint variant
+            // index; every variant index pinned here is < 128 (single byte).
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
         // hard-code these tables (clients/typescript).
         assert_eq!(discriminant(&VideoV1::Start(VideoOptsV1::default())), 0);
         assert_eq!(discriminant(&VideoV1::Stop), 1);
@@ -1101,7 +1136,12 @@ mod tests {
             }),
             3
         );
-        assert_eq!(discriminant(&GestureV1::Type { text: String::new() }), 4);
+        assert_eq!(
+            discriminant(&GestureV1::Type {
+                text: String::new()
+            }),
+            4
+        );
         // ErrorCode is flat on the wire (u8 in Error payloads) — appending
         // UnknownWindow keeps the pre-M6 codes byte-identical.
         assert_eq!(discriminant(&ErrorCode::Internal), 7);
