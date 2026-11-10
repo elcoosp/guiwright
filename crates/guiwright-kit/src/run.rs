@@ -1,4 +1,4 @@
-//! The `#[test]` body runner (§5.2 kit: "#[guiwright::test], fixtures").
+//! The `#[test]` body runner (§5.2 kit: `#[guiwright::test]`, fixtures).
 //!
 //! The macro generates a `#[test]` that launches the fixture app, runs
 //! the body and reports via [`TestOutcome`] — panics and `Err` returns
