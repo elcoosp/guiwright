@@ -80,11 +80,10 @@ impl VideoOptions {
 }
 
 /// One raw frame flowing through the ring (session thread → writer).
-/// `hash` rides along for the writer-thread diagnostics; the dedup
-/// decision itself happens caller-side (§10).
+/// `hash` rides along for the writer-thread diagnostics (the first-frame
+/// debug stamp below); the dedup decision itself happens caller-side (§10).
 struct VideoFrame {
     seq: u64,
-    #[allow(dead_code)] // diagnostic payload; consumed by encoder debugging
     hash: u64,
     width: u32,
     height: u32,
@@ -152,7 +151,7 @@ impl FFmpegSink {
     ) -> Result<FFmpegSink, VideoError> {
         let codec = match path.extension().and_then(|e| e.to_str()) {
             Some("webm") => "libvpx-vp9",
-            Some("mp4") | Some("m4v") => "libx264",
+            Some("mp4" | "m4v") => "libx264",
             other => {
                 return Err(VideoError::Encoder(format!(
                     "no ffmpeg codec mapping for extension {other:?} (use .webm or .mp4)"
@@ -283,8 +282,7 @@ fn ffmpeg_available(bin: &Path) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 /// Decide the encoder for `path` (§10 Auto policy).
@@ -295,7 +293,7 @@ fn pick_encoder(
 ) -> Result<PickedPlan, VideoError> {
     let is_video_container = matches!(
         path.extension().and_then(|e| e.to_str()),
-        Some("webm") | Some("mp4") | Some("m4v")
+        Some("webm" | "mp4" | "m4v")
     );
     let use_ffmpeg = match choice {
         EncoderChoice::FFmpeg => true,
@@ -306,7 +304,7 @@ fn pick_encoder(
         // Validate the extension mapping up front so bad targets fail at
         // start, not after the first frame.
         match path.extension().and_then(|e| e.to_str()) {
-            Some("webm") | Some("mp4") | Some("m4v") => {}
+            Some("webm" | "mp4" | "m4v") => {}
             other => {
                 return Err(VideoError::Encoder(format!(
                     "no ffmpeg codec mapping for extension {other:?} (use .webm or .mp4)"
@@ -347,7 +345,7 @@ impl VideoRecorder {
     /// the PNG sequence (the summary's `path` says which landed).
     pub fn start(
         output_path: impl Into<PathBuf>,
-        options: VideoOptions,
+        options: &VideoOptions,
     ) -> Result<Self, VideoError> {
         let output_path = output_path.into();
         let fps = if options.fps == 0 {
@@ -370,7 +368,7 @@ impl VideoRecorder {
                 let path = output_path.clone();
                 std::thread::Builder::new()
                     .name("gw-video-writer".into())
-                    .spawn(move || writer_loop_ffmpeg(rx, bin, path, fps))
+                    .spawn(move || writer_loop_ffmpeg(&rx, &bin, &path, fps))
                     .expect("spawn gw-video-writer")
             }
             PickedPlan::Png { dir, substituted } => {
@@ -382,7 +380,7 @@ impl VideoRecorder {
                 };
                 std::thread::Builder::new()
                     .name("gw-video-writer".into())
-                    .spawn(move || writer_loop_png(rx, dir, fps, intended))
+                    .spawn(move || writer_loop_png(&rx, &dir, fps, intended))
                     .expect("spawn gw-video-writer")
             }
         };
@@ -458,8 +456,8 @@ impl VideoRecorder {
         };
         match tx.try_send(frame) {
             Ok(()) => self.pushed += 1,
-            Err(TrySendError::Full(_)) => self.dropped += 1,
-            Err(TrySendError::Disconnected(_)) => self.dropped += 1,
+            // Full ring (backpressure §10) or a stopped writer: shed.
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => self.dropped += 1,
         }
     }
 
@@ -504,14 +502,13 @@ impl VideoRecorder {
 pub fn epoch_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis())
 }
 
 fn writer_loop_ffmpeg(
-    rx: Receiver<VideoFrame>,
-    bin: PathBuf,
-    path: PathBuf,
+    rx: &Receiver<VideoFrame>,
+    bin: &Path,
+    path: &Path,
     fps: u32,
 ) -> Result<u64, VideoError> {
     let mut sink: Option<FFmpegSink> = None;
@@ -525,9 +522,17 @@ fn writer_loop_ffmpeg(
         // frame (resolution can only be known there, §10).
         let spawned = match sink.as_mut() {
             Some(s) => Some(s),
-            None => match FFmpegSink::spawn(&bin, &path, frame.width, frame.height, fps) {
+            None => match FFmpegSink::spawn(bin, path, frame.width, frame.height, fps) {
                 Ok(s) => {
                     sink = Some(s);
+                    // The writer-thread diagnostic stamp (§15.5 debugging):
+                    // first frame's seq + visual hash anchor the encoder
+                    // log against the caller-side dedup decisions.
+                    tracing::debug!(
+                        seq = frame.seq,
+                        hash = frame.hash,
+                        "ffmpeg sink spawned on first frame"
+                    );
                     sink.as_mut()
                 }
                 Err(e) => {
@@ -556,7 +561,7 @@ fn writer_loop_ffmpeg(
         }
     }
     if let Some(s) = sink {
-        s.finish(&path)?;
+        s.finish(path)?;
     }
     match error {
         Some(e) => Err(e),
@@ -565,12 +570,12 @@ fn writer_loop_ffmpeg(
 }
 
 fn writer_loop_png(
-    rx: Receiver<VideoFrame>,
-    dir: PathBuf,
+    rx: &Receiver<VideoFrame>,
+    dir: &Path,
     fps: u32,
     intended: Option<String>,
 ) -> Result<u64, VideoError> {
-    let mut sink = PngSink::start(dir, fps, intended)?;
+    let mut sink = PngSink::start(dir.to_path_buf(), fps, intended)?;
     let mut written: u64 = 0;
     let mut error: Option<VideoError> = None;
     while let Ok(frame) = rx.recv() {
@@ -612,7 +617,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmpdir");
         let out = dir.path().join("out.frames");
         let mut rec =
-            VideoRecorder::start(&out, opts(25, EncoderChoice::PngSequence)).expect("start");
+            VideoRecorder::start(&out, &opts(25, EncoderChoice::PngSequence)).expect("start");
         let px = solid(8, 8, [255, 0, 0, 255]);
         rec.push_frame(1, 0xA1, 8, 8, Some(&px));
         rec.push_frame(2, 0xA1, 8, 8, Some(&px)); // hash-equality → dropped
@@ -651,7 +656,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmpdir");
         let out = dir.path().join("out.frames");
         let mut rec =
-            VideoRecorder::start(&out, opts(25, EncoderChoice::PngSequence)).expect("start");
+            VideoRecorder::start(&out, &opts(25, EncoderChoice::PngSequence)).expect("start");
         let px = solid(4, 4, [0, 255, 0, 255]);
         for i in 0..10u64 {
             rec.push_frame(i + 1, 0x10 + i, 4, 4, Some(&px));
@@ -668,7 +673,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmpdir");
         let out = dir.path().join("out.frames");
         let mut rec =
-            VideoRecorder::start(&out, opts(25, EncoderChoice::PngSequence)).expect("start");
+            VideoRecorder::start(&out, &opts(25, EncoderChoice::PngSequence)).expect("start");
         rec.push_frame(1, 0x01, 4, 4, None);
         assert_eq!(rec.frames_dropped(), 1);
         assert_eq!(rec.frames_pushed(), 0);
@@ -681,7 +686,7 @@ mod tests {
         let out = dir.path().join("movie.webm");
         let mut options = opts(25, EncoderChoice::Auto);
         options.ffmpeg_bin = dir.path().join("definitely-not-ffmpeg");
-        let mut rec = VideoRecorder::start(&out, options).expect("auto falls back");
+        let mut rec = VideoRecorder::start(&out, &options).expect("auto falls back");
         assert_eq!(rec.encoder(), EncoderChoice::PngSequence);
         let px = solid(4, 4, [0, 0, 255, 255]);
         rec.push_frame(1, 0x01, 4, 4, Some(&px));
@@ -700,7 +705,7 @@ mod tests {
     fn ffmpeg_choice_with_unknown_extension_fails_fast() {
         let dir = tempfile::tempdir().expect("tmpdir");
         let out = dir.path().join("movie.avi");
-        let err = VideoRecorder::start(&out, opts(25, EncoderChoice::FFmpeg))
+        let err = VideoRecorder::start(&out, &opts(25, EncoderChoice::FFmpeg))
             .expect_err("no codec mapping for .avi");
         assert!(err.to_string().contains("avi"), "{err}");
     }
@@ -717,7 +722,7 @@ mod tests {
         }
         let dir = tempfile::tempdir().expect("tmpdir");
         let out = dir.path().join("movie.webm");
-        let mut rec = VideoRecorder::start(&out, opts(25, EncoderChoice::FFmpeg)).expect("start");
+        let mut rec = VideoRecorder::start(&out, &opts(25, EncoderChoice::FFmpeg)).expect("start");
         assert_eq!(rec.encoder(), EncoderChoice::FFmpeg);
         for i in 0..12u64 {
             // Distinct hashes; the pixel content alternates so the VP9
@@ -745,7 +750,7 @@ mod tests {
     fn double_stop_is_stopped() {
         let dir = tempfile::tempdir().expect("tmpdir");
         let out = dir.path().join("out.frames");
-        let rec = VideoRecorder::start(&out, opts(25, EncoderChoice::PngSequence)).expect("start");
+        let rec = VideoRecorder::start(&out, &opts(25, EncoderChoice::PngSequence)).expect("start");
         rec.stop().expect("first stop");
         // `stop(self)` consumes; a second call on a moved value cannot
         // happen — assert the guard through the type system instead.
