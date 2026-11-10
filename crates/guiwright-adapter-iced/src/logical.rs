@@ -27,7 +27,7 @@ use crate::registry::RoleRegistry;
 /// pass — the neutral vocabulary between the harness and this engine.
 #[derive(Clone, Debug)]
 pub struct WidgetReport {
-    /// Registry key ("button", "text_input", "container", …, §4.6).
+    /// Registry key (`"button"`, `"text_input"`, `"container"`, …, §4.6).
     pub kind: String,
     /// Framework widget handle (iced `widget::Id`, floem `ViewId`, …).
     pub handle: u64,
@@ -110,7 +110,7 @@ fn normalize(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The engine. Rebuilt per pass; owns the handle↔NodeId binding.
+/// The engine. Rebuilt per pass; owns the handle↔`NodeId` binding.
 #[derive(Debug)]
 pub struct LogicalTree {
     registry: RoleRegistry,
@@ -172,15 +172,14 @@ impl LogicalTree {
     /// Fold one pass's widget reports into a [`LogicalTreeDiff`]: the full
     /// synthesized update (consumer-side diffing is O(changes), §15.2)
     /// plus the removed handle list for adapter bookkeeping.
-    pub fn rebuild(&mut self, root: WidgetReport) -> LogicalTreeDiff {
+    pub fn rebuild(&mut self, root: &WidgetReport) -> LogicalTreeDiff {
         let mut nodes: Vec<(NodeId, Node)> = Vec::new();
         let mut live: HashMap<u64, Slot> = HashMap::new();
         let mut focus: Option<NodeId> = None;
         let mut removed: Vec<u64> = Vec::new();
         let mut test_ids: Vec<(u64, String)> = Vec::new();
 
-        let root_node_id = self.walk(&root, &mut nodes, &mut live, &mut focus, &mut test_ids);
-        let root_node_id = root_node_id.unwrap_or(NodeId(0));
+        let root_node_id = self.walk(root, &mut nodes, &mut live, &mut focus, &mut test_ids);
 
         // Handles that disappeared since the last pass — bump their
         // generation so recycled ids never alias (§8.2).
@@ -220,8 +219,6 @@ impl LogicalTree {
         NodeId(id)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn walk(
         &mut self,
         report: &WidgetReport,
@@ -229,7 +226,7 @@ impl LogicalTree {
         live: &mut HashMap<u64, Slot>,
         focus: &mut Option<NodeId>,
         test_ids: &mut Vec<(u64, String)>,
-    ) -> Option<NodeId> {
+    ) -> NodeId {
         // Stable binding: a handle seen before keeps its minted NodeId —
         // unless it left the tree since (generation bump above): a handle
         // that re-enters always re-mints (ABA guard, §8.2).
@@ -269,9 +266,7 @@ impl LogicalTree {
 
         let mut child_ids = Vec::with_capacity(report.children.len());
         for child in &report.children {
-            if let Some(child_id) = self.walk(child, nodes, live, focus, test_ids) {
-                child_ids.push(child_id);
-            }
+            child_ids.push(self.walk(child, nodes, live, focus, test_ids));
         }
         node.set_children(child_ids);
 
@@ -284,7 +279,7 @@ impl LogicalTree {
                 role,
             },
         );
-        Some(node_id)
+        node_id
     }
 }
 
@@ -318,10 +313,10 @@ mod tests {
     #[test]
     fn synthesizes_role_label_bounds_semantics() {
         let mut tree = LogicalTree::new("iced");
-        let diff = tree.rebuild(sample_app());
+        let diff = tree.rebuild(&sample_app());
         assert_eq!(diff.adapter, "iced");
         assert!(diff.changed);
-        assert!(diff.removed.is_empty());
+        assert_eq!(diff.removed.len(), 0);
 
         let update = &diff.update;
         assert_eq!(update.tree_id, TreeId::ROOT);
@@ -355,7 +350,7 @@ mod tests {
     #[test]
     fn handles_keep_stable_minted_ids_across_passes() {
         let mut tree = LogicalTree::new("iced");
-        let first = tree.rebuild(sample_app());
+        let first = tree.rebuild(&sample_app());
         let save_first = first
             .update
             .nodes
@@ -364,7 +359,7 @@ mod tests {
             .expect("save")
             .0;
 
-        let second = tree.rebuild(sample_app());
+        let second = tree.rebuild(&sample_app());
         let save_second = second
             .update
             .nodes
@@ -379,7 +374,7 @@ mod tests {
     #[test]
     fn removed_handles_report_and_never_realias() {
         let mut tree = LogicalTree::new("iced");
-        tree.rebuild(sample_app());
+        tree.rebuild(&sample_app());
         let save_id = tree.handle_of(NodeId(1));
 
         // Pass 2: the Save button disappears.
@@ -390,7 +385,7 @@ mod tests {
                 .with_value("ada@example.dev"),
             WidgetReport::new("button", 3).with_text("Confirm"),
         ];
-        let diff = tree.rebuild(without_save);
+        let diff = tree.rebuild(&without_save);
         assert_eq!(diff.removed, vec![1], "handle 1 left");
 
         // Pass 3: handle 1 returns (framework recycled the id) → it must
@@ -400,7 +395,7 @@ mod tests {
             WidgetReport::new("text", 1).with_text("Recycled id, different widget"),
             WidgetReport::new("text_input", 2).with_text("Email"),
         ];
-        let diff = tree.rebuild(with_recycled);
+        let diff = tree.rebuild(&with_recycled);
         let recycled_node = diff
             .update
             .nodes
@@ -422,7 +417,7 @@ mod tests {
                 .with_text("Name")
                 .focused(),
         ];
-        let diff = tree.rebuild(root);
+        let diff = tree.rebuild(&root);
         let focus = diff.update.focus;
         assert_ne!(
             focus,
@@ -439,7 +434,7 @@ mod tests {
         let mut tree = LogicalTree::with_registry("iced", reg);
         let root = WidgetReport::new("window", 100)
             .with_child(WidgetReport::new("star_rating", 7).with_text("4 of 5"));
-        let diff = tree.rebuild(root);
+        let diff = tree.rebuild(&root);
         let star = diff
             .update
             .nodes
@@ -457,7 +452,7 @@ mod tests {
                 .with_text("  Save   it  ")
                 .with_test_id("btn-save"),
         );
-        let diff = tree.rebuild(root);
+        let diff = tree.rebuild(&root);
         assert_eq!(diff.test_ids, vec![(1, "btn-save".to_string())]);
         let (_, save) = diff
             .update
