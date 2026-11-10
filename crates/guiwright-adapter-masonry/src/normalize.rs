@@ -1,14 +1,14 @@
 //! accesskit version normalization (masonry 0.21 → core 0.25).
 //!
-//! The architecture (§5.2 dependency rule) makes accesskit the one
-//! universal substrate — but framework releases pin different accesskit
-//! majors (egui 0.37 → accesskit 0.25; masonry 0.4.0 → accesskit 0.21).
+//! The architecture (§5.2 dependency rule) makes `accesskit` the one
+//! universal substrate — but framework releases pin different `accesskit`
+//! majors (`egui` 0.37 → accesskit 0.25; masonry 0.4.0 → accesskit 0.21).
 //! Adapters normalize **their** framework's tree updates into the core
 //! dialect, exactly like Level-2 adapters normalize their identities into
 //! [`NodeKey`](guiwright_core::NodeKey).
 //!
 //! Scope (M0): the property subset the locator engine and actionability
-//! checks consume — role, label, labelled_by, value, description, disabled,
+//! checks consume — role, label, `labelled_by`, value, description, disabled,
 //! hidden, bounds, transform, children, actions. New accesskit properties
 //! flow through as soon as masonry bumps its accesskit dependency (the
 //! shim is deleted then); unknown roles degrade to `Unknown` so newer
@@ -26,6 +26,26 @@ use masonry_core::accesskit as ak21;
 /// its content, so this pass propagates the first non-empty descendant
 /// text into the node's label. Deleted when masonry emits names natively.
 pub fn fixup_accessible_names(nodes: &mut [(ak21::NodeId, ak21::Node)]) {
+    // Recurse from `id` down the a11y tree (mirrors the widget tree) for the
+    // first non-empty descendant text (§4.2 name-from-content).
+    fn descendant_text(
+        id: ak21::NodeId,
+        children_of: &std::collections::HashMap<ak21::NodeId, Vec<ak21::NodeId>>,
+        text_of: &std::collections::HashMap<ak21::NodeId, String>,
+    ) -> Option<String> {
+        for child in children_of.get(&id)? {
+            if let Some(text) = text_of.get(child) {
+                if !text.trim().is_empty() {
+                    return Some(text.clone());
+                }
+            }
+            if let Some(found) = descendant_text(*child, children_of, text_of) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     // children map for descendant walks (a11y tree mirrors the widget tree).
     let children_of: std::collections::HashMap<ak21::NodeId, Vec<ak21::NodeId>> = nodes
         .iter()
@@ -42,30 +62,11 @@ pub fn fixup_accessible_names(nodes: &mut [(ak21::NodeId, ak21::Node)]) {
         .map(|(id, node)| (*id, node.label().map(String::from)))
         .collect();
 
-    fn descendant_text(
-        id: ak21::NodeId,
-        children_of: &std::collections::HashMap<ak21::NodeId, Vec<ak21::NodeId>>,
-        text_of: &std::collections::HashMap<ak21::NodeId, String>,
-    ) -> Option<String> {
-        for child in children_of.get(&id)?.iter() {
-            if let Some(text) = text_of.get(child) {
-                if !text.trim().is_empty() {
-                    return Some(text.clone());
-                }
-            }
-            if let Some(found) = descendant_text(*child, children_of, text_of) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
     for id in ids {
         let is_empty = labels
             .get(&id)
             .and_then(|l| l.as_deref())
-            .map(|l| l.trim().is_empty())
-            .unwrap_or(true);
+            .is_none_or(|l| l.trim().is_empty());
         if !is_empty {
             continue;
         }
@@ -77,8 +78,7 @@ pub fn fixup_accessible_names(nodes: &mut [(ak21::NodeId, ak21::Node)]) {
         if let Some(label) = labels.get(id) {
             match label {
                 Some(text) if !text.trim().is_empty() => node.set_label(text.clone()),
-                Some(_) => node.clear_label(),
-                None => node.clear_label(),
+                Some(_) | None => node.clear_label(),
             }
         }
     }
@@ -92,7 +92,7 @@ pub fn normalize_update(update: ak21::TreeUpdate) -> ak25::TreeUpdate {
         nodes: update
             .nodes
             .into_iter()
-            .map(|(id, node)| (ak25::NodeId(id.0), normalize_node(node)))
+            .map(|(id, node)| (ak25::NodeId(id.0), normalize_node(&node)))
             .collect(),
         tree: update.tree.map(|tree| ak25::TreeInfo {
             root: ak25::NodeId(tree.root.0),
@@ -104,7 +104,33 @@ pub fn normalize_update(update: ak21::TreeUpdate) -> ak25::TreeUpdate {
     }
 }
 
-fn normalize_node(node: ak21::Node) -> ak25::Node {
+fn normalize_node(node: &ak21::Node) -> ak25::Node {
+    // Actions (the semantic surface of §8.4). The closed set is identical
+    // between 0.21 and 0.25.
+    const ACTIONS: [ak21::Action; 22] = [
+        ak21::Action::Click,
+        ak21::Action::Focus,
+        ak21::Action::Blur,
+        ak21::Action::Collapse,
+        ak21::Action::Expand,
+        ak21::Action::CustomAction,
+        ak21::Action::Decrement,
+        ak21::Action::Increment,
+        ak21::Action::HideTooltip,
+        ak21::Action::ShowTooltip,
+        ak21::Action::ReplaceSelectedText,
+        ak21::Action::ScrollDown,
+        ak21::Action::ScrollLeft,
+        ak21::Action::ScrollRight,
+        ak21::Action::ScrollUp,
+        ak21::Action::ScrollIntoView,
+        ak21::Action::ScrollToPoint,
+        ak21::Action::SetScrollOffset,
+        ak21::Action::SetSequentialFocusNavigationStartingPoint,
+        ak21::Action::SetTextSelection,
+        ak21::Action::SetValue,
+        ak21::Action::ShowContextMenu,
+    ];
     let mut out = ak25::Node::new(ak25::Role::Unknown);
 
     // Role (matched by stable name; unknown roles degrade gracefully).
@@ -162,30 +188,6 @@ fn normalize_node(node: ak21::Node) -> ak25::Node {
 
     // Actions (the semantic surface of §8.4). The closed set is identical
     // between 0.21 and 0.25.
-    const ACTIONS: [ak21::Action; 22] = [
-        ak21::Action::Click,
-        ak21::Action::Focus,
-        ak21::Action::Blur,
-        ak21::Action::Collapse,
-        ak21::Action::Expand,
-        ak21::Action::CustomAction,
-        ak21::Action::Decrement,
-        ak21::Action::Increment,
-        ak21::Action::HideTooltip,
-        ak21::Action::ShowTooltip,
-        ak21::Action::ReplaceSelectedText,
-        ak21::Action::ScrollDown,
-        ak21::Action::ScrollLeft,
-        ak21::Action::ScrollRight,
-        ak21::Action::ScrollUp,
-        ak21::Action::ScrollIntoView,
-        ak21::Action::ScrollToPoint,
-        ak21::Action::SetScrollOffset,
-        ak21::Action::SetSequentialFocusNavigationStartingPoint,
-        ak21::Action::SetTextSelection,
-        ak21::Action::SetValue,
-        ak21::Action::ShowContextMenu,
-    ];
     for action in ACTIONS {
         if node.supports_action(action) {
             out.add_action(translate_action(action));
@@ -283,7 +285,7 @@ mod tests {
         });
         src.add_action(ak21::Action::Click);
 
-        let out = normalize_node(src);
+        let out = normalize_node(&src);
         assert_eq!(out.role(), ak25::Role::Button);
         assert_eq!(out.label(), Some("Save"));
         let bounds = out.bounds().expect("bounds");
@@ -298,7 +300,7 @@ mod tests {
     fn unknown_roles_degrade_gracefully() {
         // A role that exists in 0.21 but has no explicit mapping here.
         let src = ak21::Node::new(ak21::Role::Abbr);
-        let out = normalize_node(src);
+        let out = normalize_node(&src);
         assert_eq!(out.role(), ak25::Role::Unknown);
     }
 
