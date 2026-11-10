@@ -130,6 +130,69 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         Ok(self.app.session.resolve(&self.selector)?)
     }
 
+    /// `locator.screenshot(name, bless)` — the §10 element screenshot
+    /// (M9): resolve (auto-wait), render the window frame once, **crop it
+    /// by the resolved node's physical bounds** (§10 "crop from the window
+    /// frame by the node's clip-aware rect — never re-render"), and
+    /// assert against the same per-platform baselines
+    /// [`App::screenshot`] uses (`tests/screenshots/<name>/`, per-OS
+    /// tolerances, the bless flow). The first run needs
+    /// `BlessMode::Failing` to write the baseline; a mismatch fails the
+    /// test and leaves `.new.png` + `.diff.png` artifacts next to it.
+    pub fn screenshot(self, name: &str, bless: BlessMode) -> Result<SnapshotOutcome, KitError> {
+        let resolved = self.app.session.resolve(&self.selector)?;
+        let rect = resolved.bounds.ok_or_else(|| {
+            CoreError::other(format!(
+                "{} has no bounds — nothing to crop (§10)",
+                self.selector.render()
+            ))
+        })?;
+        let frame = self.app.session.adapter_mut().render_frame(None)?;
+        let pixels = frame.pixels.ok_or_else(|| {
+            KitError::NoPixels(self.app.session.adapter().meta().name.to_string())
+        })?;
+        // Physical px → the crop window, clamped into the frame (§9: the
+        // bounds are already physical; the frame is the window's buffer).
+        // The clamp pins the value into `[0, max]` before the conversion
+        // (the §10/§15 guarded-conversion pattern): the float→i64 step
+        // keeps the sign domain (clamped ≥ 0), and the `u32::try_from`
+        // proves the range instead of truncating — `unwrap_or(max)` is
+        // the unreachable arm, kept honest by the clamp.
+        let clamp = |v: f64, max: u32| {
+            u32::try_from(v.round().clamp(0.0, f64::from(max)) as i64).unwrap_or(max)
+        };
+        let (x0, y0) = (clamp(rect.x0, frame.size.0), clamp(rect.y0, frame.size.1));
+        let (x1, y1) = (clamp(rect.x1, frame.size.0), clamp(rect.y1, frame.size.1));
+        let image = Image {
+            width: frame.size.0,
+            height: frame.size.1,
+            rgba: pixels.to_vec(),
+        };
+        let element = guiwright_shot::crop(&image, x0, y0, x1, y1)?;
+
+        let root = self
+            .app
+            .baseline_root
+            .clone()
+            .unwrap_or_else(|| self.app.context.baseline_dir());
+        let store = guiwright_shot::baseline::BaselineStore::new(root);
+        let tolerance = self.app.config.screenshots.effective();
+        let outcome = store.assert_snapshot(
+            name,
+            self.app.session.adapter().meta().framework,
+            &element,
+            tolerance,
+            bless,
+        )?;
+        self.app
+            .record_action("screenshot_element", &self.selector, Some(name));
+        self.app.record_event(
+            "screenshot_element",
+            format!("{name} [({x0},{y0}) → ({x1},{y1})] → {outcome:?}"),
+        );
+        Ok(outcome)
+    }
+
     pub fn selector(&self) -> &Selector {
         &self.selector
     }
@@ -379,6 +442,16 @@ impl<A: FrameworkAdapter> App<A> {
     /// be registered first via [`App::register_seams`].
     pub fn mock(&mut self) -> MockHandle<'_, A> {
         MockHandle { app: self }
+    }
+
+    /// The inspector surface (§13, M8): `app.inspect().enable()`,
+    /// `.highlight(&selector)`, `.clear_highlight()`, `.disable()` — the
+    /// live overlay session. The adapter composites hover outlines +
+    /// interactive-role badges at present time; the highlighted node's
+    /// facts come back for debug prints, exactly what the REPL's `inspect`
+    /// command and the TypeScript `inspectHighlight` render over the wire.
+    pub fn inspect(&mut self) -> InspectHandle<'_, A> {
+        InspectHandle { app: self }
     }
 
     /// The video surface (§10, M3): `app.video().start_in(dir, fps)` /
@@ -673,6 +746,82 @@ impl<A: FrameworkAdapter> ClockHandle<'_, A> {
 /// `app.mock()` — the §14 mock domain (state seams).
 pub struct MockHandle<'a, A: FrameworkAdapter> {
     app: &'a mut App<A>,
+}
+
+/// `app.inspect()` — the §13 inspector overlay surface (M8).
+pub struct InspectHandle<'a, A: FrameworkAdapter> {
+    app: &'a mut App<A>,
+}
+
+impl<A: FrameworkAdapter> std::fmt::Debug for InspectHandle<'_, A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InspectHandle").finish_non_exhaustive()
+    }
+}
+
+impl<A: FrameworkAdapter> InspectHandle<'_, A> {
+    /// `inspect.enable()` (§7 `Inspect::EnableOverlay`): start the overlay
+    /// session — the adapter composites hover outlines + interactive-role
+    /// badges from the current tree at present time, refreshed every frame
+    /// while it stays on. Adapters without an overlay surface report
+    /// `Unsupported` (§6.2).
+    pub fn enable(&mut self) -> Result<(), KitError> {
+        let outcome = self
+            .app
+            .session
+            .inspect_enable_overlay()
+            .map_err(KitError::Core);
+        self.app
+            .record_event("inspect", format!("overlay → {outcome:?}"));
+        outcome
+    }
+
+    /// `inspect.disable()` (§7 `Inspect::DisableOverlay`): stop
+    /// compositing and drop the highlight.
+    pub fn disable(&mut self) -> Result<(), KitError> {
+        let outcome = self
+            .app
+            .session
+            .inspect_disable_overlay()
+            .map_err(KitError::Core);
+        self.app
+            .record_event("inspect", format!("overlay off → {outcome:?}"));
+        outcome
+    }
+
+    /// `inspect.highlight(&selector)` (§7 `Inspect::Highlight`): aim the
+    /// hover outline at the node the selector resolves to (strict mode)
+    /// and return its facts — role, accessible name, bounds. Implies
+    /// [`InspectHandle::enable`].
+    pub fn highlight(
+        &mut self,
+        selector: &Selector,
+    ) -> Result<guiwright_inspect::codegen::NodeFacts, KitError> {
+        let outcome = self
+            .app
+            .session
+            .inspect_highlight(selector)
+            .map_err(KitError::Core);
+        self.app.record_event(
+            "inspect",
+            format!("highlight {} → {outcome:?}", selector.render()),
+        );
+        outcome
+    }
+
+    /// `inspect.clear_highlight()`: drop the outline; the overlay session
+    /// stays on (badges keep tracking the tree).
+    pub fn clear_highlight(&mut self) -> Result<(), KitError> {
+        self.app
+            .session
+            .inspect_clear_highlight()
+            .map_err(KitError::Core)
+    }
+
+    /// Is the overlay session on?
+    pub fn is_active(&self) -> bool {
+        self.app.session.overlay_active()
+    }
 }
 
 impl<A: FrameworkAdapter> std::fmt::Debug for MockHandle<'_, A> {
