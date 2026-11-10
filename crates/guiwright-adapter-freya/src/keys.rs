@@ -1,5 +1,5 @@
-//! Key sequences with modifiers **and explicit KeyUp** (§4.3 gap: freya's
-//! `press_key` "sends KeyDown only — we drive raw `PlatformEvent::Keyboard`
+//! Key sequences with modifiers **and explicit `KeyUp`** (§4.3 gap: freya's
+//! `press_key` "sends `KeyDown` only — we drive raw `PlatformEvent::Keyboard`
 //! with modifiers+KeyUp").
 //!
 //! Playwright semantics: `press("Control+a")` = modifier(s) down → key
@@ -20,7 +20,7 @@ pub struct KeyEvent {
     /// Normalized key name (lowercase single char, or named key like
     /// "enter", "tab", "escape").
     pub key: String,
-    /// Modifiers held during this event (normalized lowercase, sorted).
+    /// Modifiers held during this event (canonical §8.4 names, sorted).
     pub modifiers: Vec<String>,
 }
 
@@ -29,11 +29,26 @@ pub fn normalize_key(key: &str) -> String {
     key.trim().to_ascii_lowercase()
 }
 
-/// Normalize the modifier list (sorted, deduped, lowercase).
+/// Canonical §8.4 modifier names: `shift` / `ctrl` / `alt` / `meta`.
+/// Long aliases (`Control`, `Cmd`, `Super`, `Option`, `Windows`,
+/// `Command`) fold onto the short form so every adapter event carries
+/// the same token regardless of how the caller spelled it (the driver
+/// and kit pass the user's spelling through verbatim; the adapter owns
+/// the canonical form the platform sees).
+fn canonical_modifier(lowercased: &str) -> &str {
+    match lowercased {
+        "control" => "ctrl",
+        "cmd" | "command" | "super" | "windows" => "meta",
+        "option" => "alt",
+        other => other,
+    }
+}
+
+/// Normalize the modifier list (sorted, deduped, canonical §8.4 names).
 pub fn normalize_modifiers(modifiers: &[String]) -> Vec<String> {
     let mut out: Vec<String> = modifiers
         .iter()
-        .map(|m| m.trim().to_ascii_lowercase())
+        .map(|m| canonical_modifier(m.trim().to_ascii_lowercase().as_str()).to_string())
         .filter(|m| !m.is_empty())
         .collect();
     out.sort();
@@ -88,7 +103,7 @@ mod tests {
         assert_eq!(seq.len(), 2);
         assert_eq!(seq[0].phase, KeyPhase::Down);
         assert_eq!(seq[0].key, "enter");
-        assert!(seq[0].modifiers.is_empty());
+        assert_eq!(seq[0].modifiers.len(), 0);
         assert_eq!(seq[1].phase, KeyPhase::Up);
         assert_eq!(seq[1].key, "enter");
     }
@@ -99,7 +114,7 @@ mod tests {
         assert_eq!(seq.len(), 6);
         assert_eq!(
             (seq[0].phase, seq[0].key.as_str()),
-            (KeyPhase::Down, "control")
+            (KeyPhase::Down, "ctrl")
         );
         assert_eq!(
             (seq[1].phase, seq[1].key.as_str()),
@@ -110,13 +125,13 @@ mod tests {
             KeyEvent {
                 phase: KeyPhase::Down,
                 key: "a".into(),
-                modifiers: vec!["control".into(), "shift".into()],
+                modifiers: vec!["ctrl".into(), "shift".into()],
             }
         );
         assert_eq!(seq[3].phase, KeyPhase::Up);
         assert_eq!(seq[3].key, "a");
         assert_eq!(seq[4].key, "shift", "modifiers release in reverse");
-        assert_eq!(seq[5].key, "control");
+        assert_eq!(seq[5].key, "ctrl");
         // Every down has a matching up.
         for ev in &seq {
             assert!(
@@ -136,7 +151,7 @@ mod tests {
 
     #[test]
     fn modifiers_are_deduped_and_sorted() {
-        let seq = key_sequence("c", &["ctrl".into(), " CTRL ".into(), "".into()]);
+        let seq = key_sequence("c", &["ctrl".into(), " CTRL ".into(), String::new()]);
         assert_eq!(seq.len(), 4, "one modifier pair + key pair");
         assert_eq!(seq[0].key, "ctrl");
     }
