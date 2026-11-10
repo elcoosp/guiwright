@@ -524,7 +524,6 @@ fn video_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: VideoV1) -
 /// §7 clock domain (§14 service): millisecond wire vocabulary → session
 /// `Duration` surface.
 fn clock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: ClockV1) -> ResponseV1 {
-    use guiwright_core::CoreError;
     let adapter_cmd = match cmd {
         ClockV1::InstallVirtual => crate::adapter::ClockCmd::InstallVirtual,
         ClockV1::FastForward { ms } => {
@@ -541,10 +540,6 @@ fn clock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: ClockV1) -
             virtual_time_ms: report.state.virtual_time.map(|t| t.as_millis() as u64),
             paused: report.state.paused,
             steps: report.steps,
-        },
-        Err(CoreError::Other(msg)) if msg.contains("paused") => ResponseV1::Error {
-            code: ErrorCode::Unsupported,
-            message: msg,
         },
         Err(err) => error_response(err),
     }
@@ -578,11 +573,13 @@ fn mock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: MockV1) -> 
     }
 }
 
-/// §7 inspect domain (§13): remote codegen recording (M4). The
-/// session-side recorder is the kit's `CodegenRecorder` (guiwright-inspect)
-/// fed by every applied `Action` request; `StopRecording` replies with the
-/// generated kit code + strict-mode warnings (§13). The live highlight
-/// handles land with the interactive overlay session.
+/// §7 inspect domain (§13): remote codegen recording (M4) + the live
+/// overlay/highlight session (M8). The session-side recorder is the
+/// kit's `CodegenRecorder` (guiwright-inspect) fed by every applied
+/// `Action` request; `StopRecording` replies with the generated kit code
+/// and strict-mode warnings (§13). The overlay half composites through
+/// the adapter's `show_overlay` hook; `Highlight` replies `Pong` — the
+/// client renders the highlighted node's facts from its own resolution.
 fn inspect_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: InspectV1) -> ResponseV1 {
     match cmd {
         InspectV1::StartRecording => match session.codegen_start() {
@@ -593,6 +590,20 @@ fn inspect_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: InspectV
             Ok((code, warnings)) => ResponseV1::Codegen { code, warnings },
             Err(err) => error_response(err),
         },
+        InspectV1::EnableOverlay => match session.inspect_enable_overlay() {
+            Ok(()) => ResponseV1::Pong,
+            Err(err) => error_response(err),
+        },
+        InspectV1::DisableOverlay => match session.inspect_disable_overlay() {
+            Ok(()) => ResponseV1::Pong,
+            Err(err) => error_response(err),
+        },
+        InspectV1::Highlight { node } => {
+            match session.inspect_highlight_key(node.map(Into::into)) {
+                Ok(_) => ResponseV1::Pong,
+                Err(err) => error_response(err),
+            }
+        }
     }
 }
 
@@ -604,8 +615,15 @@ fn error_response(err: CoreError) -> ResponseV1 {
         CoreError::Timeout { .. } => (ErrorCode::Timeout, err.to_string()),
         CoreError::StaleNode { .. } => (ErrorCode::StaleGeneration, err.to_string()),
         CoreError::Unsupported(what) => (ErrorCode::Unsupported, (*what).to_string()),
+        // §14 (M8 cleanup): the paused-clock rejection rides the same
+        // code — the capability exists, the state forbids the command.
+        CoreError::ClockPaused(_) => (ErrorCode::Unsupported, err.to_string()),
         CoreError::UnknownWindow { .. } => (ErrorCode::UnknownWindow, err.to_string()),
+        // §13 (M8): `Highlight` named a handle the tree does not know.
+        CoreError::UnknownNode { .. } => (ErrorCode::UnknownNode, err.to_string()),
         CoreError::Other(msg) => (ErrorCode::Internal, msg.clone()),
+        // #[non_exhaustive]: future variants degrade to `Internal` (§7
+        // "old clients get clean errors").
         _ => (ErrorCode::Internal, err.to_string()),
     };
     ResponseV1::Error { code, message }
