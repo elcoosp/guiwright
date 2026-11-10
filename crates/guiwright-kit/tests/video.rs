@@ -57,6 +57,8 @@ fn video_refuses_adapters_without_pixels() {
 
 #[test]
 fn video_events_land_in_the_trace_archive() {
+    use std::io::Read as _;
+
     let mut app = pixel_app("video_trace");
     let dir = tempfile::tempdir().expect("tmpdir");
     let trace = dir.path().join("trace.zip");
@@ -71,7 +73,6 @@ fn video_events_land_in_the_trace_archive() {
     let zip = std::fs::File::open(&path).expect("archive");
     let mut zip = zip::ZipArchive::new(zip).expect("zip");
     let mut events = String::new();
-    use std::io::Read as _;
     zip.by_name("events.ndjson")
         .expect("events stream")
         .read_to_string(&mut events)
