@@ -168,7 +168,7 @@ impl<S: SimulatorSeam + 'static> FrameworkAdapter for IcedAdapter<S> {
 
     fn logical_snapshot(&mut self) -> Option<LogicalTreeDiff> {
         let report = self.current_report();
-        Some(self.engine.rebuild(report))
+        Some(self.engine.rebuild(&report))
     }
 
     fn act(&mut self, node: NodeId, action: SemAction) -> Result<ActionOutcome, AdapterError> {
@@ -316,7 +316,7 @@ mod tests {
         let mut adapter = make_adapter();
         let deadline = FrameDeadline::within(std::time::Duration::from_millis(100));
         let outcome = adapter.pump(deadline);
-        assert!(!outcome.frames.is_empty());
+        assert_ne!(outcome.frames.len(), 0);
         // The report changes once ("Save" → "Saved!") then stabilizes: the
         // adapter must not run away to the Zen budget.
         assert!(outcome.frames.len() < 16, "{} passes", outcome.frames.len());
@@ -328,11 +328,14 @@ mod tests {
         let deadline = FrameDeadline::within(std::time::Duration::from_millis(50));
         let _ = adapter.pump(deadline);
         let diff = adapter.logical_snapshot().expect("logical diff");
+        // The report settles "Save" → "Saved!" at the frame boundary (the
+        // pump test pins that); route by role — the label churn is not
+        // what's under test here.
         let save_node = diff
             .update
             .nodes
             .iter()
-            .find(|(_, n)| n.label() == Some("Save"))
+            .find(|(_, n)| n.role() == Role::Button)
             .map(|(id, _)| *id)
             .expect("save button");
         let outcome = adapter.act(save_node, SemAction::Click).expect("click");
