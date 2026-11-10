@@ -18,7 +18,9 @@ use guiwright_core::tree::{Resolved, TreeService};
 use guiwright_core::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
 use guiwright_core::{CoreError, NodeKey, Selector};
 
-use crate::adapter::{ActionOutcome, FrameDeadline, FrameworkAdapter, InputEvent, SemAction};
+use crate::adapter::{
+    ActionOutcome, AdapterError, FrameDeadline, FrameworkAdapter, InputEvent, SemAction,
+};
 use crate::clock::{ClockReport, ClockService, LedgerCommand};
 use crate::gesture::{Gesture, codegen_call, codegen_event_call, codegen_line, synthesize};
 use crate::seams::SeamRegistry;
@@ -38,6 +40,35 @@ impl Default for ActionOpts {
             timeout: DEFAULT_TIMEOUT,
             force: false,
         }
+    }
+}
+
+/// `AdapterError` → `CoreError` with the structure kept (M8): an
+/// `AdapterError::Unsupported` maps to [`CoreError::Unsupported`], so the
+/// GWP server answers `ErrorCode::Unsupported` instead of `Internal`.
+fn adapter_error(err: AdapterError) -> CoreError {
+    match err {
+        AdapterError::Unsupported(what) => CoreError::Unsupported(what),
+        AdapterError::Internal(msg) => CoreError::Other(msg),
+    }
+}
+
+/// Facts for one live node (the codegen vocabulary, §13): role/name and
+/// bounds exactly as the overlay badges and the inspector UIs print them.
+fn node_facts(
+    key: &NodeKey,
+    node: &accesskit_consumer::NodeRef<'_>,
+    tree: &TreeService,
+) -> guiwright_inspect::codegen::NodeFacts {
+    let bounds = node.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]);
+    guiwright_inspect::codegen::NodeFacts {
+        key: *key,
+        role: Some(format!("{:?}", node.role())),
+        name: node.label(),
+        label: node.label(),
+        value: node.value(),
+        test_id: tree.test_id_of(key).map(str::to_string),
+        bounds,
     }
 }
 
@@ -140,6 +171,14 @@ pub struct Session<A: FrameworkAdapter> {
     /// issued `Inspect::StartRecording`. Embedded sessions never touch it
     /// — the kit records through its own locator taps (`App::codegen`).
     codegen: Option<guiwright_inspect::codegen::CodegenRecorder>,
+    /// Inspector overlay session (§13, M8): `true` while a client asked
+    /// for the overlay (`Inspect::EnableOverlay` or the first
+    /// `Highlight`). While active, every pump rebuilds the plan from the
+    /// current tree indexes and hands it to the adapter — badges are
+    /// never stale. The adapter composites it at present time.
+    overlay_active: bool,
+    /// The node the hover outline aims at (`Inspect::Highlight`), if any.
+    highlight: Option<NodeKey>,
 }
 
 impl<A: FrameworkAdapter> Session<A> {
@@ -156,6 +195,8 @@ impl<A: FrameworkAdapter> Session<A> {
             reset_seam: "reset_state".into(),
             video: None,
             codegen: None,
+            overlay_active: false,
+            highlight: None,
         }
     }
 
@@ -233,6 +274,17 @@ impl<A: FrameworkAdapter> Session<A> {
         }
 
         summary.quiescent = outcome.is_quiescent();
+
+        // Inspector overlay refresh (§13, M8): while a session runs, the
+        // plan tracks the tree every pump — the adapter composites the
+        // fresh plan in its next pass. Opt-in cost: sessions without the
+        // overlay never build a plan (zero-polling discipline, §15.3).
+        if self.overlay_active {
+            let plan = self.build_overlay_plan();
+            if let Err(err) = self.adapter.show_overlay(Some(&plan)) {
+                tracing::debug!(%err, "inspect overlay refresh failed; keeping the last plan");
+            }
+        }
         summary
     }
 
@@ -292,6 +344,120 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Is a recording currently running?
     pub fn recording(&self) -> bool {
         self.video.is_some()
+    }
+
+    // --- Inspector overlay (§13, M8) ---------------------------------------
+
+    /// Start the overlay session (§7 `Inspect::EnableOverlay`): the
+    /// adapter composites hover outlines + interactive-role badges from
+    /// the current tree indexes at present time. The plan refreshes on
+    /// every pump while the session is on; [`Session::pump`] keeps the
+    /// zero-polling contract for sessions that never enabled it.
+    ///
+    /// Adapters without an overlay surface report `Unsupported` (§6.2) —
+    /// the session stays off.
+    pub fn inspect_enable_overlay(&mut self) -> Result<(), CoreError> {
+        // Fresh tree first (consistency, like `resolve`): the badges
+        // describe the tree the client sees, not one pump behind it.
+        self.pump();
+        let plan = self.build_overlay_plan();
+        self.adapter
+            .show_overlay(Some(&plan))
+            .map_err(adapter_error)?;
+        self.overlay_active = true;
+        Ok(())
+    }
+
+    /// End the overlay session (§7 complement `Inspect::DisableOverlay`):
+    /// stops compositing and drops the highlight. A later `Highlight`
+    /// starts a fresh session (highlight implies enable).
+    pub fn inspect_disable_overlay(&mut self) -> Result<(), CoreError> {
+        self.overlay_active = false;
+        self.highlight = None;
+        self.adapter.show_overlay(None).map_err(adapter_error)?;
+        Ok(())
+    }
+
+    /// Aim the hover outline at the node a selector resolves to (§7
+    /// `Inspect::Highlight(handle)`, kit shape): strict-mode resolution,
+    /// then the facts the inspector UIs print. Implies
+    /// [`Session::inspect_enable_overlay`].
+    pub fn inspect_highlight(
+        &mut self,
+        selector: &Selector,
+    ) -> Result<guiwright_inspect::codegen::NodeFacts, CoreError> {
+        let resolved = self.resolve(selector)?;
+        let key = resolved.key;
+        self.inspect_highlight_key(Some(key))?;
+        let facts = self
+            .tree
+            .node(&key)
+            .map(|node| node_facts(&key, &node, &self.tree))
+            .ok_or(CoreError::UnknownNode { key })?;
+        Ok(facts)
+    }
+
+    /// The wire shape of [`Session::inspect_highlight`] (§7
+    /// `Inspect::Highlight`): the client addresses the node by its
+    /// resolved handle. `None` clears the outline and keeps the overlay
+    /// session (badges stay live).
+    pub fn inspect_highlight_key(
+        &mut self,
+        node: Option<NodeKey>,
+    ) -> Result<Option<guiwright_inspect::codegen::NodeFacts>, CoreError> {
+        // Validate before touching state: an unknown handle composites
+        // nothing (§7 "old clients get clean errors" discipline).
+        if let Some(key) = node {
+            if self.tree.node(&key).is_none() {
+                return Err(CoreError::UnknownNode { key });
+            }
+        }
+        self.highlight = node;
+        if self.overlay_active {
+            self.pump(); // one rendezvous refreshes + pushes the plan
+        } else {
+            self.inspect_enable_overlay()?;
+        }
+        match node {
+            Some(key) => self
+                .tree
+                .node(&key)
+                .map(|n| node_facts(&key, &n, &self.tree))
+                .ok_or(CoreError::UnknownNode { key })
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Drop the hover outline; the overlay session stays on (badges keep
+    /// tracking the tree).
+    pub fn inspect_clear_highlight(&mut self) -> Result<(), CoreError> {
+        self.inspect_highlight_key(None).map(|_| ())
+    }
+
+    /// Is the inspector overlay session on?
+    pub fn overlay_active(&self) -> bool {
+        self.overlay_active
+    }
+
+    /// Build the plan from the live tree (§13 "badges from the current
+    /// tree indexes"): every node's facts feed
+    /// [`guiwright_inspect::overlay::OverlayPlan::from_facts`], the hover
+    /// outline rides the last [`Session::inspect_highlight_key`] target.
+    /// Interactive-only badges (§13 default for live sessions) — the
+    /// deep-inspect full-tree mode lands with the viewer.
+    fn build_overlay_plan(&self) -> guiwright_inspect::overlay::OverlayPlan {
+        let facts = self
+            .tree
+            .all_nodes()
+            .iter()
+            .filter_map(|key| {
+                self.tree
+                    .node(key)
+                    .map(|node| node_facts(key, &node, &self.tree))
+            })
+            .collect::<Vec<_>>();
+        guiwright_inspect::overlay::OverlayPlan::from_facts(facts, self.highlight.as_ref(), true)
     }
 
     // --- Remote codegen (§13, M4) -----------------------------------------
@@ -563,7 +729,7 @@ impl<A: FrameworkAdapter> Session<A> {
         for ev in &events {
             self.adapter
                 .input_window(target, ev.clone())
-                .map_err(|e| CoreError::Other(e.to_string()))?;
+                .map_err(adapter_error)?;
         }
         Ok(())
     }
@@ -680,7 +846,7 @@ impl<A: FrameworkAdapter> Session<A> {
                         x: (rect.x0 + rect.x1) / 2.0,
                         y: (rect.y0 + rect.y1) / 2.0,
                     })
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                    .map_err(adapter_error)?;
                 ActionOutcome {
                     applied_at_frame: self.frame_seq,
                     detail: "hovered".into(),
@@ -689,7 +855,7 @@ impl<A: FrameworkAdapter> Session<A> {
             (SemAction::Scroll { dx, dy }, Some(_rect)) => {
                 self.adapter
                     .input(InputEvent::Wheel { dx: *dx, dy: *dy })
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                    .map_err(adapter_error)?;
                 ActionOutcome {
                     applied_at_frame: self.frame_seq,
                     detail: format!("scrolled ({dx},{dy})"),
@@ -698,7 +864,7 @@ impl<A: FrameworkAdapter> Session<A> {
             _ => self
                 .adapter
                 .act(node_id(&resolved.key), action)
-                .map_err(|e| CoreError::Other(e.to_string()))?,
+                .map_err(adapter_error)?,
         };
         // Apply the action inside the next frame (rendezvous, §15.4): one
         // pump, then done — never spin.
@@ -726,7 +892,7 @@ impl<A: FrameworkAdapter> Session<A> {
         let outcome = self
             .adapter
             .act(node_id(&key), action)
-            .map_err(|e| CoreError::Other(e.to_string()))?;
+            .map_err(adapter_error)?;
         // Frame-boundary rendezvous (§15.4): one pump so the action is
         // applied at a frame before the reply is sent.
         self.pump();
@@ -775,7 +941,7 @@ impl<A: FrameworkAdapter> Session<A> {
                 let state = self
                     .adapter
                     .clock(Cmd::InstallVirtual)
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                    .map_err(adapter_error)?;
                 self.clock_service
                     .record(LedgerCommand::InstallVirtual, state, self.frame_seq, 0);
                 ClockReport { state, steps: 0 }
@@ -784,15 +950,12 @@ impl<A: FrameworkAdapter> Session<A> {
                 // §14: advance in frame-sized steps until drained; each
                 // step pumps a frame so timers/animations settle.
                 let plan = ClockService::plan_steps(dt);
-                let mut state = self
-                    .adapter
-                    .clock(Cmd::Probe)
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                let mut state = self.adapter.clock(Cmd::Probe).map_err(adapter_error)?;
                 for step in &plan {
                     state = self
                         .adapter
                         .clock(Cmd::FastForward(*step))
-                        .map_err(|e| CoreError::Other(e.to_string()))?;
+                        .map_err(adapter_error)?;
                     self.pump();
                     self.clock_service
                         .record(LedgerCommand::FastForward, state, self.frame_seq, 1);
@@ -804,51 +967,36 @@ impl<A: FrameworkAdapter> Session<A> {
             }
             Cmd::RunFor(dt) => {
                 if self.clock_service.paused() {
-                    return Err(CoreError::Other(
-                        "clock is paused: run_for cannot pace real time (§14)".into(),
+                    return Err(CoreError::ClockPaused(
+                        "run_for cannot pace real time (§14)",
                     ));
                 }
-                let state = self
-                    .adapter
-                    .clock(Cmd::RunFor(dt))
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                let state = self.adapter.clock(Cmd::RunFor(dt)).map_err(adapter_error)?;
                 self.pump();
                 self.clock_service
                     .record(LedgerCommand::RunFor, state, self.frame_seq, 0);
                 ClockReport { state, steps: 0 }
             }
             Cmd::Pause => {
-                let state = self
-                    .adapter
-                    .clock(Cmd::Pause)
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                let state = self.adapter.clock(Cmd::Pause).map_err(adapter_error)?;
                 self.clock_service
                     .record(LedgerCommand::Pause, state, self.frame_seq, 0);
                 ClockReport { state, steps: 0 }
             }
             Cmd::Resume => {
-                let state = self
-                    .adapter
-                    .clock(Cmd::Resume)
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                let state = self.adapter.clock(Cmd::Resume).map_err(adapter_error)?;
                 self.clock_service
                     .record(LedgerCommand::Resume, state, self.frame_seq, 0);
                 ClockReport { state, steps: 0 }
             }
             Cmd::SetTime(t) => {
-                let state = self
-                    .adapter
-                    .clock(Cmd::SetTime(t))
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                let state = self.adapter.clock(Cmd::SetTime(t)).map_err(adapter_error)?;
                 self.clock_service
                     .record(LedgerCommand::SetTime, state, self.frame_seq, 0);
                 ClockReport { state, steps: 0 }
             }
             Cmd::Probe => {
-                let state = self
-                    .adapter
-                    .clock(Cmd::Probe)
-                    .map_err(|e| CoreError::Other(e.to_string()))?;
+                let state = self.adapter.clock(Cmd::Probe).map_err(adapter_error)?;
                 ClockReport { state, steps: 0 }
             }
         };
@@ -907,10 +1055,7 @@ impl<A: FrameworkAdapter> Session<A> {
             ))
         })?;
         let task = crate::seams::compile_task(hook, scope.to_string());
-        let detail = self
-            .adapter
-            .run_in(task)
-            .map_err(|e| CoreError::Other(e.to_string()))?;
+        let detail = self.adapter.run_in(task).map_err(adapter_error)?;
         self.pump();
         Ok(detail)
     }
