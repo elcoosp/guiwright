@@ -134,8 +134,8 @@ fn synthetic_pointer_click_works_too() {
     // Resolve → center coordinates → real pointer pipeline (§9).
     let resolved = session.resolve(&save()).expect("resolve save");
     let rect = resolved.bounds.expect("bounds");
-    let cx = (rect.x0 + rect.x1) / 2.0;
-    let cy = (rect.y0 + rect.y1) / 2.0;
+    let cx = f64::midpoint(rect.x0, rect.x1);
+    let cy = f64::midpoint(rect.y0, rect.y1);
 
     session
         .adapter_mut()
