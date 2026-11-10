@@ -5,7 +5,7 @@
 use crate::GwpError;
 use crate::schema::MAX_BLOB_BYTES;
 
-/// Compress a blob for the side channel (LZ4, size prepended by lz4_flex).
+/// Compress a blob for the side channel (LZ4, size prepended by `lz4_flex`).
 pub fn encode_blob(data: &[u8]) -> Vec<u8> {
     lz4_flex::compress_prepend_size(data)
 }
