@@ -18,8 +18,6 @@ use guiwright_core::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
 /// Local helpers for readable assertions in this integration test.
 trait OutcomeExt {
     fn expect_pending(&self);
-    #[allow(dead_code)]
-    fn expect_satisfied(self) -> Option<guiwright_core::Resolved>;
 }
 
 impl OutcomeExt for WaitOutcome {
@@ -27,13 +25,6 @@ impl OutcomeExt for WaitOutcome {
         match self {
             WaitOutcome::Pending => {}
             other => panic!("expected pending, got {other:?}"),
-        }
-    }
-
-    fn expect_satisfied(self) -> Option<guiwright_core::Resolved> {
-        match self {
-            WaitOutcome::Satisfied(r) => r,
-            other => panic!("expected satisfied, got {other:?}"),
         }
     }
 }
@@ -187,7 +178,7 @@ fn force_mode_satisfies_without_frames() {
     }
 }
 
-/// expect().check_now() behaves on a settled tree; the timeout path carries
+/// `expect().check_now()` behaves on a settled tree; the timeout path carries
 /// the last summary.
 #[test]
 fn expect_retry_semantics_report_last_state() {
