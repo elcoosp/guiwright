@@ -98,7 +98,8 @@ COMMANDS:
 Run `guiwright repl` and type `help` for the in-session command list."
 }
 
-/// Parse `std::env::args().skip(1)`-style arguments.
+/// Parse `std::env::args().skip(1)`-style arguments: one dispatch arm per
+/// subcommand, each delegated to its `parse_*_args` helper.
 pub fn parse_args(argv: &[String]) -> Result<Command, CliError> {
     let Some(first) = argv.first() else {
         return Err(CliError::Usage(
@@ -111,206 +112,249 @@ pub fn parse_args(argv: &[String]) -> Result<Command, CliError> {
             "guiwright ",
             env!("CARGO_PKG_VERSION")
         ))),
-        "repl" => {
-            let mut target = None;
-            let mut rest: &[String] = &argv[1..];
-            while let Some(flag) = rest.first() {
-                match flag.as_str() {
-                    "--uds" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--uds needs a socket path"))?;
-                        target = Some(ConnectTarget::Uds(PathBuf::from(value)));
-                        rest = &rest[2..];
-                    }
-                    "--tcp" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--tcp needs a host:port address"))?;
-                        target = Some(ConnectTarget::Tcp(value.clone()));
-                        rest = &rest[2..];
-                    }
-                    other => {
-                        // Bare target: uds:///…, tcp://…, /path or host:port.
-                        target = Some(ConnectTarget::parse(other).map_err(CliError::BadValue)?);
-                        rest = &rest[1..];
-                    }
-                }
-            }
-            let target = target.ok_or(CliError::Usage(
-                "repl needs a target: --uds <path> | --tcp <addr> | <target>",
-            ))?;
-            Ok(Command::Repl { target })
-        }
-        "show-trace" => {
-            let mut archive = None;
-            let mut out = None;
-            let mut open = false;
-            let mut rest: &[String] = &argv[1..];
-            while let Some(flag) = rest.first() {
-                match flag.as_str() {
-                    "--out" => {
-                        let value = rest.get(1).ok_or(CliError::Usage("--out needs a path"))?;
-                        out = Some(PathBuf::from(value));
-                        rest = &rest[2..];
-                    }
-                    "--open" => {
-                        open = true;
-                        rest = &rest[1..];
-                    }
-                    other if archive.is_none() && !other.starts_with("--") => {
-                        archive = Some(PathBuf::from(other));
-                        rest = &rest[1..];
-                    }
-                    other => return Err(CliError::UnknownCommand(other.to_string())),
-                }
-            }
-            let archive = archive.ok_or(CliError::Usage("show-trace needs an archive path"))?;
-            Ok(Command::ShowTrace { archive, out, open })
-        }
-        "bless" => {
-            let mut dir = None;
-            let mut dry_run = false;
-            let mut rest: &[String] = &argv[1..];
-            while let Some(flag) = rest.first() {
-                match flag.as_str() {
-                    "--dry-run" => {
-                        dry_run = true;
-                        rest = &rest[1..];
-                    }
-                    other if dir.is_none() && !other.starts_with("--") => {
-                        dir = Some(PathBuf::from(other));
-                        rest = &rest[1..];
-                    }
-                    other => return Err(CliError::UnknownCommand(other.to_string())),
-                }
-            }
-            let dir = dir.ok_or(CliError::Usage("bless needs a baseline directory"))?;
-            Ok(Command::Bless { dir, dry_run })
-        }
-        "install-deps" => {
-            let mut run = false;
-            for flag in &argv[1..] {
-                match flag.as_str() {
-                    "--run" => run = true,
-                    other => return Err(CliError::UnknownCommand(other.to_string())),
-                }
-            }
-            Ok(Command::InstallDeps { run })
-        }
-        "test" => {
-            let mut paths = Vec::new();
-            let mut target: Option<ConnectTarget> = None;
-            let mut workers: Option<usize> = None;
-            let mut retries: Option<u32> = None;
-            let mut timeout_ms: Option<u64> = None;
-            let mut shard = None;
-            let mut list = false;
-            let mut quiet = false;
-            let mut reports = Vec::new();
-            let mut out: Option<PathBuf> = None;
-            let mut rest: &[String] = &argv[1..];
-            while let Some(flag) = rest.first() {
-                match flag.as_str() {
-                    "--uds" | "--tcp" => {
-                        if target.is_some() {
-                            return Err(CliError::Usage(
-                                "--uds and --tcp are mutually exclusive",
-                            ));
-                        }
-                        let value = rest.get(1).ok_or(CliError::Usage(match flag.as_str() {
-                            "--uds" => "--uds needs a socket path",
-                            _ => "--tcp needs a host:port address",
-                        }))?;
-                        target = Some(match flag.as_str() {
-                            "--uds" => ConnectTarget::Uds(PathBuf::from(value)),
-                            _ => ConnectTarget::Tcp(value.clone()),
-                        });
-                        rest = &rest[2..];
-                    }
-                    "--workers" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--workers needs a count"))?
-                            .parse::<usize>()
-                            .map_err(|_| CliError::BadValue(format!("`{}` is not a worker count", rest[1])))?;
-                        if value == 0 {
-                            return Err(CliError::BadValue("--workers must be at least 1".into()));
-                        }
-                        workers = Some(value);
-                        rest = &rest[2..];
-                    }
-                    "--retries" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--retries needs a count"))?
-                            .parse::<u32>()
-                            .map_err(|_| CliError::BadValue(format!("`{}` is not a retry count", rest[1])))?;
-                        retries = Some(value);
-                        rest = &rest[2..];
-                    }
-                    "--timeout" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--timeout needs milliseconds"))?
-                            .parse::<u64>()
-                            .map_err(|_| CliError::BadValue(format!("`{}` is not a deadline", rest[1])))?;
-                        timeout_ms = Some(value);
-                        rest = &rest[2..];
-                    }
-                    "--shard" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--shard needs k/n"))?;
-                        shard = Some(parse_shard(value)?);
-                        rest = &rest[2..];
-                    }
-                    "--list" => {
-                        list = true;
-                        rest = &rest[1..];
-                    }
-                    "--quiet" | "-q" => {
-                        quiet = true;
-                        rest = &rest[1..];
-                    }
-                    "--report" => {
-                        let value = rest
-                            .get(1)
-                            .ok_or(CliError::Usage("--report needs list|json|junit|html"))?;
-                        let kind = ReportKind::parse(value).ok_or_else(|| {
-                            CliError::BadValue(format!(
-                                "`{value}` is not a report kind — list | json | junit | html"
-                            ))
-                        })?;
-                        reports.push(kind);
-                        rest = &rest[2..];
-                    }
-                    "--out" => {
-                        let value = rest.get(1).ok_or(CliError::Usage("--out needs a directory"))?;
-                        out = Some(PathBuf::from(value));
-                        rest = &rest[2..];
-                    }
-                    other if !other.starts_with('-') => {
-                        paths.push(PathBuf::from(other));
-                        rest = &rest[1..];
-                    }
-                    other => return Err(CliError::UnknownCommand(other.to_string())),
-                }
-            }
-            Ok(Command::Test {
-                paths,
-                target,
-                workers: workers.unwrap_or(1),
-                retries,
-                timeout_ms,
-                shard,
-                list,
-                quiet,
-                reports,
-                out,
-            })
-        }
+        "repl" => parse_repl_args(&argv[1..]),
+        "show-trace" => parse_show_trace_args(&argv[1..]),
+        "bless" => parse_bless_args(&argv[1..]),
+        "install-deps" => parse_install_deps_args(&argv[1..]),
+        "test" => parse_test_args(&argv[1..]),
         other => Err(CliError::UnknownCommand(other.to_string())),
+    }
+}
+
+fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
+    {
+        let mut target = None;
+        let mut rest: &[String] = rest;
+
+        while let Some(flag) = rest.first() {
+            match flag.as_str() {
+                "--uds" => {
+                    let value = rest
+                        .get(1)
+                        .ok_or(CliError::Usage("--uds needs a socket path"))?;
+                    target = Some(ConnectTarget::Uds(PathBuf::from(value)));
+                    rest = &rest[2..];
+                }
+                "--tcp" => {
+                    let value = rest
+                        .get(1)
+                        .ok_or(CliError::Usage("--tcp needs a host:port address"))?;
+                    target = Some(ConnectTarget::Tcp(value.clone()));
+                    rest = &rest[2..];
+                }
+                other => {
+                    // Bare target: uds:///…, tcp://…, /path or host:port.
+                    target = Some(ConnectTarget::parse(other).map_err(CliError::BadValue)?);
+                    rest = &rest[1..];
+                }
+            }
+        }
+        let target = target.ok_or(CliError::Usage(
+            "repl needs a target: --uds <path> | --tcp <addr> | <target>",
+        ))?;
+        Ok(Command::Repl { target })
+    }
+}
+
+fn parse_show_trace_args(rest: &[String]) -> Result<Command, CliError> {
+    {
+        let mut archive = None;
+        let mut rest: &[String] = rest;
+        let mut out = None;
+        let mut open = false;
+
+        while let Some(flag) = rest.first() {
+            match flag.as_str() {
+                "--out" => {
+                    let value = rest.get(1).ok_or(CliError::Usage("--out needs a path"))?;
+                    out = Some(PathBuf::from(value));
+                    rest = &rest[2..];
+                }
+                "--open" => {
+                    open = true;
+                    rest = &rest[1..];
+                }
+                other if archive.is_none() && !other.starts_with("--") => {
+                    archive = Some(PathBuf::from(other));
+                    rest = &rest[1..];
+                }
+                other => return Err(CliError::UnknownCommand(other.to_string())),
+            }
+        }
+        let archive = archive.ok_or(CliError::Usage("show-trace needs an archive path"))?;
+        Ok(Command::ShowTrace { archive, out, open })
+    }
+}
+
+fn parse_bless_args(rest: &[String]) -> Result<Command, CliError> {
+    {
+        let mut dir = None;
+        let mut rest: &[String] = rest;
+        let mut dry_run = false;
+
+        while let Some(flag) = rest.first() {
+            match flag.as_str() {
+                "--dry-run" => {
+                    dry_run = true;
+                    rest = &rest[1..];
+                }
+                other if dir.is_none() && !other.starts_with("--") => {
+                    dir = Some(PathBuf::from(other));
+                    rest = &rest[1..];
+                }
+                other => return Err(CliError::UnknownCommand(other.to_string())),
+            }
+        }
+        let dir = dir.ok_or(CliError::Usage("bless needs a baseline directory"))?;
+        Ok(Command::Bless { dir, dry_run })
+    }
+}
+
+fn parse_install_deps_args(rest: &[String]) -> Result<Command, CliError> {
+    {
+        let mut run = false;
+        for flag in rest {
+            match flag.as_str() {
+                "--run" => run = true,
+                other => return Err(CliError::UnknownCommand(other.to_string())),
+            }
+        }
+        Ok(Command::InstallDeps { run })
+    }
+}
+
+/// The value after a flag (`--workers 4`), or the usage error.
+fn flag_value<'a>(rest: &'a [String], usage: &'static str) -> Result<&'a String, CliError> {
+    rest.get(1).ok_or(CliError::Usage(usage))
+}
+
+/// `--uds <path>` / `--tcp <addr>`: the parsed target + how many argv
+/// slots it consumed (2 — flag + value).
+fn parse_target_flag(flag: &str, rest: &[String]) -> Result<(ConnectTarget, usize), CliError> {
+    match flag {
+        "--uds" => {
+            let value = flag_value(rest, "--uds needs a socket path")?;
+            Ok((ConnectTarget::Uds(PathBuf::from(value)), 2))
+        }
+        "--tcp" => {
+            let value = flag_value(rest, "--tcp needs a host:port address")?;
+            Ok((ConnectTarget::Tcp(value.clone()), 2))
+        }
+        other => unreachable!("validated flag {other:?}"),
+    }
+}
+
+/// Parse a numeric flag value with the shared "not a {what}" error shape.
+fn parse_numeric_flag<T: std::str::FromStr>(
+    rest: &[String],
+    what: &'static str,
+) -> Result<T, CliError> {
+    let value = flag_value(rest, "…")?;
+    value
+        .parse::<T>()
+        .map_err(|_| CliError::BadValue(format!("`{value}` is not {what}")))
+}
+
+fn parse_test_args(rest: &[String]) -> Result<Command, CliError> {
+    {
+        let mut paths = Vec::new();
+        let mut rest: &[String] = rest;
+        let mut target: Option<ConnectTarget> = None;
+        let mut workers: Option<usize> = None;
+        let mut retries: Option<u32> = None;
+        let mut timeout_ms: Option<u64> = None;
+        let mut shard = None;
+        let mut list = false;
+        let mut quiet = false;
+        let mut reports = Vec::new();
+        let mut out: Option<PathBuf> = None;
+
+        while let Some(flag) = rest.first() {
+            match flag.as_str() {
+                "--uds" | "--tcp" => {
+                    if target.is_some() {
+                        return Err(CliError::Usage("--uds and --tcp are mutually exclusive"));
+                    }
+                    let (parsed, consumed) = parse_target_flag(flag, rest)?;
+                    target = Some(parsed);
+                    rest = &rest[consumed..];
+                }
+                "--workers" => {
+                    let value: usize = parse_numeric_flag(rest, "a worker count")?;
+                    if value == 0 {
+                        return Err(CliError::BadValue("--workers must be at least 1".into()));
+                    }
+                    workers = Some(value);
+                    rest = &rest[2..];
+                }
+                "--retries" => {
+                    let value = rest
+                        .get(1)
+                        .ok_or(CliError::Usage("--retries needs a count"))?
+                        .parse::<u32>()
+                        .map_err(|_| {
+                            CliError::BadValue(format!("`{}` is not a retry count", rest[1]))
+                        })?;
+                    retries = Some(value);
+                    rest = &rest[2..];
+                }
+                "--timeout" => {
+                    let value = rest
+                        .get(1)
+                        .ok_or(CliError::Usage("--timeout needs milliseconds"))?
+                        .parse::<u64>()
+                        .map_err(|_| {
+                            CliError::BadValue(format!("`{}` is not a deadline", rest[1]))
+                        })?;
+                    timeout_ms = Some(value);
+                    rest = &rest[2..];
+                }
+                "--shard" => {
+                    let value = flag_value(rest, "--shard needs k/n")?;
+                    shard = Some(parse_shard(value)?);
+                    rest = &rest[2..];
+                }
+                "--list" => {
+                    list = true;
+                    rest = &rest[1..];
+                }
+                "--quiet" | "-q" => {
+                    quiet = true;
+                    rest = &rest[1..];
+                }
+                "--report" => {
+                    let value = flag_value(rest, "--report needs list|json|junit|html")?;
+                    let kind = ReportKind::parse(value).ok_or_else(|| {
+                        CliError::BadValue(format!(
+                            "`{value}` is not a report kind — list | json | junit | html"
+                        ))
+                    })?;
+                    reports.push(kind);
+                    rest = &rest[2..];
+                }
+                "--out" => {
+                    out = Some(PathBuf::from(flag_value(rest, "--out needs a directory")?));
+                    rest = &rest[2..];
+                }
+                other if !other.starts_with('-') => {
+                    paths.push(PathBuf::from(other));
+                    rest = &rest[1..];
+                }
+                other => return Err(CliError::UnknownCommand(other.to_string())),
+            }
+        }
+        Ok(Command::Test {
+            paths,
+            target,
+            workers: workers.unwrap_or(1),
+            retries,
+            timeout_ms,
+            shard,
+            list,
+            quiet,
+            reports,
+            out,
+        })
     }
 }
 
@@ -338,7 +382,7 @@ mod tests {
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(|s| (*s).to_string()).collect()
     }
 
     #[test]
@@ -492,9 +536,7 @@ mod tests {
         assert!(parse_args(&args(&["test", "--uds"])).is_err());
         assert!(parse_args(&args(&["test", "--report"])).is_err());
         // mutually exclusive targets
-        assert!(
-            parse_args(&args(&["test", "--uds", "/a.sock", "--tcp", "h:1"])).is_err()
-        );
+        assert!(parse_args(&args(&["test", "--uds", "/a.sock", "--tcp", "h:1"])).is_err());
         // unknown flag
         assert!(parse_args(&args(&["test", "--bogus"])).is_err());
     }
