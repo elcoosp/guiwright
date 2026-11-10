@@ -19,11 +19,13 @@
 
 pub mod app;
 pub mod context;
+pub mod input;
 pub mod run;
 
 pub use app::{App, ClockHandle, KitError, Locator, MockHandle, expect};
 pub use context::TestContext;
-pub use guiwright_driver::SeamRegistry;
+pub use guiwright_driver::{GestureOutcome, PointerButton, SeamRegistry};
 pub use guiwright_macros::{register_seams, seam, test};
 pub use guiwright_shot::baseline::{BlessMode, SnapshotOutcome};
+pub use input::{KeyboardHandle, MouseHandle};
 pub use run::TestOutcome;
