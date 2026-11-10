@@ -16,7 +16,7 @@ pub fn thousand_node_tree() -> TreeService {
     svc
 }
 
-fn full_thousand_update() -> accesskit::TreeUpdate {
+pub fn full_thousand_update() -> accesskit::TreeUpdate {
     const BUTTONS: u32 = 998;
     let mut window = accesskit::Node::new(Role::Window);
     window.set_label("Bench App");
@@ -542,5 +542,99 @@ pub fn kit_input_click() -> Duration {
     let outcome = app.mouse().click(10.0, 20.0).expect("bench click applies");
     let elapsed = start.elapsed();
     assert_eq!(outcome.events, 3, "move + down + up");
+    elapsed
+}
+
+// --- Inspect overlay sample (§13, M8) ----------------------------------------
+
+/// §13 overlay plan build + hand-off (1k nodes): the per-pump cost a live
+/// inspector session adds — session builds every node's facts, the
+/// §13 cost model composites the plan, the mock adapter records it (the
+/// real adapter paints it inside the same pass, §15.4). `Session::pump`
+/// keeps the zero-polling contract for sessions without the overlay; this
+/// row guards the opt-in cost of the sessions that turned it on.
+pub fn inspect_overlay_plan() -> Duration {
+    use guiwright_driver::Session;
+    use guiwright_driver::mock::MockAdapter;
+
+    let mut adapter = MockAdapter::bare();
+    adapter.push_update(full_thousand_update());
+    adapter.push_frame(1);
+    let mut session = Session::new(adapter);
+    session.pump();
+
+    let start = Instant::now();
+    session
+        .inspect_enable_overlay()
+        .expect("the mock composites");
+    let elapsed = start.elapsed();
+    let plan = session
+        .adapter()
+        .overlay()
+        .expect("plan handed to the adapter");
+    assert_eq!(
+        plan.badges.len(),
+        998,
+        "every Export button carries a badge"
+    );
+    elapsed
+}
+
+// --- Locator element-screenshot sample (§10 over the kit, M9) ----------------
+
+/// Scratch baseline root (no tempfile dep in the bench crate): a
+/// process-unique directory under the OS temp dir, removed on drop.
+struct ScratchDir(std::path::PathBuf);
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// §10 element screenshot, kit side: one `locator.screenshot(name, bless)`
+/// end-to-end — resolve (auto-wait) → one frame render → the clip-aware
+/// crop (`guiwright-shot::crop`, the M1-bound hot path) → baseline assert.
+/// The launch, settle and baseline bootstrap stay outside the measured
+/// span; the measured operation is one element screenshot, the path every
+/// visual assertion on a locator rides. The baseline is re-blessed per
+/// call (Failing mode) so the measured cost includes the honest PNG
+/// encode + IO, not a warm cache.
+pub fn locator_element_screenshot() -> Duration {
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::{App, BlessMode};
+
+    let mut adapter = MockAdapter::with_fixture(&Fixture::buttons());
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let rgba: Vec<u8> = (0..240u32)
+        .flat_map(|y| (0..480u32).map(move |x| (x, y)))
+        .flat_map(|(x, y)| [(x & 0xff) as u8, (y & 0xff) as u8, 99u8, 255u8])
+        .collect();
+    let adapter = adapter.with_frame_pixels(480, 240, rgba);
+    let scratch = ScratchDir(std::env::temp_dir().join(format!(
+        "gwp-bench-element-{}-{}",
+        std::process::id(),
+        guiwright_trace::video::epoch_ms()
+    )));
+    let mut app = App::launch("locator_element_screenshot", adapter).with_baseline_dir(&scratch.0);
+    app.wait_for_settle();
+    app.get_by_role(accesskit::Role::Button, "Save")
+        .screenshot("save", BlessMode::Failing)
+        .expect("baseline bootstrapped");
+
+    let start = Instant::now();
+    let outcome = app
+        .get_by_role(accesskit::Role::Button, "Save")
+        .screenshot("save", BlessMode::Failing);
+    let elapsed = start.elapsed();
+    assert!(
+        matches!(
+            outcome,
+            Ok(guiwright_shot::baseline::SnapshotOutcome::Matched { .. })
+        ),
+        "the deterministic frame matches the bootstrapped baseline"
+    );
     elapsed
 }
