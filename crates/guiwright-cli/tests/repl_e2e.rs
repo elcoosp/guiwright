@@ -128,6 +128,10 @@ async fn full_repl_session_over_uds() {
         rendered(&missing)
     );
 
+    // Inspector overlay session (§13, M8): enable, highlight, clear, off
+    // (after the short timeout so the missing-node strict failure is fast).
+    inspect_overlay_session(&mut repl).await;
+
     // Malformed arguments are single error lines.
     assert_eq!(
         rendered(&repl.step("clock ff").await),
@@ -565,11 +569,56 @@ async fn clock_and_mock_domains(repl: &mut Repl) {
     );
 }
 
-/// The §13 codegen surface over one session: locator actions record as
-/// kit code, stop-without-recording is a clean error, and the gesture
-/// vocabulary (§13 over §9) records as `app.mouse()` / `app.keyboard()`
-/// calls.
+/// The §13 overlay conversation (M8): `inspect on`, `inspect <get-args…>`
+/// (resolve + highlight in one step), `inspect clear`, `inspect off` —
+/// every step answers `Pong` and the session survives unknown nodes.
+async fn inspect_overlay_session(repl: &mut Repl) {
+    assert_eq!(
+        ok_line(&repl.step("inspect on").await),
+        "inspect: overlay on — badges track interactive nodes"
+    );
+
+    // `inspect <get-args…>` resolves like `get` and highlights: two ok
+    // lines — the resolution + the highlight acknowledgement.
+    let highlighted = repl.step("inspect role Button Save").await;
+    let lines = rendered(&highlighted);
+    assert!(
+        lines[0].starts_with("resolved Button \"Save\""),
+        "{lines:?}"
+    );
+    assert_eq!(lines[1], "highlighted Button \"Save\"", "{lines:?}");
+
+    // The outline rides the current node: `last` still knows it (the
+    // exact `get` bookkeeping).
+    assert!(ok_line(&repl.step("last").await).contains("Save"));
+
+    // Clear keeps the session; off ends it.
+    assert_eq!(
+        ok_line(&repl.step("inspect clear").await),
+        "inspect: outline cleared"
+    );
+    assert_eq!(
+        ok_line(&repl.step("inspect off").await),
+        "inspect: overlay off"
+    );
+
+    // Highlighting an unknown node is a clean error; the session
+    // survives (a debugging tool must survive its user's mistakes).
+    let missing = repl.step("inspect role Button Missing").await;
+    assert_eq!(missing.lines.len(), 1, "{:?}", rendered(&missing));
+    assert!(
+        rendered(&missing)[0].starts_with("error: timeout:"),
+        "the resolve half fails first (auto-wait deadline), got {:?}",
+        rendered(&missing)
+    );
+    assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
+}
+
 async fn codegen_recording(repl: &mut Repl) {
+    // The §13 codegen surface over one session: locator actions record as
+    // kit code, stop-without-recording is a clean error, and the gesture
+    // vocabulary (§13 over §9) records as `app.mouse()` / `app.keyboard()`
+    // calls.
     // Locator actions record as kit code (§13, M4).
     assert_eq!(
         rendered(&repl.step("codegen start").await).len(),
