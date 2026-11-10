@@ -40,10 +40,7 @@ pub enum Gesture {
     /// Wheel scroll by logical-px deltas.
     Wheel { dx: f64, dy: f64 },
     /// Press and release a key (the §8.4 key-name vocabulary).
-    Key {
-        key: String,
-        modifiers: Vec<String>,
-    },
+    Key { key: String, modifiers: Vec<String> },
     /// Commit text in one step (§4.2).
     Type { text: String },
 }
@@ -134,9 +131,7 @@ pub fn synthesize(gesture: &Gesture, pacing: &GesturePacing) -> Vec<InputEvent> 
                 modifiers: modifiers.clone(),
             },
         ],
-        Gesture::Type { text } => vec![InputEvent::TextInput {
-            text: text.clone(),
-        }],
+        Gesture::Type { text } => vec![InputEvent::TextInput { text: text.clone() }],
     }
 }
 
@@ -203,6 +198,153 @@ impl From<GestureV1> for Gesture {
             GestureV1::Key { key, modifiers } => Gesture::Key { key, modifiers },
             GestureV1::Type { text } => Gesture::Type { text },
         }
+    }
+}
+
+// --- Codegen recording (§13 over §9) ----------------------------------------
+
+/// The kit surface a recorded input command rides (§13): the input
+/// vocabulary emits kit code against `app.mouse()` / `app.keyboard()`,
+/// never against a locator (coordinates, not nodes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodegenSurface {
+    Mouse,
+    Keyboard,
+}
+
+impl CodegenSurface {
+    /// The kit accessor the call chain starts from.
+    #[must_use]
+    pub fn accessor(self) -> &'static str {
+        match self {
+            Self::Mouse => "app.mouse()",
+            Self::Keyboard => "app.keyboard()",
+        }
+    }
+}
+
+/// The kit-code call for a gesture (§13 raw-input recording): the method
+/// call **suffix** (e.g. `click(10.0, 20.0)`) — callers compose the full
+/// line with [`codegen_line`]. Returns the surface, the suffix, and a
+/// warning when the gesture has no exact kit equivalent (a clickCount>2
+/// click records as a single click, Playwright's recorded-code shape).
+///
+/// Floats render as explicit `f64` literals (Debug), strings as
+/// `{:?}`-quoted literals; inputs are expected finite (wire clients send
+/// finite coordinates — the adapter owns rejection).
+#[must_use]
+pub fn codegen_call(gesture: &Gesture) -> (CodegenSurface, String, Option<String>) {
+    match gesture {
+        Gesture::Click {
+            x,
+            y,
+            button,
+            count,
+        } => {
+            let count_warning = (*count > 2).then(|| {
+                format!("clickCount {count} has no kit equivalent — recorded as a single click")
+            });
+            let (call, warning) = match (*count, button) {
+                (1, PointerButton::Primary) => (format!("click({x:?}, {y:?})"), None),
+                (1, b) => (
+                    format!("click_button({x:?}, {y:?}, PointerButton::{b:?})"),
+                    None,
+                ),
+                (2, PointerButton::Primary) => (format!("dblclick({x:?}, {y:?})"), None),
+                (2, b) => (
+                    format!("dblclick_button({x:?}, {y:?}, PointerButton::{b:?})"),
+                    None,
+                ),
+                (_, PointerButton::Primary) => (format!("click({x:?}, {y:?})"), count_warning),
+                (_, b) => (
+                    format!("click_button({x:?}, {y:?}, PointerButton::{b:?})"),
+                    count_warning,
+                ),
+            };
+            (CodegenSurface::Mouse, call, warning)
+        }
+        Gesture::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            button,
+        } => {
+            let call = match button {
+                PointerButton::Primary => {
+                    format!("drag({from_x:?}, {from_y:?}, {to_x:?}, {to_y:?})")
+                }
+                b => format!(
+                    "drag_button({from_x:?}, {from_y:?}, {to_x:?}, {to_y:?}, PointerButton::{b:?})"
+                ),
+            };
+            (CodegenSurface::Mouse, call, None)
+        }
+        Gesture::Wheel { dx, dy } => (
+            CodegenSurface::Mouse,
+            format!("wheel({dx:?}, {dy:?})"),
+            None,
+        ),
+        Gesture::Key { key, modifiers } if modifiers.is_empty() => {
+            (CodegenSurface::Keyboard, format!("press({key:?})"), None)
+        }
+        Gesture::Key { key, modifiers } => {
+            let mods = modifiers
+                .iter()
+                .map(|m| format!("{m:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                CodegenSurface::Keyboard,
+                format!("press_with({key:?}, [{mods}])"),
+                None,
+            )
+        }
+        Gesture::Type { text } => (
+            CodegenSurface::Keyboard,
+            format!("type_text({text:?})"),
+            None,
+        ),
+    }
+}
+
+/// The kit-code call for one raw input event (the `Input` half of the
+/// vocabulary): pointer primitives render as the kit's raw methods; the
+/// keyboard primitives (`KeyDown` / `KeyUp` / `TextInput`) render as
+/// `None` — they have no standalone kit form and in practice ride the
+/// gesture vocabulary (`key` / `text` commands), which renders directly.
+#[must_use]
+pub fn codegen_event_call(ev: &InputEvent) -> Option<(CodegenSurface, String)> {
+    match ev {
+        InputEvent::PointerMove { x, y } => {
+            Some((CodegenSurface::Mouse, format!("move_to({x:?}, {y:?})")))
+        }
+        InputEvent::PointerDown { x, y, button } => Some((
+            CodegenSurface::Mouse,
+            format!("down({x:?}, {y:?}, PointerButton::{button:?})"),
+        )),
+        InputEvent::PointerUp { x, y, button } => Some((
+            CodegenSurface::Mouse,
+            format!("up({x:?}, {y:?}, PointerButton::{button:?})"),
+        )),
+        InputEvent::Wheel { dx, dy } => {
+            Some((CodegenSurface::Mouse, format!("wheel({dx:?}, {dy:?})")))
+        }
+        InputEvent::KeyDown { .. } | InputEvent::KeyUp { .. } | InputEvent::TextInput { .. } => {
+            None
+        }
+    }
+}
+
+/// Compose the full recorded line (§13): `app.mouse().click(10.0, 20.0);`
+/// — with the `in_window` chain when the command carried an explicit
+/// window target (the M6 vocabulary; an implicit default target records
+/// bare — the line replays against the session default at replay time).
+#[must_use]
+pub fn codegen_line(surface: CodegenSurface, call: &str, window: Option<&str>) -> String {
+    match window {
+        Some(w) => format!("{}.in_window({w:?}).{call};", surface.accessor()),
+        None => format!("{}.{};", surface.accessor(), call),
     }
 }
 
@@ -286,13 +428,27 @@ mod tests {
         assert_eq!(events.len(), 22);
         assert!(matches!(
             &events[0],
-            InputEvent::PointerDown { x: 10.0, y: 10.0, .. }
+            InputEvent::PointerDown {
+                x: 10.0,
+                y: 10.0,
+                ..
+            }
         ));
-        assert!(matches!(&events[1], InputEvent::PointerMove { x: 15.0, y: 10.0 }));
-        assert!(matches!(&events[20], InputEvent::PointerMove { x: 110.0, y: 10.0 }));
+        assert!(matches!(
+            &events[1],
+            InputEvent::PointerMove { x: 15.0, y: 10.0 }
+        ));
+        assert!(matches!(
+            &events[20],
+            InputEvent::PointerMove { x: 110.0, y: 10.0 }
+        ));
         assert!(matches!(
             &events[21],
-            InputEvent::PointerUp { x: 110.0, y: 10.0, .. }
+            InputEvent::PointerUp {
+                x: 110.0,
+                y: 10.0,
+                ..
+            }
         ));
 
         // Diagonal: the dominant axis paces the steps; both coordinates
@@ -308,7 +464,10 @@ mod tests {
             &default_pacing(),
         );
         assert_eq!(events.len(), 14);
-        assert!(matches!(&events[1], InputEvent::PointerMove { x: 35.0, y: 32.5 }));
+        assert!(matches!(
+            &events[1],
+            InputEvent::PointerMove { x: 35.0, y: 32.5 }
+        ));
 
         // Zero-length drag: one move at the (identical) target.
         let events = synthesize(
