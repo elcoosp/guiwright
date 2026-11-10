@@ -8,6 +8,7 @@ description = "User-facing Guiwright kit (architecture §5.2/§6.3): App, Locato
 
 [dependencies]
 guiwright-core.workspace = true
+accesskit_consumer.workspace = true
 guiwright-driver.workspace = true
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
