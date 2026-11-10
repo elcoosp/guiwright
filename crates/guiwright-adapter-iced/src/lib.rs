@@ -19,7 +19,7 @@
 //!
 //! The `iced` feature adds [`harness`]: the thin glue that binds the
 //! engine to `iced_test`'s [`Emulator`]/[`Simulator`]. It is feature-gated
-//! because the framework stack (iced_renderer → wgpu) must never leak into
+//! because the framework stack (`iced_renderer` → wgpu) must never leak into
 //! builds that do not ask for it (§18 "adapters are thin & feature-gated";
 //! §5.3 "nothing else leaks into release builds").
 //!
