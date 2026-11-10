@@ -96,11 +96,22 @@ pub enum CoreError {
     /// The adapter/transport rejected the operation (e.g. unsupported at M0).
     #[error("unsupported operation: {0}")]
     Unsupported(&'static str),
+    /// Virtual-clock state machine (§14, M8 cleanup): the command needs
+    /// the clock running — `run_for` paces real time. The wire maps this
+    /// to `ErrorCode::Unsupported` (the capability exists; the state
+    /// forbids the command), replacing the old string-matched `Other`.
+    #[error("clock is paused: {0}")]
+    ClockPaused(&'static str),
     /// Multi-window (§16 v0.4, M6): the session has no window with this
     /// handle — never existed, or it was closed between `Window::Use` and
     /// the scoped request.
     #[error("no window `{handle}` exists in this session")]
     UnknownWindow { handle: String },
+    /// Node-handle paths (§13 inspect highlight, M8): the key names no
+    /// live node — never existed, or the tree changed underneath it. The
+    /// wire maps this to `ErrorCode::UnknownNode`.
+    #[error("no node {key:?} exists in the current tree")]
+    UnknownNode { key: NodeKey },
     /// Anything else, with context.
     #[error("{0}")]
     Other(String),
