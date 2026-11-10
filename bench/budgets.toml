@@ -179,3 +179,21 @@ p95_us = 300
 notes = "§9 pipeline, kit side: handle → synthesis → per-window injection → rendezvous pump; embedded-input guard"
 m0_measurable = true
 sample = "kit_input_click"
+
+[[budget]]
+id = "inspect_overlay_plan"
+name = "Inspect overlay plan build (1k nodes)"
+p50_us = 100
+p95_us = 500
+notes = "13 overlay plan build + hand-off per pump while a live inspector session is on (opt-in cost, zero for sessions without it); M8 micro-suite guard"
+m0_measurable = true
+sample = "inspect_overlay_plan"
+
+[[budget]]
+id = "locator_element_screenshot"
+name = "Locator element screenshot (kit end-to-end)"
+p50_us = 1500
+p95_us = 6000
+notes = "§10 element path: resolve + one frame render + clip-aware crop + baseline PNG encode/IO; M9 micro-suite guard (the crop hot path itself is the element_screenshot_crop row)"
+m0_measurable = true
+sample = "locator_element_screenshot"
