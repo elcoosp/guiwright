@@ -16,14 +16,13 @@
 //! state is the §14 reset-seam story: a `mock reset <scope>` step.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::report::{
-    render_html, render_json, render_junit, ReportKind, RunReport, ScenarioRecord,
-    ScenarioStatus,
+    ReportKind, RunReport, ScenarioRecord, ScenarioStatus, render_html, render_json, render_junit,
 };
 use crate::session::ConnectTarget;
 use crate::spec::{Spec, SpecError};
@@ -134,7 +133,7 @@ pub fn discover(paths: &[PathBuf]) -> Result<Vec<DiscoveredSpec>, RunnerError> {
             path: path.clone(),
             source,
         })?;
-        let spec = Spec::parse(&display, &text).map_err(spec_error)?;
+        let spec = Spec::parse(&display, &text).map_err(|e| spec_error(&e))?;
         specs.push(DiscoveredSpec {
             path: path.clone(),
             display,
@@ -155,7 +154,7 @@ fn scan_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), RunnerError> {
             path: dir.to_path_buf(),
             source,
         })?;
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
@@ -171,7 +170,7 @@ fn scan_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), RunnerError> {
     Ok(())
 }
 
-fn spec_error(err: SpecError) -> RunnerError {
+fn spec_error(err: &SpecError) -> RunnerError {
     RunnerError::Config(err.to_string())
 }
 
@@ -214,7 +213,7 @@ fn resolve_cases(specs: &[DiscoveredSpec], opts: &TestOptions) -> Vec<Case> {
 
 fn shard_keeps(index: usize, shard: (u32, u32)) -> bool {
     let (k, n) = shard;
-    (index as u64 % n as u64) == (k as u64 - 1)
+    (index as u64 % u64::from(n)) == (u64::from(k) - 1)
 }
 
 fn now_ms() -> u128 {
@@ -266,8 +265,7 @@ pub async fn run(
 
     let target = opts.target.as_ref().ok_or_else(|| {
         RunnerError::Config(
-            "no GWP target — pass --uds <path> / --tcp <addr> or set `target` in the specs"
-                .into(),
+            "no GWP target — pass --uds <path> / --tcp <addr> or set `target` in the specs".into(),
         )
     })?;
 
@@ -298,16 +296,12 @@ pub async fn run(
                 if let Some(on_finish) = &on_finish {
                     on_finish(&record);
                 }
-                *slots[index]
-                    .lock()
-                    .expect("scenario slot lock") = Some(record);
+                *slots[index].lock().expect("scenario slot lock") = Some(record);
             }
         }));
     }
     for handle in handles {
-        handle
-            .await
-            .expect("worker task does not panic");
+        handle.await.expect("worker task does not panic");
     }
 
     let mut scenarios = Vec::with_capacity(cases.len());
@@ -319,9 +313,7 @@ pub async fn run(
             .expect("every scenario produced a record");
         scenarios.push(record);
     }
-    let failed = scenarios
-        .iter()
-        .any(|r| r.status == ScenarioStatus::Failed);
+    let failed = scenarios.iter().any(|r| r.status == ScenarioStatus::Failed);
     let report = RunReport {
         started_ms,
         duration_ms: started.elapsed().as_millis() as u64,
@@ -339,8 +331,7 @@ pub async fn run(
 /// One scenario with its retry loop.
 async fn run_case(target: &ConnectTarget, case: &Case) -> ScenarioRecord {
     let case_started = Instant::now();
-    let (attempts, error) =
-        run_with_retries(case.retries, || run_attempt(target, case)).await;
+    let (attempts, error) = run_with_retries(case.retries, || run_attempt(target, case)).await;
     let status = match (&error, attempts) {
         (None, 1) => ScenarioStatus::Passed,
         (None, _) => ScenarioStatus::Flaky,
@@ -410,9 +401,9 @@ pub fn write_reports(
         }
         let path = match kind {
             ReportKind::List => continue,
-            ReportKind::Json => out_dir.join(kind.file_name()),
-            ReportKind::Junit => out_dir.join(kind.file_name()),
-            ReportKind::Html => out_dir.join(kind.file_name()),
+            ReportKind::Json | ReportKind::Junit | ReportKind::Html => {
+                out_dir.join(kind.file_name())
+            }
         };
         std::fs::create_dir_all(out_dir)?;
         let body = match kind {
@@ -426,7 +417,6 @@ pub fn write_reports(
     }
     Ok(written)
 }
-
 
 #[cfg(test)]
 mod tests {
