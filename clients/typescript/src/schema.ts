@@ -58,6 +58,10 @@ export const MockV1 = {
 export const InspectV1 = {
   StartRecording: 0,
   StopRecording: 1,
+  /** §13 (M8): the live overlay/highlight session. */
+  EnableOverlay: 2,
+  DisableOverlay: 3,
+  Highlight: 4,
 } as const;
 
 export const VideoV1 = {
@@ -301,7 +305,12 @@ export type MockCmd =
   | { kind: "reset_state"; scope: string }
   | { kind: "call"; id: string; scope: string };
 
-export type InspectCmd = { kind: "start_recording" } | { kind: "stop_recording" };
+export type InspectCmd =
+  | { kind: "start_recording" }
+  | { kind: "stop_recording" }
+  | { kind: "enable_overlay" }
+  | { kind: "disable_overlay" }
+  | { kind: "highlight"; node: NodeKey | null };
 
 export type VideoCmd =
   | { kind: "start"; opts: VideoOptsV1 }
