@@ -1,8 +1,10 @@
 //! Run reports (M5, §16 "JUnit/HTML reports" + §5.2 "report glue"): the
-//! live progress lines, the `gwrun/v1` JSON document, the JUnit XML (one
+//! live progress lines, the `gwrun/v1` JSON document, the `junit.xml` (one
 //! `<testsuite>` per spec file) and the self-contained HTML summary (the
 //! `trace.html` precedent). All renderers are pure functions over
 //! [`RunReport`] — file writing is the runner's job.
+
+use std::fmt::Write;
 
 /// Which report `--report <kind>` asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -119,8 +121,8 @@ impl RunReport {
     }
 }
 
-/// The spec file's stem: `a/b/login.spec.toml` → `login` (the JUnit
-/// `classname`).
+/// The spec file's stem: `a/b/login.spec.toml` → `login` (the `JUnit`
+/// `classname` attribute).
 pub fn spec_stem(file: &str) -> &str {
     let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
     base.strip_suffix(crate::spec::SPEC_SUFFIX)
@@ -194,7 +196,7 @@ pub fn summary_line(report: &RunReport) -> String {
         fmt_ms(report.duration_ms),
     );
     if let Some((index, of)) = report.shard {
-        line.push_str(&format!(" — shard {index}/{of}"));
+        let _ = write!(line, " — shard {index}/{of}");
     }
     line
 }
@@ -210,7 +212,9 @@ fn json_string(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             other => out.push(other),
         }
     }
@@ -224,31 +228,32 @@ pub fn render_json(report: &RunReport) -> String {
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("  \"schema\": \"gwrun/v1\",\n");
-    out.push_str(&format!("  \"started_ms\": {},\n", report.started_ms));
-    out.push_str(&format!("  \"duration_ms\": {},\n", report.duration_ms));
-    out.push_str(&format!("  \"workers\": {},\n", report.workers));
+    let _ = writeln!(out, "  \"started_ms\": {},", report.started_ms);
+    let _ = writeln!(out, "  \"duration_ms\": {},", report.duration_ms);
+    let _ = writeln!(out, "  \"workers\": {},", report.workers);
     if let Some((index, of)) = report.shard {
-        out.push_str(&format!(
-            "  \"shard\": {{\"index\": {index}, \"of\": {of}}},\n"
-        ));
+        let _ = writeln!(out, "  \"shard\": {{\"index\": {index}, \"of\": {of}}},");
     }
-    out.push_str(&format!(
-        "  \"summary\": {{\"total\": {}, \"passed\": {}, \"flaky\": {}, \"failed\": {}}},\n",
+    let _ = writeln!(
+        out,
+        "  \"summary\": {{\"total\": {}, \"passed\": {}, \"flaky\": {}, \"failed\": {}}},",
         summary.total, summary.passed, summary.flaky, summary.failed
-    ));
+    );
     out.push_str("  \"scenarios\": [");
     for (i, record) in report.scenarios.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
         out.push_str("\n    {");
-        out.push_str(&format!("\"file\": {}", json_string(&record.file)));
-        out.push_str(&format!(", \"name\": {}", json_string(&record.name)));
-        out.push_str(&format!(", \"status\": \"{}\"", record.status.tag()));
-        out.push_str(&format!(", \"attempts\": {}", record.attempts));
-        out.push_str(&format!(", \"duration_ms\": {}", record.duration_ms));
+        let _ = write!(out, "\"file\": {}", json_string(&record.file));
+        let _ = write!(out, ", \"name\": {}", json_string(&record.name));
+        let _ = write!(out, ", \"status\": \"{}\"", record.status.tag());
+        let _ = write!(out, ", \"attempts\": {}", record.attempts);
+        let _ = write!(out, ", \"duration_ms\": {}", record.duration_ms);
         match &record.error {
-            Some(error) => out.push_str(&format!(", \"error\": {}", json_string(error))),
+            Some(error) => {
+                let _ = write!(out, ", \"error\": {}", json_string(error));
+            }
             None => out.push_str(", \"error\": null"),
         }
         out.push('}');
@@ -260,18 +265,19 @@ pub fn render_json(report: &RunReport) -> String {
     out
 }
 
-/// The JUnit XML document (one `<testsuite>` per spec file; flaky counts
-/// as passed — JUnit has no flaky concept, the JSON/HTML reports carry it).
+/// The `JUnit` XML document (one `<testsuite>` per spec file; flaky counts
+/// as passed — `JUnit` has no flaky concept, the JSON/HTML reports carry it).
 pub fn render_junit(report: &RunReport) -> String {
     let summary = report.summary();
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    out.push_str(&format!(
-        "<testsuites tests=\"{}\" failures=\"{}\" time=\"{}\">\n",
+    let _ = writeln!(
+        out,
+        "<testsuites tests=\"{}\" failures=\"{}\" time=\"{}\">",
         summary.total,
         summary.failed,
         seconds(report.duration_ms)
-    ));
+    );
     // Group in discovery order, preserving each file's first appearance.
     let mut order: Vec<&str> = Vec::new();
     for record in &report.scenarios {
@@ -280,47 +286,48 @@ pub fn render_junit(report: &RunReport) -> String {
         }
     }
     for file in order {
-        let suite: Vec<&ScenarioRecord> = report
-            .scenarios
-            .iter()
-            .filter(|r| r.file == file)
-            .collect();
+        let suite: Vec<&ScenarioRecord> =
+            report.scenarios.iter().filter(|r| r.file == file).collect();
         let failures = suite
             .iter()
             .filter(|r| r.status == ScenarioStatus::Failed)
             .count();
         let time: u64 = suite.iter().map(|r| r.duration_ms).sum();
-        out.push_str(&format!(
-            "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" time=\"{}\">\n",
+        let _ = writeln!(
+            out,
+            "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" time=\"{}\">",
             escape_xml(spec_stem(file)),
             suite.len(),
             failures,
             seconds(time)
-        ));
+        );
         for record in suite {
             match record.status {
                 ScenarioStatus::Failed => {
                     let error = record.error.as_deref().unwrap_or("scenario failed");
-                    out.push_str(&format!(
-                        "    <testcase name=\"{}\" classname=\"{}\" time=\"{}\">\n",
+                    let _ = writeln!(
+                        out,
+                        "    <testcase name=\"{}\" classname=\"{}\" time=\"{}\">",
                         escape_xml(&record.name),
                         escape_xml(spec_stem(&record.file)),
                         seconds(record.duration_ms)
-                    ));
-                    out.push_str(&format!(
-                        "      <failure message=\"{}\" type=\"assertion\">{}</failure>\n",
+                    );
+                    let _ = writeln!(
+                        out,
+                        "      <failure message=\"{}\" type=\"assertion\">{}</failure>",
                         escape_xml(error),
                         escape_xml(error)
-                    ));
+                    );
                     out.push_str("    </testcase>\n");
                 }
                 ScenarioStatus::Passed | ScenarioStatus::Flaky => {
-                    out.push_str(&format!(
-                        "    <testcase name=\"{}\" classname=\"{}\" time=\"{}\"/>\n",
+                    let _ = writeln!(
+                        out,
+                        "    <testcase name=\"{}\" classname=\"{}\" time=\"{}\"/>",
                         escape_xml(&record.name),
                         escape_xml(spec_stem(&record.file)),
                         seconds(record.duration_ms)
-                    ));
+                    );
                 }
             }
         }
@@ -358,12 +365,13 @@ pub fn render_html(report: &RunReport) -> String {
         Some((index, of)) => format!(" &middot; shard {index}/{of}"),
         None => String::new(),
     };
-    out.push_str(&format!(
-        "<p class=\"meta\">{} workers{} &middot; total {}</p>\n",
+    let _ = writeln!(
+        out,
+        "<p class=\"meta\">{} workers{} &middot; total {}</p>",
         report.workers,
         shard,
         escape_html(&fmt_ms(report.duration_ms))
-    ));
+    );
     out.push_str("<div class=\"cards\">\n");
     for (label, class, num) in [
         ("passed", "passed", summary.passed),
@@ -371,16 +379,18 @@ pub fn render_html(report: &RunReport) -> String {
         ("failed", "failed", summary.failed),
         ("total", "", summary.total),
     ] {
-        out.push_str(&format!(
-            "<div class=\"card\"><div class=\"num {class}\">{num}</div><div>{label}</div></div>\n"
-        ));
+        let _ = writeln!(
+            out,
+            "<div class=\"card\"><div class=\"num {class}\">{num}</div><div>{label}</div></div>"
+        );
     }
     out.push_str("</div>\n");
     out.push_str("<table>\n<tr><th>spec</th><th>scenario</th><th>status</th><th>attempts</th><th>time</th><th>error</th></tr>\n");
     for record in &report.scenarios {
         let error = record.error.as_deref().unwrap_or("");
-        out.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td><td>{} ms</td><td class=\"err\">{}</td></tr>\n",
+        let _ = writeln!(
+            out,
+            "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td><td>{} ms</td><td class=\"err\">{}</td></tr>",
             escape_html(&record.file),
             escape_html(&record.name),
             record.status.tag(),
@@ -388,7 +398,7 @@ pub fn render_html(report: &RunReport) -> String {
             record.attempts,
             record.duration_ms,
             escape_html(error)
-        ));
+        );
     }
     out.push_str("</table>\n</body>\n</html>\n");
     out
@@ -526,14 +536,19 @@ mod tests {
         assert!(xml.contains("<testsuites tests=\"3\" failures=\"1\""));
         assert!(xml.contains("<testsuite name=\"login\" tests=\"3\" failures=\"1\""));
         assert!(
-            xml.contains("<testcase name=\"save the document\" classname=\"login\" time=\"0.112\"/>")
+            xml.contains(
+                "<testcase name=\"save the document\" classname=\"login\" time=\"0.112\"/>"
+            )
         );
         let failure = xml
             .match_indices("<failure")
             .map(|(i, _)| &xml[i..i + 160])
             .next()
             .expect("one failure element");
-        assert!(failure.contains("message=\"expectation failed:"), "{failure}");
+        assert!(
+            failure.contains("message=\"expectation failed:"),
+            "{failure}"
+        );
         assert!(failure.contains("did not resolve"), "{failure}");
         // Flaky testcase (self-closing) has no failure child.
         let flaky_idx = xml.find("retry path").expect("flaky testcase present");
@@ -602,7 +617,12 @@ mod tests {
 
     #[test]
     fn progress_lines_render_by_status() {
-        let pass = progress_line(&record("save the document", ScenarioStatus::Passed, 1, None));
+        let pass = progress_line(&record(
+            "save the document",
+            ScenarioStatus::Passed,
+            1,
+            None,
+        ));
         assert_eq!(
             pass,
             " PASS  tests/guiwright/login.spec.toml :: save the document (112 ms)"
