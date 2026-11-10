@@ -35,8 +35,8 @@ pub struct TraceMeta {
     /// Test/artifact name (nextest `NEXTEST_TEST_NAME` when present, §11).
     pub test: String,
     pub app: String,
-    /// Adapter `AdapterMeta` (name, framework, version, caps) — §18
-    /// "AdapterMeta reports versions in traces".
+    /// Adapter metadata ([`AdapterRecord`]: name, framework, version,
+    /// caps) — §18 "`AdapterMeta` reports versions in traces".
     pub adapter: AdapterRecord,
     pub os: String,
     pub arch: String,
