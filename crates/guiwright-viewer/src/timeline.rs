@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(view.snapshot_frame, Some(2));
         assert_eq!(view.nodes.len(), 3);
         assert!(!view.nodes.iter().any(|n| n.removed));
-        assert!(view.pending_changes.is_empty());
+        assert_eq!(view.pending_changes.len(), 0);
 
         // Frame 5 → snapshot 2 + removal of id 3 at frame 4.
         let view = timeline.tree_at(5).expect("view");
@@ -325,7 +325,7 @@ mod tests {
         // Frame 12 → snapshot 10 (fresh payload, no pending).
         let view = timeline.tree_at(12).expect("view");
         assert_eq!(view.snapshot_frame, Some(10));
-        assert!(view.pending_changes.is_empty());
+        assert_eq!(view.pending_changes.len(), 0);
         assert_eq!(view.focus, Some(5));
     }
 
