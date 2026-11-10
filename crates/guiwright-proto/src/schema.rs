@@ -132,14 +132,30 @@ pub enum MockV1 {
 }
 
 /// `Inspect { EnableOverlay | Highlight(handle) | StartRecording |
-/// StopRecording }` (§7). M2 ships the codegen recorder half (§13); the
-/// live highlight handles land with the interactive overlay session.
+/// StopRecording }` (§7). M2 shipped the codegen recorder half (§13);
+/// M8 lands the live highlight handles — the interactive overlay session
+/// (`EnableOverlay` / `DisableOverlay` / `Highlight`), composited by the
+/// adapter at present time (§13 "Overlay: adapter-level composition").
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum InspectV1 {
     /// Start the interaction → code recorder (§13).
     StartRecording,
     /// Stop and fetch the generated kit code.
     StopRecording,
+    /// §13 `EnableOverlay` (M8): start the inspector overlay session —
+    /// the adapter composites hover outlines + interactive-role badges
+    /// from the tree indexes at present time. Wire discipline: appended
+    /// after `StopRecording` (discriminant 2); see [`RequestV1::Video`].
+    EnableOverlay,
+    /// §13 overlay complement (M8): stop compositing and drop the
+    /// highlight. Appended after `EnableOverlay` (discriminant 3).
+    DisableOverlay,
+    /// §13 `Highlight(handle)` (M8): aim the hover outline at a resolved
+    /// node (facts ride the caller's own resolution; the reply is
+    /// [`ResponseV1::Pong`]). `None` clears the outline and keeps the
+    /// overlay session. Wire discipline: appended after `DisableOverlay`
+    /// (discriminant 4).
+    Highlight { node: Option<NodeKeyV1> },
 }
 
 /// `Video { Start(opts) | Stop }` → `VideoFile { path }` (§7, §10). The
@@ -1102,6 +1118,19 @@ mod tests {
         );
         assert_eq!(discriminant(&InspectV1::StartRecording), 0);
         assert_eq!(discriminant(&InspectV1::StopRecording), 1);
+        // M8 (§13): the overlay/highlight half of the Inspect domain —
+        // appended, never reordered (clients/typescript/src/schema.ts).
+        assert_eq!(discriminant(&InspectV1::EnableOverlay), 2);
+        assert_eq!(discriminant(&InspectV1::DisableOverlay), 3);
+        assert_eq!(
+            discriminant(&InspectV1::Highlight {
+                node: Some(NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                })
+            }),
+            4
+        );
         assert_eq!(discriminant(&WindowV1::List), 0);
         assert_eq!(
             discriminant(&WindowV1::Use {
