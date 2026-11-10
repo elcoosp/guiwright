@@ -12,7 +12,7 @@
 //! synthetic events are bit-identical to OS input):
 //!
 //! * [`a11y`] — the a11y-hybrid activation model: force-enable at driver
-//!   attach (§18 "ActivationHandler with immediate activation for tests"),
+//!   attach (§18 "`ActivationHandler` with immediate activation for tests"),
 //!   then the per-frame `TreeUpdate`s flow unchanged.
 //! * [`input`] — [`InputEvent`](guiwright_driver::adapter::InputEvent) →
 //!   `PlatformInput` steps, including the `VisualTestContext` keystroke
