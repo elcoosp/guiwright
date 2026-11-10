@@ -4,7 +4,7 @@
 //! they can be evaluated exactly when the world changes (event-driven
 //! waiting, §15.3) instead of on a poll loop.
 
-use accesskit_consumer::{FilterResult, common_filter};
+use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 
 use crate::key::NodeKey;
 use crate::selector::TextMatch;
@@ -17,7 +17,7 @@ pub enum Check {
     Attached,
     /// `common_filter` includes the node *and* its bounds have area > 0.
     Visible,
-    /// Negated visibility (expect().to_be_hidden()).
+    /// Negated visibility (`expect().to_be_hidden()`).
     Hidden,
     /// `!node.is_disabled()`.
     Enabled,
@@ -74,6 +74,8 @@ pub enum CheckStatus {
 ///
 /// `Pending` means "the world may still change so the check can pass";
 /// `Failed` means "this cannot pass anymore, abort early".
+/// Each check's body lives in its own `*_status` helper so the dispatch
+/// stays a readable table (§8.3's per-check rows).
 pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus {
     let Some(node) = tree.node(key) else {
         return match check {
@@ -88,113 +90,18 @@ pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus
 
     match check {
         Check::Attached => CheckStatus::Pass,
-        Check::Visible => {
-            let filtered = common_filter(&node);
-            if filtered != FilterResult::Include {
-                // Playwright waits for visibility; hidden nodes may become
-                // visible, so this stays Pending (never fail-fast).
-                return CheckStatus::Pending {
-                    reason: "node is hidden".to_string(),
-                };
-            }
-            match node.bounding_box() {
-                Some(rect) if rect.area() > 0.0 => CheckStatus::Pass,
-                Some(_) => CheckStatus::Pending {
-                    reason: "bounds are empty (zero area)".to_string(),
-                },
-                None => CheckStatus::Pending {
-                    reason: "node has no bounds yet".to_string(),
-                },
-            }
-        }
-        Check::Hidden => {
-            let filtered = common_filter(&node);
-            if filtered != FilterResult::Include {
-                return CheckStatus::Pass;
-            }
-            match node.bounding_box() {
-                Some(rect) if rect.area() > 0.0 => CheckStatus::Pending {
-                    reason: "node is visible".to_string(),
-                },
-                _ => CheckStatus::Pass,
-            }
-        }
-        Check::Enabled => {
-            if node.is_disabled() {
-                // Playwright waits for the node to become enabled.
-                CheckStatus::Pending {
-                    reason: "node is disabled".to_string(),
-                }
-            } else {
-                CheckStatus::Pass
-            }
-        }
-        Check::Disabled => {
-            if node.is_disabled() {
-                CheckStatus::Pass
-            } else {
-                CheckStatus::Pending {
-                    reason: "node is enabled".to_string(),
-                }
-            }
-        }
+        Check::Visible => visible_status(&node),
+        Check::Hidden => hidden_status(&node),
+        Check::Enabled => enablement_status(&node, true),
+        Check::Disabled => enablement_status(&node, false),
         Check::Stable => {
             // Evaluated by the waiter's stability tracker on FramePresented.
             CheckStatus::Pending {
                 reason: "waiting for two consecutive stable frames".to_string(),
             }
         }
-        Check::ReceivesEvents => match node.bounding_box() {
-            Some(rect) => {
-                let point = accesskit::Point {
-                    x: (rect.x0 + rect.x1) / 2.0,
-                    y: (rect.y0 + rect.y1) / 2.0,
-                };
-                match tree.hit_test(point) {
-                    Some(hit) if hit == *key => CheckStatus::Pass,
-                    Some(hit) => {
-                        // A descendant receiving the event is fine
-                        // (buttons contain label children).
-                        let mut ok = false;
-                        tree.descendants(key, &mut |k, _| {
-                            if k == hit {
-                                ok = true;
-                            }
-                        });
-                        if ok {
-                            CheckStatus::Pass
-                        } else {
-                            CheckStatus::Pending {
-                                reason: format!("point is intercepted by {}", hit.describe()),
-                            }
-                        }
-                    }
-                    None => CheckStatus::Pending {
-                        reason: "hit test found nothing at the node center".to_string(),
-                    },
-                }
-            }
-            None => CheckStatus::Pending {
-                reason: "node has no bounds yet".to_string(),
-            },
-        },
-        Check::HasText(m) => {
-            let label = node.label();
-            let value = node.value();
-            if label.as_deref().is_some_and(|l| m.matches(l))
-                || value.as_deref().is_some_and(|v| m.matches(v))
-            {
-                CheckStatus::Pass
-            } else {
-                CheckStatus::Pending {
-                    reason: format!(
-                        "text is {:?}, expected {}",
-                        label.or(value).unwrap_or_default(),
-                        render(m)
-                    ),
-                }
-            }
-        }
+        Check::ReceivesEvents => receives_events_status(tree, key, &node),
+        Check::HasText(m) => has_text_status(&node, m),
         Check::Focused => {
             if tree.focus() == Some(*key) {
                 CheckStatus::Pass
@@ -203,6 +110,117 @@ pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus
                     reason: "node is not focused".to_string(),
                 }
             }
+        }
+    }
+}
+
+/// §8.3 Visible: `common_filter` includes the node *and* its bounds have
+/// area > 0. Playwright waits for visibility; hidden nodes may become
+/// visible, so a not-yet-visible node stays Pending (never fail-fast).
+fn visible_status(node: &NodeRef<'_>) -> CheckStatus {
+    if common_filter(node) != FilterResult::Include {
+        return CheckStatus::Pending {
+            reason: "node is hidden".to_string(),
+        };
+    }
+    match node.bounding_box() {
+        Some(rect) if rect.area() > 0.0 => CheckStatus::Pass,
+        Some(_) => CheckStatus::Pending {
+            reason: "bounds are empty (zero area)".to_string(),
+        },
+        None => CheckStatus::Pending {
+            reason: "node has no bounds yet".to_string(),
+        },
+    }
+}
+
+/// §8.3 Hidden: the negated Visible check — included by the filter and
+/// bounded while Pending, passing as soon as either fails.
+fn hidden_status(node: &NodeRef<'_>) -> CheckStatus {
+    if common_filter(node) != FilterResult::Include {
+        return CheckStatus::Pass;
+    }
+    match node.bounding_box() {
+        Some(rect) if rect.area() > 0.0 => CheckStatus::Pending {
+            reason: "node is visible".to_string(),
+        },
+        _ => CheckStatus::Pass,
+    }
+}
+
+/// §8.3 Enabled / Disabled (the negated pair): pass when the node's
+/// enablement matches the wanted state, Pending otherwise (Playwright
+/// waits for the state to flip).
+fn enablement_status(node: &NodeRef<'_>, want_enabled: bool) -> CheckStatus {
+    if node.is_disabled() == want_enabled {
+        CheckStatus::Pending {
+            reason: if want_enabled {
+                "node is disabled"
+            } else {
+                "node is enabled"
+            }
+            .to_string(),
+        }
+    } else {
+        CheckStatus::Pass
+    }
+}
+
+/// §8.3 `ReceivesEvents`: `hit_test` at the node's center resolves to the
+/// node or a descendant (no occluding overlay).
+fn receives_events_status(tree: &TreeService, key: &NodeKey, node: &NodeRef<'_>) -> CheckStatus {
+    match node.bounding_box() {
+        Some(rect) => {
+            let point = accesskit::Point {
+                x: f64::midpoint(rect.x0, rect.x1),
+                y: f64::midpoint(rect.y0, rect.y1),
+            };
+            match tree.hit_test(point) {
+                Some(hit) if hit == *key => CheckStatus::Pass,
+                Some(hit) => {
+                    // A descendant receiving the event is fine
+                    // (buttons contain label children).
+                    let mut ok = false;
+                    tree.descendants(key, &mut |k, _| {
+                        if k == hit {
+                            ok = true;
+                        }
+                    });
+                    if ok {
+                        CheckStatus::Pass
+                    } else {
+                        CheckStatus::Pending {
+                            reason: format!("point is intercepted by {}", hit.describe()),
+                        }
+                    }
+                }
+                None => CheckStatus::Pending {
+                    reason: "hit test found nothing at the node center".to_string(),
+                },
+            }
+        }
+        None => CheckStatus::Pending {
+            reason: "node has no bounds yet".to_string(),
+        },
+    }
+}
+
+/// §8.3 `HasText`: the label or value matches (Playwright matches visible
+/// text; AccessKit exposes text through labels and values).
+fn has_text_status(node: &NodeRef<'_>, m: &TextMatch) -> CheckStatus {
+    let label = node.label();
+    let value = node.value();
+    if label.as_deref().is_some_and(|l| m.matches(l))
+        || value.as_deref().is_some_and(|v| m.matches(v))
+    {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Pending {
+            reason: format!(
+                "text is {:?}, expected {}",
+                label.or(value).unwrap_or_default(),
+                render(m)
+            ),
         }
     }
 }
