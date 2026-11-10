@@ -108,7 +108,7 @@ mod tests {
         paint_overlay(&ctx, &OverlayPlan::default());
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
-        assert!(overlay_shapes(&OverlayPlan::default()).is_empty());
+        assert_eq!(overlay_shapes(&OverlayPlan::default()).len(), 0);
     }
 
     #[test]
