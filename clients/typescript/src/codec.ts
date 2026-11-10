@@ -98,6 +98,17 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
         case "stop_recording":
           enc.u32(InspectV1.StopRecording);
           break;
+        case "enable_overlay":
+          enc.u32(InspectV1.EnableOverlay);
+          break;
+        case "disable_overlay":
+          enc.u32(InspectV1.DisableOverlay);
+          break;
+        case "highlight":
+          enc.u32(InspectV1.Highlight);
+          enc.optionTag(req.cmd.node !== null);
+          if (req.cmd.node !== null) encodeNodeKey(enc, req.cmd.node);
+          break;
       }
       break;
     case "video":
