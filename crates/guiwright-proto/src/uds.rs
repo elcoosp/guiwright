@@ -71,7 +71,7 @@ impl Client {
                 GwpResponse::V1(ResponseV1::Error { code, message }) => {
                     Err(GwpError::Rejected { code, message })
                 }
-                _ => Err(GwpError::Handshake("expected Welcome")),
+                GwpResponse::V1(_) => Err(GwpError::Handshake("expected Welcome")),
             };
         };
         if proto_version != PROTO_VERSION {
@@ -119,8 +119,11 @@ mod tests {
     }
 
     impl Handler for EchoHandler {
-        async fn handle(&mut self, request: RequestV1) -> ResponseV1 {
-            match request {
+        fn handle(
+            &mut self,
+            request: RequestV1,
+        ) -> impl std::future::Future<Output = ResponseV1> + Send {
+            let response = match request {
                 RequestV1::Hello { .. } => {
                     self.handshakes.fetch_add(1, Ordering::SeqCst);
                     ResponseV1::Welcome {
@@ -142,7 +145,8 @@ mod tests {
                     code: ErrorCode::Unsupported,
                     message: "not implemented in echo handler".into(),
                 },
-            }
+            };
+            async move { response }
         }
     }
 
