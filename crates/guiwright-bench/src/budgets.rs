@@ -52,16 +52,12 @@ struct BudgetRow {
     name: String,
     p50_us: f64,
     p95_us: f64,
-    #[allow(dead_code)]
-    notes: Option<String>,
     m0_measurable: bool,
-    #[allow(dead_code)]
     sample: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct BudgetFile {
-    #[allow(dead_code)]
     schema: String,
     budget: Vec<BudgetRow>,
 }
@@ -94,11 +90,18 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("resolve_remote_tcp", crate::samples::resolve_remote_tcp),
     ("video_frame_dedup", crate::samples::video_frame_dedup),
     ("gesture_synthesis", crate::samples::gesture_synthesis),
+    ("kit_input_click", crate::samples::kit_input_click),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
     let file: BudgetFile =
         toml::from_str(BUDGETS_TOML).expect("bench/budgets.toml must parse as gw-budgets/v1");
+    // The schema stamp is load-bearing: a drifted file is a config error,
+    // not a silently-empty guard (the equal-rows check below would pass).
+    assert_eq!(
+        file.schema, "gw-budgets/v1",
+        "bench/budgets.toml schema stamp drifted"
+    );
     file.budget
         .into_iter()
         .filter(|row| row.m0_measurable)
@@ -115,8 +118,12 @@ fn parse_budgets() -> Vec<Budget> {
                 .1;
             Budget {
                 name: row.name,
-                p50: Duration::from_micros(row.p50_us.round() as u64),
-                p95: Duration::from_micros(row.p95_us.round() as u64),
+                // Design targets are non-negative µs; the try_from keeps
+                // the float→µs conversion sign-honest (a negative row is
+                // a config bug and degrades to a 0 budget — visibly
+                // failing the guard, never silently negative).
+                p50: Duration::from_micros(u64::try_from(row.p50_us.round() as i64).unwrap_or(0)),
+                p95: Duration::from_micros(u64::try_from(row.p95_us.round() as i64).unwrap_or(0)),
                 sample,
             }
         })
