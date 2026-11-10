@@ -59,11 +59,10 @@ pub enum SpecError {
 impl Spec {
     /// Parse and validate one spec file.
     pub fn parse(path: &str, text: &str) -> Result<Self, SpecError> {
-        let spec: Spec = toml::from_str(text)
-            .map_err(|err| SpecError::Parse {
-                path: path.to_string(),
-                message: err.to_string(),
-            })?;
+        let spec: Spec = toml::from_str(text).map_err(|err| SpecError::Parse {
+            path: path.to_string(),
+            message: err.to_string(),
+        })?;
         if spec.scenarios.is_empty() {
             return Err(SpecError::Parse {
                 path: path.to_string(),
