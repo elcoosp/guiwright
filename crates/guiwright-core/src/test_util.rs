@@ -195,7 +195,7 @@ impl Fixture {
         }
     }
 
-    /// Incremental update: rename Save → "Save All" (node_updated path).
+    /// Incremental update: rename Save → "Save All" (the `node_updated` path).
     pub fn rename_save_update(&self) -> TreeUpdate {
         let mut save = Node::new(Role::Button);
         save.set_label("Save All");
@@ -308,8 +308,8 @@ impl Fixture {
 /// └── window "Preview" (2) ──►W2
 /// ```
 ///
-/// Both windows deliberately reuse the same **local** NodeIds (the subtree
-/// namespaces are independent): only the TreeId — the window identity —
+/// Both windows deliberately reuse the same **local** `NodeId`s (the subtree
+/// namespaces are independent): only the `TreeId` — the window identity —
 /// tells the two "Save" buttons apart, which is exactly the discriminator a
 /// window-scoped resolver must honor.
 ///
@@ -486,7 +486,7 @@ impl MultiWindowFixture {
         }
     }
 
-    /// The W1 "Save" button's identity (its window's TreeId is what makes it
+    /// The W1 "Save" button's identity (its window's `TreeId` is what makes it
     /// distinct from W2's).
     pub fn w1_save_key(&self) -> NodeKey {
         NodeKey::AccessKit {
