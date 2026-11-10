@@ -1,12 +1,21 @@
 //! The `guiwright` binary (§5.2): thin dispatch over the library — every
 //! behavior lives in the lib so tests and scripted use share one path.
 
+use std::io::Write;
+
 use guiwright_cli::{Command, bless_dir, install_deps_command, parse_args, show_trace};
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let code = run(&argv);
     std::process::exit(code);
+}
+
+/// One current-thread tokio runtime (io + net) — the CLI is sequential.
+fn current_thread_runtime() -> Result<tokio::runtime::Runtime, std::io::Error> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
 }
 
 fn run(argv: &[String]) -> i32 {
@@ -31,21 +40,7 @@ fn run(argv: &[String]) -> i32 {
         }
     };
     match command {
-        Command::Repl { target } => {
-            // A current-thread runtime is plenty: the REPL is one
-            // sequential conversation; the clients only need io + net.
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(err) => {
-                    eprintln!("error: tokio runtime: {err}");
-                    return 1;
-                }
-            };
-            rt.block_on(repl_loop(target))
-        }
+        Command::Repl { target } => run_repl(target),
         Command::Test {
             paths,
             target,
@@ -61,10 +56,7 @@ fn run(argv: &[String]) -> i32 {
             // The runner is IO-bound (one GWP connection per attempt);
             // a current-thread runtime interleaves the workers on the
             // await points.
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
+            let rt = match current_thread_runtime() {
                 Ok(rt) => rt,
                 Err(err) => {
                     eprintln!("error: tokio runtime: {err}");
@@ -179,7 +171,6 @@ async fn repl_loop(target: guiwright_cli::ConnectTarget) -> i32 {
         }
         if interactive && !outcome.exit {
             eprint!("gw> ");
-            use std::io::Write;
             let _ = std::io::stderr().flush();
         }
         if outcome.exit {
@@ -188,6 +179,18 @@ async fn repl_loop(target: guiwright_cli::ConnectTarget) -> i32 {
     }
     // EOF without `bye`: the session ends with the process.
     0
+}
+
+/// The `guiwright repl` front-end: one current-thread runtime, one
+/// sequential conversation (§16 REPL parity).
+fn run_repl(target: guiwright_cli::session::ConnectTarget) -> i32 {
+    match current_thread_runtime() {
+        Ok(rt) => rt.block_on(repl_loop(target)),
+        Err(err) => {
+            eprintln!("error: tokio runtime: {err}");
+            1
+        }
+    }
 }
 
 /// The `guiwright test` front-end (M5): discover → run → print → report.
@@ -201,7 +204,9 @@ async fn test_loop(
 
     let mut roots = paths;
     if roots.is_empty() {
-        roots.push(std::path::PathBuf::from(guiwright_cli::runner::DEFAULT_SPEC_DIR));
+        roots.push(std::path::PathBuf::from(
+            guiwright_cli::runner::DEFAULT_SPEC_DIR,
+        ));
     }
     let specs = match guiwright_cli::runner::discover(&roots) {
         Ok(specs) => specs,
@@ -213,11 +218,12 @@ async fn test_loop(
     let on_finish = if opts.quiet {
         None
     } else {
-        Some(std::sync::Arc::new(
-            |record: &guiwright_cli::report::ScenarioRecord| {
+        Some(
+            std::sync::Arc::new(|record: &guiwright_cli::report::ScenarioRecord| {
                 println!("{}", progress_line(record));
-            },
-        ) as std::sync::Arc<dyn Fn(&guiwright_cli::report::ScenarioRecord) + Send + Sync>)
+            })
+                as std::sync::Arc<dyn Fn(&guiwright_cli::report::ScenarioRecord) + Send + Sync>,
+        )
     };
     let outcome = match guiwright_cli::runner::run(specs, &opts, on_finish).await {
         Ok(outcome) => outcome,
@@ -254,9 +260,5 @@ async fn test_loop(
             }
         }
     }
-    if outcome.failed {
-        1
-    } else {
-        0
-    }
+    i32::from(outcome.failed)
 }
