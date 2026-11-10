@@ -56,6 +56,11 @@ pub struct MockAdapter {
     /// a test can observe what landed without owning the session (the
     /// `with_shared_scripts` pattern).
     shared_input_log: Option<InputLog>,
+    /// The last inspector overlay plan (§13, M8): what `show_overlay`
+    /// received, in order — tests assert on exactly what an adapter would
+    /// composite at present time. `None` = no overlay session (or it was
+    /// disabled with a `None` plan).
+    overlay: Option<guiwright_inspect::overlay::OverlayPlan>,
 }
 
 /// A window-tagged input log shared between the mock and e2e tests (M7):
@@ -128,6 +133,7 @@ impl MockAdapter {
             events: Vec::new(),
             window_events: Vec::new(),
             shared_input_log: None,
+            overlay: None,
         }
     }
 
@@ -270,6 +276,13 @@ impl MockAdapter {
         &self.window_events
     }
 
+    /// The last overlay plan `show_overlay` received (§13, M8): `None`
+    /// before the first `EnableOverlay`/`Highlight` and after a
+    /// `DisableOverlay`.
+    pub fn overlay(&self) -> Option<&guiwright_inspect::overlay::OverlayPlan> {
+        self.overlay.as_ref()
+    }
+
     pub fn pump_count(&self) -> u64 {
         self.seq
     }
@@ -407,6 +420,16 @@ impl FrameworkAdapter for MockAdapter {
         let result = task(state.as_mut_any());
         self.state = Some(state);
         result.map_err(AdapterError::Internal)
+    }
+
+    /// The mock has an overlay surface (§13, M8): the plan is recorded so
+    /// session tests assert on the composited data instead of pixels.
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay = plan.cloned();
+        Ok(())
     }
 
     fn last_frame(&mut self) -> Option<crate::adapter::FrameRef> {
