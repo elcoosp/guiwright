@@ -59,8 +59,7 @@ pub fn bless_dir(root: &Path, dry_run: bool) -> Result<Vec<BlessReport>, BlessEr
             .filter_map(|entry| entry.ok().map(|e| e.path()))
             .filter(|path| {
                 path.file_name()
-                    .map(|n| n.to_string_lossy().ends_with(".png.new.png"))
-                    .unwrap_or(false)
+                    .is_some_and(|n| n.to_string_lossy().ends_with(".png.new.png"))
             })
             .collect();
         artifacts.sort();
