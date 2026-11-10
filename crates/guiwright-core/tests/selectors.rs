@@ -168,10 +168,10 @@ fn has_not_filter_excludes_matching_subtrees() {
         focus: accesskit::NodeId(0),
     });
 
-    let groups = svc
+    let found = svc
         .resolve_all(&Selector::role(Role::Group))
         .expect("groups");
-    assert_eq!(groups.len(), 2);
+    assert_eq!(found.len(), 2);
 
     let empty = svc
         .resolve(&Selector::role(Role::Group).has_not(Selector::role(Role::TextInput)))
