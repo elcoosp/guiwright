@@ -34,6 +34,7 @@ use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
     FrameworkAdapter, InputEvent, PumpOutcome, SemAction,
 };
+use guiwright_inspect::overlay::OverlayPlan;
 
 /// The embedded app: receives the `Context` once per pass, exactly like an
 /// `eframe` update callback.
@@ -57,6 +58,10 @@ pub struct EguiAdapter {
     frame_seq: u64,
     /// Frame deadline for settle loops (one pass per pump).
     frame_step: f64,
+    /// The inspector overlay plan (§13, M8): composited at the end of
+    /// every pass while a session is on (painter layer after the app
+    /// closure — the §13 "egui: painter layer after the pass" path).
+    overlay: Option<OverlayPlan>,
 }
 
 impl std::fmt::Debug for EguiAdapter {
@@ -98,6 +103,7 @@ impl EguiAdapter {
             pending_tree_update: None,
             frame_seq: 0,
             frame_step: 1.0 / 60.0,
+            overlay: None,
         }
     }
 
@@ -111,6 +117,12 @@ impl EguiAdapter {
     /// Current virtual time (§14 clock service state).
     pub fn virtual_time(&self) -> Duration {
         Duration::from_secs_f64(self.time.max(0.0))
+    }
+
+    /// The overlay plan currently composited (§13, M8): `None` when no
+    /// overlay session is on.
+    pub fn overlay(&self) -> Option<&OverlayPlan> {
+        self.overlay.as_ref()
     }
 
     fn run_pass(&mut self) -> egui::FullOutput {
@@ -134,9 +146,18 @@ impl EguiAdapter {
             ..Default::default()
         };
         let app = &mut self.app;
+        let overlay = &self.overlay;
         // egui 0.37: `run_pass` wraps begin/end pass and hands the app the
-        // Context (apps build panels via `ctx.root_ui`).
-        self.ctx.run_pass(input, |ctx| app(ctx))
+        // Context (apps build panels via `ctx.root_ui`). The inspector
+        // overlay paints inside the same pass, after the app closure —
+        // the §13 "painter layer after the pass" composition, no extra
+        // frame (§15.4 render-once invariant).
+        self.ctx.run_pass(input, |ctx| {
+            app(ctx);
+            if let Some(plan) = overlay {
+                crate::overlay::paint_overlay(ctx, plan);
+            }
+        })
     }
 }
 
@@ -256,6 +277,13 @@ impl FrameworkAdapter for EguiAdapter {
     fn input(&mut self, ev: InputEvent) -> Result<(), AdapterError> {
         self.pending_input
             .extend(translate_input(ev, self.screen_rect));
+        Ok(())
+    }
+
+    /// The egui adapter has an overlay surface (§13, M8): the plan rides
+    /// the painter layer inside the next pass.
+    fn show_overlay(&mut self, plan: Option<&OverlayPlan>) -> Result<(), AdapterError> {
+        self.overlay = plan.cloned();
         Ok(())
     }
 
