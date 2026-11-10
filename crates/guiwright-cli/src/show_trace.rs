@@ -32,19 +32,17 @@ pub fn show_trace(
     out: Option<PathBuf>,
     open: bool,
 ) -> Result<PathBuf, ShowTraceError> {
-    let out = match out {
-        Some(path) => path,
-        None => {
-            let stem = archive
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .ok_or_else(|| ShowTraceError::OutputPath(archive.to_path_buf()))?;
-            archive
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(format!("{stem}.html"))
-        }
+    let out = if let Some(path) = out {
+        path
+    } else {
+        let stem = archive
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .ok_or_else(|| ShowTraceError::OutputPath(archive.to_path_buf()))?;
+        archive
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            .join(format!("{stem}.html"))
     };
 
     let archive_reader = TraceArchive::open(archive)?;
