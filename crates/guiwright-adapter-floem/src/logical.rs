@@ -27,7 +27,7 @@ use crate::roles::RoleRegistry;
 /// pass — the neutral vocabulary between the harness and this engine.
 #[derive(Clone, Debug)]
 pub struct ViewReport {
-    /// Registry key ("button", "text_input", "vstack", …, §4.7).
+    /// Registry key (`"button"`, `"text_input"`, `"vstack"`, …, §4.7).
     pub kind: String,
     /// Floem `ViewId` inner (slotmap index, §6.1 `NodeKey::Floem`).
     pub handle: u64,
@@ -111,7 +111,7 @@ fn normalize(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The engine. Rebuilt per pass; owns the handle ↔ NodeId binding.
+/// The engine. Rebuilt per pass; owns the handle ↔ `NodeId` binding.
 #[derive(Debug)]
 pub struct FloemLogicalTree {
     registry: RoleRegistry,
@@ -170,15 +170,14 @@ impl FloemLogicalTree {
     }
 
     /// Fold one pass's view reports into a [`LogicalTreeDiff`].
-    pub fn rebuild(&mut self, root: ViewReport) -> LogicalTreeDiff {
+    pub fn rebuild(&mut self, root: &ViewReport) -> LogicalTreeDiff {
         let mut nodes: Vec<(NodeId, Node)> = Vec::new();
         let mut live: HashMap<u64, Slot> = HashMap::new();
         let mut focus: Option<NodeId> = None;
         let mut removed: Vec<u64> = Vec::new();
         let mut test_ids: Vec<(u64, String)> = Vec::new();
 
-        let root_node_id = self.walk(&root, &mut nodes, &mut live, &mut focus, &mut test_ids);
-        let root_node_id = root_node_id.unwrap_or(NodeId(0));
+        let root_node_id = self.walk(root, &mut nodes, &mut live, &mut focus, &mut test_ids);
 
         // Handles that disappeared since the last pass — bump their
         // generation so recycled slotmap keys never alias (§8.2).
@@ -225,7 +224,7 @@ impl FloemLogicalTree {
         live: &mut HashMap<u64, Slot>,
         focus: &mut Option<NodeId>,
         test_ids: &mut Vec<(u64, String)>,
-    ) -> Option<NodeId> {
+    ) -> NodeId {
         // Stable binding: a handle seen before keeps its minted NodeId —
         // unless it left the tree since (generation bump above): a handle
         // that re-enters always re-mints (ABA guard, §8.2).
@@ -260,9 +259,7 @@ impl FloemLogicalTree {
 
         let mut child_ids = Vec::with_capacity(report.children.len());
         for child in &report.children {
-            if let Some(child_id) = self.walk(child, nodes, live, focus, test_ids) {
-                child_ids.push(child_id);
-            }
+            child_ids.push(self.walk(child, nodes, live, focus, test_ids));
         }
         node.set_children(child_ids);
 
@@ -275,7 +272,7 @@ impl FloemLogicalTree {
                 role,
             },
         );
-        Some(node_id)
+        node_id
     }
 }
 
@@ -310,7 +307,7 @@ mod tests {
     #[test]
     fn synthesizes_role_label_bounds_semantics() {
         let mut tree = FloemLogicalTree::new();
-        let diff = tree.rebuild(sample_app());
+        let diff = tree.rebuild(&sample_app());
         assert_eq!(diff.adapter, "floem");
         assert_eq!(diff.update.nodes.len(), 4, "window + 3 views");
         assert!(diff.changed);
@@ -347,13 +344,13 @@ mod tests {
     #[test]
     fn stable_bindings_and_removal_generations() {
         let mut tree = FloemLogicalTree::new();
-        let _first = tree.rebuild(sample_app());
+        let _first = tree.rebuild(&sample_app());
         let save_id = NodeId(1);
         assert_eq!(tree.handle_of(save_id), Some(1));
         assert_eq!(tree.role_of(save_id), Some(Role::Button));
 
         // Same handles next pass → same minted NodeIds (stable identity).
-        let second = tree.rebuild(sample_app());
+        let second = tree.rebuild(&sample_app());
         let again = second
             .update
             .nodes
@@ -365,7 +362,7 @@ mod tests {
 
         // The Confirm button disappears → its handle's generation bumps.
         let removed = tree.rebuild(
-            ViewReport::new("window", 100)
+            &ViewReport::new("window", 100)
                 .with_child(ViewReport::new("button", 1).with_text("Save")),
         );
         // The removal list is a set (HashMap iteration order is not a
@@ -377,7 +374,7 @@ mod tests {
 
         // A recycled handle 3 re-enters → fresh NodeId (ABA guard).
         let reused = tree.rebuild(
-            ViewReport::new("window", 100)
+            &ViewReport::new("window", 100)
                 .with_child(ViewReport::new("button", 3).with_text("Recycled")),
         );
         let recycled_id = reused
@@ -395,7 +392,7 @@ mod tests {
     fn focus_rides_the_tree_update() {
         let mut tree = FloemLogicalTree::new();
         let diff = tree.rebuild(
-            ViewReport::new("window", 100).with_child(
+            &ViewReport::new("window", 100).with_child(
                 ViewReport::new("text_input", 1)
                     .with_text("Email")
                     .focused(),
