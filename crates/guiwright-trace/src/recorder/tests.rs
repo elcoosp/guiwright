@@ -29,13 +29,27 @@ fn png_bytes(seed: u8, size: usize) -> Vec<u8> {
     vec![seed; size]
 }
 
+/// Read one archive member into memory (tests assert on decoded bytes).
+fn member_bytes<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    archive
+        .by_name(name)
+        .unwrap_or_else(|e| panic!("member {name}: {e}"))
+        .read_to_end(&mut out)
+        .expect("read");
+    out
+}
+
 #[test]
 fn archive_has_the_documented_layout() {
     let dir = tempfile::tempdir().expect("tmp");
     let path = dir.path().join("guiwright-login_flow-1.zip");
     let mut rec = TraceRecorder::start(options(path.clone()));
 
-    rec.event(1, "action", r#"click @ (12, 8)"#);
+    rec.event(1, "action", r"click @ (12, 8)");
     rec.tree_snapshot(TreeSnapshot {
         frame_seq: 1,
         nodes: vec![TreeNode {
@@ -89,13 +103,8 @@ fn archive_has_the_documented_layout() {
         "deduped frame must not be archived"
     );
 
-    let mut meta = String::new();
-    archive
-        .by_name("meta.json")
-        .expect("meta")
-        .read_to_string(&mut meta)
-        .expect("read");
-    let meta: serde_json::Value = serde_json::from_str(&meta).expect("meta json");
+    let meta = member_bytes(&mut archive, "meta.json");
+    let meta: serde_json::Value = serde_json::from_slice(&meta).expect("meta json");
     assert_eq!(meta["schema"], "gwtrace/v1");
     assert_eq!(meta["test"], "login_flow");
     assert_eq!(meta["adapter"]["name"], "egui");
@@ -104,37 +113,23 @@ fn archive_has_the_documented_layout() {
     assert_eq!(meta["scale"], 2.0);
     assert_eq!(meta["frame_codec"], "png");
 
-    let mut events = String::new();
-    archive
-        .by_name("events.ndjson")
-        .expect("events")
-        .read_to_string(&mut events)
-        .expect("read");
+    let events = member_bytes(&mut archive, "events.ndjson");
+    let events = String::from_utf8(events).expect("utf8");
     let line: serde_json::Value =
         serde_json::from_str(events.lines().next().expect("one line")).expect("ndjson");
     assert_eq!(line["kind"], "action");
     assert_eq!(line["seq"], 1);
-    assert_eq!(line["detail"], r#"click @ (12, 8)"#);
+    assert_eq!(line["detail"], r"click @ (12, 8)");
 
     // trees/<seq>.bin is postcard+LZ4 — decompress and decode.
-    let mut snap = Vec::new();
-    archive
-        .by_name("trees/1.bin")
-        .expect("snapshot")
-        .read_to_end(&mut snap)
-        .expect("read");
+    let snap = member_bytes(&mut archive, "trees/1.bin");
     let decoded: TreeSnapshot =
         postcard::from_bytes(&lz4_flex::decompress_size_prepended(&snap).expect("lz4"))
             .expect("postcard");
     assert_eq!(decoded.frame_seq, 1);
     assert_eq!(decoded.nodes[0].role, "window");
 
-    let mut index = Vec::new();
-    archive
-        .by_name("index.bin")
-        .expect("index")
-        .read_to_end(&mut index)
-        .expect("read");
+    let index = member_bytes(&mut archive, "index.bin");
     let index: Vec<crate::schema::FrameIndexEntry> =
         postcard::from_bytes(&index).expect("postcard");
     assert_eq!(index.len(), 2, "one row per archived frame");
