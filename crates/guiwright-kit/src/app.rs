@@ -17,11 +17,14 @@ use accesskit::Role;
 use guiwright_core::selector::{Selector, TextMatch};
 use guiwright_core::tree::Resolved;
 use guiwright_core::{CoreError, NodeKey};
+use guiwright_driver::ActionOpts;
 use guiwright_driver::SeamRegistry;
 use guiwright_driver::adapter::{AdapterError, ClockCmd, FrameworkAdapter, SemAction};
 use guiwright_driver::clock::ClockReport;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::session::Session;
+
+use crate::input::{KeyboardHandle, MouseHandle};
 use guiwright_inspect::codegen::{CodegenRecorder, NodeFacts};
 use guiwright_shot::Image;
 use guiwright_shot::baseline::{BlessMode, SnapshotOutcome};
@@ -65,7 +68,7 @@ impl<A: FrameworkAdapter> std::fmt::Debug for Locator<'_, A> {
     }
 }
 
-impl<'a, A: FrameworkAdapter> Locator<'a, A> {
+impl<A: FrameworkAdapter> Locator<'_, A> {
     /// `locator.first()` (§8.1 filters).
     pub fn first(mut self) -> Self {
         self.selector = self.selector.first();
@@ -102,7 +105,7 @@ impl<'a, A: FrameworkAdapter> Locator<'a, A> {
         let outcome = self.app.session.perform_action(
             &self.selector,
             SemAction::DoubleClick,
-            &Default::default(),
+            &ActionOpts::default(),
         )?;
         self.app.record_action("dblclick", &self.selector, None);
         Ok(outcome)
@@ -267,6 +270,25 @@ impl<A: FrameworkAdapter> App<A> {
         }
     }
 
+    /// Is the kit codegen recorder active?
+    pub(crate) fn codegen_active(&self) -> bool {
+        self.codegen.is_some()
+    }
+
+    /// Land one raw-input codegen line (§13 over §9): pre-rendered by the
+    /// driver's renderer (the input vocabulary has no selector to
+    /// validate), plus an optional recorded-code warning.
+    pub(crate) fn record_input_code(&mut self, line: String, warning: Option<String>) {
+        let Some(mut recorder) = self.codegen.take() else {
+            return;
+        };
+        if let Some(warning) = warning {
+            recorder.warn(warning);
+        }
+        recorder.record_raw(line);
+        self.codegen = Some(recorder);
+    }
+
     /// The generated kit code + strict-mode warnings (§13); `None` while
     /// recording is disabled.
     pub fn codegen_code(&mut self) -> Option<(String, Vec<String>)> {
@@ -365,6 +387,25 @@ impl<A: FrameworkAdapter> App<A> {
     /// finalizes a `.webm` (ffmpeg) or PNG frame folder on stop.
     pub fn video(&mut self) -> VideoHandle<'_, A> {
         VideoHandle { app: self }
+    }
+
+    /// The raw input surface (§9): `app.mouse().click(x, y)`,
+    /// `.dblclick(x, y)`, `.drag(from_x, from_y, to_x, to_y)`,
+    /// `.wheel(dx, dy)` and the raw `move_to` / `down` / `up` primitives —
+    /// the same gesture vocabulary the REPL and the TypeScript client
+    /// speak over the wire, embedded (the M7 "kit-embedded input" row).
+    /// Coordinates are logical px relative to the target window;
+    /// `.in_window(handle)` pins it for multi-window apps.
+    pub fn mouse(&mut self) -> MouseHandle<'_, A> {
+        MouseHandle::new(self)
+    }
+
+    /// The keyboard surface (§9): `app.keyboard().press(key)`,
+    /// `.press_with(key, modifiers)` and `.type_text(text)` ride the
+    /// driver's synthesis exactly like the wire clients' `key` / `text`
+    /// commands.
+    pub fn keyboard(&mut self) -> KeyboardHandle<'_, A> {
+        KeyboardHandle::new(self)
     }
 
     /// Register the app's boot seams (§14). Use the
@@ -532,9 +573,8 @@ impl<A: FrameworkAdapter> App<A> {
         }
         let pending = std::mem::take(&mut self.codegen_pending);
         // Take the recorder out: resolution needs `&mut session`.
-        let mut recorder = match self.codegen.take() {
-            Some(recorder) => recorder,
-            None => return,
+        let Some(mut recorder) = self.codegen.take() else {
+            return;
         };
         for (kind, selector, argument) in &pending {
             let Ok(resolved) = self.session.resolve(selector) else {
@@ -557,9 +597,9 @@ impl<A: FrameworkAdapter> App<A> {
         NodeFacts {
             key: *key,
             role: node.as_ref().map(|n| format!("{:?}", n.role())),
-            name: node.as_ref().and_then(|n| n.label()),
-            label: node.as_ref().and_then(|n| n.label()),
-            value: node.as_ref().and_then(|n| n.value()),
+            name: node.as_ref().and_then(accesskit_consumer::NodeRef::label),
+            label: node.as_ref().and_then(accesskit_consumer::NodeRef::label),
+            value: node.as_ref().and_then(accesskit_consumer::NodeRef::value),
             test_id: tree.test_id_of(key).map(str::to_string),
             bounds: bounds.map(|r| [r.x0, r.y0, r.x1, r.y1]),
         }
@@ -582,7 +622,7 @@ impl<A: FrameworkAdapter> std::fmt::Debug for ClockHandle<'_, A> {
     }
 }
 
-impl<'a, A: FrameworkAdapter> ClockHandle<'a, A> {
+impl<A: FrameworkAdapter> ClockHandle<'_, A> {
     fn push(&mut self, cmd: ClockCmd) -> Result<ClockReport, KitError> {
         let report = self.app.session.clock(cmd).map_err(KitError::Core);
         self.app.record_clock_ledger();
@@ -593,7 +633,7 @@ impl<'a, A: FrameworkAdapter> ClockHandle<'a, A> {
         report
     }
 
-    /// `clock.install_virtual()` (§14 InstallVirtual).
+    /// `clock.install_virtual()` (§14 `InstallVirtual`).
     pub fn install_virtual(&mut self) -> Result<ClockReport, KitError> {
         self.push(ClockCmd::InstallVirtual)
     }
@@ -641,7 +681,7 @@ impl<A: FrameworkAdapter> std::fmt::Debug for MockHandle<'_, A> {
     }
 }
 
-impl<'a, A: FrameworkAdapter> MockHandle<'a, A> {
+impl<A: FrameworkAdapter> MockHandle<'_, A> {
     /// `mock.install(id, response)` (§7 `Mock::InstallSeam`): preset a
     /// canned response; `None` clears the canned value (real hook runs).
     pub fn install(&mut self, id: &str, response: Option<String>) -> &mut Self {
@@ -705,7 +745,7 @@ impl<A: FrameworkAdapter> std::fmt::Debug for VideoHandle<'_, A> {
     }
 }
 
-impl<'a, A: FrameworkAdapter> VideoHandle<'a, A> {
+impl<A: FrameworkAdapter> VideoHandle<'_, A> {
     /// `video.start_in(dir, fps)` — record presented frames into `dir`
     /// (the client/test owns the artifact dir, Playwright parity). The
     /// adapter must expose a pixel path (§6.2); `fps = 0` selects the
@@ -713,7 +753,7 @@ impl<'a, A: FrameworkAdapter> VideoHandle<'a, A> {
     pub fn start_in(&mut self, dir: &std::path::Path, fps: u32) -> Result<(), KitError> {
         self.app.session.video_start_in(dir, fps)?;
         self.app
-            .record_event("video", format!("start(dir={dir:?}, fps={fps})"));
+            .record_event("video", format!("start(dir={}, fps={fps})", dir.display()));
         Ok(())
     }
 
@@ -755,7 +795,9 @@ pub fn expect<A: FrameworkAdapter>(locator: Locator<'_, A>) -> core_expect::Pend
 /// Tiny namespace so the kit's expect reads like the architecture's
 /// `expect(locator).to_*` while delegating to the session builder.
 pub(crate) mod core_expect {
-    use super::*;
+    use super::FrameworkAdapter;
+    use guiwright_core::CoreError;
+    use guiwright_core::selector::TextMatch;
 
     pub struct Pending<'a, A: FrameworkAdapter> {
         pub builder: guiwright_driver::session::ExpectBuilder<'a, A>,
@@ -769,9 +811,9 @@ pub(crate) mod core_expect {
 
     // Consuming builder by design — mirrors session::ExpectBuilder and the
     // architecture's `expect(locator).to_be_visible()` shape (§16): the
-    // assertion is single-shot, so `self` moves into the check.
-    #[allow(clippy::wrong_self_convention)]
-    impl<'a, A: FrameworkAdapter> Pending<'a, A> {
+    // assertion is single-shot, so `self` moves into the check (the
+    // workspace lint table carries the `wrong_self_convention` carve-out).
+    impl<A: FrameworkAdapter> Pending<'_, A> {
         pub fn to_be_visible(self) -> Result<(), CoreError> {
             self.builder.to_be_visible()
         }
