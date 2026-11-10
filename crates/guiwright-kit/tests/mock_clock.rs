@@ -19,6 +19,11 @@ struct DemoState {
 /// `#[guiwright::seam] fn reset_db() -> Result<(), AppError>`.
 #[guiwright_kit::seam]
 fn reset_db(state: &mut DemoState, scope: &str) -> Result<(), String> {
+    // Seams may fail (the mock domain surfaces Err as a clean error, §14);
+    // an empty scope is a test-authoring bug here.
+    if scope.trim().is_empty() {
+        return Err("reset_db needs a non-empty scope".into());
+    }
     state.rows = 0;
     state.fixture = Some(scope.to_string());
     Ok(())
@@ -26,6 +31,12 @@ fn reset_db(state: &mut DemoState, scope: &str) -> Result<(), String> {
 
 #[guiwright_kit::seam]
 fn seed_users(state: &mut DemoState) -> Result<String, String> {
+    // The fixture is "closed" when no fixture context is installed —
+    // `reset_state` empties rows by design and seeding must stay legal
+    // afterwards (that parity is what the runner-context test pins).
+    if state.fixture.is_none() {
+        return Err("cannot seed a closed fixture".into());
+    }
     state.rows = 3;
     state.fixture = Some("seeded".into());
     Ok("3 users seeded".into())
@@ -70,9 +81,7 @@ fn clock_surface_full_vocabulary() {
     clock.resume().expect("resume");
     clock.run_for(Duration::from_millis(10)).expect("run_for");
 
-    clock
-        .set_time(Duration::from_millis(120_000))
-        .expect("set time");
+    clock.set_time(Duration::from_secs(120)).expect("set time");
     let state = clock.state().expect("probe");
     assert_eq!(state.virtual_time, Some(Duration::from_secs(120)));
     assert!(!state.paused);
