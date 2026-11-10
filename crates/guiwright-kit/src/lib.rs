@@ -22,7 +22,7 @@ pub mod context;
 pub mod input;
 pub mod run;
 
-pub use app::{App, ClockHandle, KitError, Locator, MockHandle, expect};
+pub use app::{App, ClockHandle, InspectHandle, KitError, Locator, MockHandle, expect};
 pub use context::TestContext;
 pub use guiwright_driver::{GestureOutcome, PointerButton, SeamRegistry};
 pub use guiwright_macros::{register_seams, seam, test};
