@@ -1,4 +1,4 @@
-//! Emulator determinism → pump budget (§4.6 "iced_test::Emulator drives a
+//! Emulator determinism → pump budget (§4.6 "`iced_test::Emulator` drives a
 //! real Program headlessly with determinism modes (`Zen` = settle-to-
 //! quiescence, `Patient`, `Immediate`)").
 //!
