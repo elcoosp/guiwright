@@ -1,4 +1,4 @@
-//! Guiwright FrameworkAdapter for egui (architecture §4.1, M0 scope).
+//! Guiwright `FrameworkAdapter` for `egui` (architecture §4.1, M0 scope).
 //!
 //! Embeds a [`egui::Context`] and drives it with [`egui::RawInput`] — no
 //! window, no backend (the kittest-style windowless path, §11). Every pump
@@ -52,11 +52,20 @@ pub struct EguiAdapter {
     /// Input events queued for the next pass (§9: synthetic input enters the
     /// same choke point as OS input).
     pending_input: Vec<egui::Event>,
-    /// Full TreeUpdate from the last pass, drained once by the driver.
+    /// Full [`accesskit::TreeUpdate`] from the last pass, drained once by the driver.
     pending_tree_update: Option<accesskit::TreeUpdate>,
     frame_seq: u64,
     /// Frame deadline for settle loops (one pass per pump).
     frame_step: f64,
+}
+
+impl std::fmt::Debug for EguiAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EguiAdapter")
+            .field("meta", &self.meta)
+            .field("frame_seq", &self.frame_seq)
+            .finish_non_exhaustive()
+    }
 }
 
 impl EguiAdapter {
