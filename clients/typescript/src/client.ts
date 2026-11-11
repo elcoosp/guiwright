@@ -430,10 +430,11 @@ export class GwpClient {
 
   /**
    * Subscribe this connection to the named event kinds (§7 event
-   * channel, M12): `Event` frames flow between responses while the app
-   * advances; read them with `nextEvent()`. Re-subscribing replaces the
-   * filter; the ack echoes the kinds the driver honored (all-or-nothing:
-   * naming `log` — not served yet — rejects the whole request with
+   * channel, M12 + the log-tail milestone): `Event` frames flow between
+   * responses while the app advances; read them with `nextEvent()`.
+   * Re-subscribing replaces the filter; the ack echoes the kinds the
+   * driver honored (all-or-nothing: naming `log` against a session
+   * spawned without its log tail rejects the whole request with
    * `Unsupported`).
    */
   async subscribe(kinds: EventKind[]): Promise<EventKind[]> {
