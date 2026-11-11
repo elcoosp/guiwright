@@ -39,4 +39,4 @@ pub use gesture::{
 };
 pub use seams::{SeamFn, SeamRegistry, SeamTask};
 pub use server::{GwpServerHandle, spawn_session_server};
-pub use session::{ActionOpts, GestureOutcome, Session};
+pub use session::{ActionOpts, GestureOutcome, Session, SnapshotNode, TreeDump, WireShot};
