@@ -776,3 +776,120 @@ async fn codegen_recording(repl: &mut Repl) {
         "app.keyboard().press(\"Enter\");"
     );
 }
+
+/// M13 (§7 tree domain): `snapshot under <get-args…>` renders only the
+/// match's subtree — same rows, same indentation rules, subtree-scoped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_snapshot_under_dump() {
+    let path = socket_path("repl-dump-under.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    let out = rendered(&repl.step("snapshot under role Group").await);
+    // Header + the Group and its six children (the window root excluded).
+    assert_eq!(out.len(), 8, "{out:?}");
+    assert!(out[0].ends_with("nodes (under Group)"), "{out:?}");
+    assert_eq!(out[1], "Group", "{out:?}");
+    assert_eq!(out[2], "  Button \"Save\" @ [16,16 → 136,48]", "{out:?}");
+    assert_eq!(
+        out[5], "  TextInput \"Email\" = ada@example.dev @ [16,128 → 256,156]",
+        "{out:?}"
+    );
+
+    // A miss is the runner-shaped rejection: with the default timeout it
+    // auto-waits and expires as `timeout`; at timeout 0 it fails fast as
+    // strict-mode (the same wording `expect` uses).
+    assert_eq!(
+        rendered(&repl.step("timeout 0").await),
+        vec!["timeout = 0 ms"]
+    );
+    let err = repl.step("snapshot under role TabPanel").await;
+    assert!(
+        matches!(err.lines.first(), Some(Line::Err(text)) if text.contains("strict-mode")),
+        "{err:?}"
+    );
+    assert_eq!(
+        rendered(&repl.step("timeout 5000").await),
+        vec!["timeout = 5000 ms"]
+    );
+
+    handle.shutdown();
+}
+
+/// M12 (§7 event channel): `events on` subscribes; tree/frame events
+/// flushed between commands print ahead of the next command's output;
+/// `events off` stops the flow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_events_command_flushes_between_commands() {
+    use std::sync::{Arc, Mutex};
+
+    use accesskit::{Node, NodeId, Role, TreeUpdate};
+
+    let path = socket_path("repl-events.sock");
+    let shared: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts = Arc::clone(&shared);
+    let handle = spawn_session_server(path.clone(), move || {
+        MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts)
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // Subscribe: the ack names the honored kinds. The drain may already
+    // print events ahead of it (the subscribe request's own pump presents
+    // a frame — events start flowing immediately, that is the point).
+    let out = rendered(&repl.step("events on").await);
+    assert!(
+        out.iter().any(|l| l
+            == "events: subscribed (tree_changed, frame_presented) — flushed between commands"),
+        "{out:?}"
+    );
+
+    // Script a rename; the events flush with the NEXT command's output
+    // (the line-oriented contract — what lands mid-prompt shows up then).
+    let mut save = Node::new(Role::Button);
+    save.set_label("Save (renamed)");
+    save.set_bounds(accesskit::Rect {
+        x0: 16.0,
+        y0: 16.0,
+        x1: 136.0,
+        y1: 48.0,
+    });
+    shared.lock().unwrap().push(TreeUpdate {
+        nodes: vec![(NodeId(2), save)],
+        tree: None,
+        tree_id: accesskit::TreeId::ROOT,
+        focus: accesskit::NodeId(2),
+    });
+
+    // Give the session thread's frame tick a moment to pump + publish,
+    // then run any command: the drain prints ahead of its output.
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    let out = rendered(&repl.step("ping").await);
+    assert_eq!(out.last(), Some(&"pong".to_string()), "{out:?}");
+    let events: Vec<&String> = out.iter().filter(|l| l.starts_with("event ")).collect();
+    assert!(
+        events.iter().any(|l| l.contains("tree_changed")),
+        "the tree event flushed between commands: {out:?}"
+    );
+    assert!(
+        events.iter().any(|l| l.contains("frame_presented")),
+        "frame events flush too (one pass per pump): {out:?}"
+    );
+
+    // Off: the flow stops.
+    assert_eq!(
+        rendered(&repl.step("events off").await)[0],
+        "events: unsubscribed"
+    );
+    let out = rendered(&repl.step("ping").await);
+    assert_eq!(out, vec!["pong"], "no events after `off`");
+
+    handle.shutdown();
+}
