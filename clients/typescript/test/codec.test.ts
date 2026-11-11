@@ -19,6 +19,7 @@ import { encodeFrame, FrameReader, MAX_FRAME_BYTES } from "../src/framing.ts";
 import {
   ClockV1,
   ErrorCode,
+  EventKindV1,
   GestureV1,
   GwpRequest,
   GwpResponse,
@@ -34,6 +35,7 @@ import {
   SemActionV1,
   ScreenshotV1,
   SnapshotV1,
+  SubscribeV1,
   VideoV1,
   WindowV1,
 } from "../src/schema.ts";
@@ -48,8 +50,8 @@ const hexToBytes = (hex: string): Uint8Array => {
 
 test("golden manifest is the expected shape", () => {
   assert.equal(golden.schema, "gwp-golden/v1");
-  assert.ok(golden.requests.length >= 21, "every request variant is pinned");
-  assert.ok(golden.responses.length >= 15, "every response variant is pinned");
+  assert.ok(golden.requests.length >= 24, "every request variant is pinned");
+  assert.ok(golden.responses.length >= 18, "every response variant is pinned");
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -167,6 +169,19 @@ test("requests encode byte-identical to the Rust wire", () => {
       },
     }),
     snapshot_full: () => ({ kind: "snapshot", cmd: { kind: "full" } }),
+    snapshot_filtered: () => ({
+      kind: "snapshot",
+      cmd: {
+        kind: "filtered",
+        selector: { kind: "role", role: "Group", name: null },
+        timeout_ms: 2500,
+      },
+    }),
+    subscribe_on: () => ({
+      kind: "subscribe",
+      cmd: { kind: "on", kinds: ["tree_changed", "frame_presented"] },
+    }),
+    subscribe_off: () => ({ kind: "subscribe", cmd: { kind: "off" } }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -243,13 +258,14 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-6), [
+  assert.deepEqual(byName(requests).slice(-7), [
     "Bye",
     "Video",
     "Window",
     "Gesture",
     "Screenshot",
     "Snapshot",
+    "Subscribe",
   ]);
   assert.deepEqual(
     Object.values(RequestV1),
@@ -257,13 +273,15 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-6), [
+  assert.deepEqual(byName(responses).slice(-8), [
     "VideoFile",
     "Windows",
     "WindowUsed",
     "GestureDone",
     "Shot",
     "TreeDump",
+    "Event",
+    "Subscribed",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
@@ -273,6 +291,12 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   const domains = schema.domains;
   assert.deepEqual(Object.values(ClockV1), domains.clock.variants.map((v: any) => Number(v.index)));
   assert.deepEqual(Object.values(MockV1), domains.mock.variants.map((v: any) => Number(v.index)));
+  // The M8 overlay half rides the published table too (the pre-M12 hole
+  // — the vendored copy now covers the whole InspectV1 domain).
+  assert.deepEqual(
+    Object.values(InspectV1),
+    domains.inspect.variants.map((v: any) => Number(v.index)),
+  );
   assert.deepEqual(
     Object.values(VideoV1),
     domains.video.variants.map((v: any) => Number(v.index)),
@@ -293,6 +317,14 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     Object.values(SnapshotV1),
     domains.snapshot.variants.map((v: any) => Number(v.index)),
   );
+  assert.deepEqual(
+    Object.values(SubscribeV1),
+    domains.subscribe.variants.map((v: any) => Number(v.index)),
+  );
+  assert.deepEqual(
+    Object.values(EventKindV1),
+    domains.event_kind.variants.map((v: any) => Number(v.index)),
+  );
   assert.equal(schema.protocol_version, PROTO_VERSION);
 });
 
@@ -309,6 +341,5 @@ void GwpResponse;
 void SelectorV1;
 void SemActionV1;
 void InputEventV1;
-void InspectV1;
 void NodeKeyV1;
 void ErrorCode;
