@@ -29,9 +29,10 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 }
 
 /// The request table, in wire order (§7). Append-only: `Video` follows
-/// `Bye` (M3), `Window` follows `Video` (M6, §16 v0.4 multi-window) and
-/// `Gesture` follows `Window` (M7, §9 input pipeline); the pinning tests
-/// enforce the order.
+/// `Bye` (M3), `Window` follows `Video` (M6, §16 v0.4 multi-window),
+/// `Gesture` follows `Window` (M7, §9 input pipeline), `Screenshot`
+/// follows `Gesture` (M10, §7 render domain) and `Snapshot` follows
+/// `Screenshot` (M11, tree dump); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -58,11 +59,14 @@ const REQUESTS: &[Variant] = &[
     v(10, "Video", "VideoV1 (see domains.video)"),
     v(11, "Window", "WindowV1 (see domains.window)"),
     v(12, "Gesture", "GestureV1 (see domains.gesture)"),
+    v(13, "Screenshot", "ScreenshotV1 (see domains.screenshot)"),
+    v(14, "Snapshot", "SnapshotV1 (see domains.snapshot)"),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
-/// `Bye` (M3), the M6 window replies append at 12–13 and the M7
-/// `GestureDone` reply at 14.
+/// `Bye` (M3), the M6 window replies append at 12–13, the M7
+/// `GestureDone` reply at 14, the M10 `Shot` reply at 15 and the M11
+/// `TreeDump` reply at 16.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -102,6 +106,16 @@ const RESPONSES: &[Variant] = &[
         14,
         "GestureDone",
         "{ frame_seq: u64 varint, detail: string }",
+    ),
+    v(
+        15,
+        "Shot",
+        "{ frame_seq: u64 varint, width: u32 varint, height: u32 varint, png: seq<u8> (PNG-encoded RGBA8) } — PNG rides the frame directly (already DEFLATE-compressed; the LZ4 blob stage would double-encode)",
+    ),
+    v(
+        16,
+        "TreeDump",
+        "{ tree_seq: u64 varint, node_count: u64 varint, focus: option<NodeKeyV1>, nodes: seq<SnapshotNodeV1 { key: NodeKeyV1, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, children: u32 varint }> } — depth-first per window root; children counts rebuild the hierarchy",
     ),
 ];
 
@@ -234,6 +248,13 @@ pub fn gwp_schema_json() -> serde_json::Value {
                 (2, "Wheel", "{ dx: f64, dy: f64 } → GestureDone; logical-px deltas"),
                 (3, "Key", "{ key: string, modifiers: seq<string> } → GestureDone; synthesized as down→up (§8.4 key-name vocabulary)"),
                 (4, "Type", "{ text: string } → GestureDone; one TextInput commit — adapters translate to IME or per-key events (§4.2)"),
+            ]),
+            "screenshot": domain_table("ScreenshotV1", &[
+                (0, "Window", "— → Shot; the full window frame, rendered once (§10 render-on-demand path)"),
+                (1, "Element", "{ selector: SelectorV1, timeout_ms: u64 varint } → Shot; resolve the node (auto-wait Attached within timeout_ms, §8.2) and crop the window frame by the resolved physical bounds — never a re-render (§10 element rule)"),
+            ]),
+            "snapshot": domain_table("SnapshotV1", &[
+                (0, "Full", "— → TreeDump; the whole logical tree, depth-first per window root (§16 v0.4), each row carrying key/role/name/value/bounds/children — the CDP 'DOM snapshot' analog (M11)"),
             ]),
         },
         "window_info": {
