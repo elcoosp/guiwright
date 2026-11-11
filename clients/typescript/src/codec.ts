@@ -32,6 +32,11 @@ import {
   WindowV1,
   type GestureCmd,
   GestureV1,
+  type ScreenshotCmd,
+  ScreenshotV1,
+  type SnapshotCmd,
+  SnapshotV1,
+  type SnapshotNodeV1,
 } from "./schema.ts";
 import { Decoder, Encoder } from "./postcard.ts";
 
@@ -122,6 +127,14 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
     case "gesture":
       enc.u32(RequestV1.Gesture);
       encodeGestureCmd(enc, req.cmd);
+      break;
+    case "screenshot":
+      enc.u32(RequestV1.Screenshot);
+      encodeScreenshotCmd(enc, req.cmd);
+      break;
+    case "snapshot":
+      enc.u32(RequestV1.Snapshot);
+      encodeSnapshotCmd(enc, req.cmd);
       break;
     case "bye":
       enc.u32(RequestV1.Bye);
@@ -341,6 +354,27 @@ function encodeGestureCmd(enc: Encoder, cmd: GestureCmd): void {
   }
 }
 
+function encodeScreenshotCmd(enc: Encoder, cmd: ScreenshotCmd): void {
+  switch (cmd.kind) {
+    case "window":
+      enc.u32(ScreenshotV1.Window);
+      break;
+    case "element":
+      enc.u32(ScreenshotV1.Element);
+      encodeSelector(enc, cmd.selector);
+      enc.u64(cmd.timeout_ms);
+      break;
+  }
+}
+
+function encodeSnapshotCmd(enc: Encoder, cmd: SnapshotCmd): void {
+  switch (cmd.kind) {
+    case "full":
+      enc.u32(SnapshotV1.Full);
+      break;
+  }
+}
+
 // --- Decoding ----------------------------------------------------------------
 
 export function decodeResponse(bytes: Uint8Array): GwpResponseT {
@@ -436,6 +470,22 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       const detail = dec.str();
       return { kind: "gesture_done", frame_seq, detail };
     }
+    case 15: {
+      const frame_seq = dec.u64n();
+      const width = dec.u32();
+      const height = dec.u32();
+      const png = dec.raw(dec.varint());
+      return { kind: "shot", frame_seq, width, height, png };
+    }
+    case 16: {
+      const tree_seq = dec.u64n();
+      const node_count = dec.u64n();
+      const focus = dec.optionTag() ? decodeNodeKey(dec) : null;
+      const nodes: SnapshotNodeV1[] = [];
+      const n = dec.varint();
+      for (let i = 0; i < n; i += 1) nodes.push(decodeSnapshotNode(dec));
+      return { kind: "tree_dump", tree_seq, node_count, focus, nodes };
+    }
     default:
       throw new Error(`unknown response variant ${variant}`);
   }
@@ -479,6 +529,18 @@ function decodeNodeKey(dec: Decoder): NodeKey {
     default:
       throw new Error(`unknown NodeKey variant ${variant}`);
   }
+}
+
+function decodeSnapshotNode(dec: Decoder): SnapshotNodeV1 {
+  const key = decodeNodeKey(dec);
+  const role = dec.str();
+  const name = dec.optionTag() ? dec.str() : null;
+  const value = dec.optionTag() ? dec.str() : null;
+  const bounds = dec.optionTag()
+    ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
+    : null;
+  const children = dec.u32();
+  return { key, role, name, value, bounds, children };
 }
 
 /** Map a decoded error response onto a typed rejection (§7). */
