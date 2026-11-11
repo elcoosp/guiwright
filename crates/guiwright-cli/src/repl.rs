@@ -16,8 +16,8 @@ use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     AdapterInfoV1, ClockV1, ErrorCode, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1,
-    PointerButtonV1, RequestV1, ResponseV1, SelectorV1, SemActionV1, TextMatchV1, VideoOptsV1,
-    VideoV1, WindowV1,
+    PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1,
+    TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
 };
 
 /// One output line of a REPL step.
@@ -176,15 +176,7 @@ impl Repl {
                 self.request(RequestV1::Ping).await?;
                 Ok(vec![Line::Ok("pong".into())])
             }
-            "snapshot" => match self.request(RequestV1::TreeSnapshot).await? {
-                ResponseV1::TreeSnapshot {
-                    tree_seq,
-                    node_count,
-                } => Ok(vec![Line::Ok(format!(
-                    "tree @{tree_seq}: {node_count} nodes"
-                ))]),
-                other => Err(unexpected("TreeSnapshot", &other)),
-            },
+            "snapshot" => self.snapshot_command(tokens).await,
             "timeout" => {
                 let ms = parse_ms(tokens.get(1))?;
                 self.timeout_ms = ms;
@@ -242,6 +234,7 @@ impl Repl {
             "video" => self.video_command(tokens).await,
             "window" => self.window_command(tokens).await,
             "mouse" => self.mouse_command(tokens).await,
+            "screenshot" => self.screenshot_command(tokens).await,
             "key" => {
                 let key = tokens
                     .get(1)
@@ -730,6 +723,112 @@ impl Repl {
         }
     }
 
+    // --- tree dump (§7 tree domain, M11) -----------------------------------------
+
+    /// `snapshot` — the summary (the M0 reply); `snapshot full` — the
+    /// whole tree as data, depth-first per window root, indented by the
+    /// `children` counts (§7 `Snapshot::Full` → `TreeDump`). The focused
+    /// node is marked so live debugging sees selection changes.
+    async fn snapshot_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        if tokens.get(1).map(String::as_str) != Some("full") {
+            return match self.request(RequestV1::TreeSnapshot).await? {
+                ResponseV1::TreeSnapshot {
+                    tree_seq,
+                    node_count,
+                } => Ok(vec![Line::Ok(format!(
+                    "tree @{tree_seq}: {node_count} nodes"
+                ))]),
+                other => Err(unexpected("TreeSnapshot", &other)),
+            };
+        }
+        let ResponseV1::TreeDump {
+            tree_seq,
+            node_count,
+            focus,
+            nodes,
+        } = self.request(RequestV1::Snapshot(SnapshotV1::Full)).await?
+        else {
+            return Err("expected TreeDump".into());
+        };
+        let mut lines = vec![Line::Ok(format!(
+            "tree @{tree_seq}: {node_count} nodes (full)"
+        ))];
+        // Rebuild the hierarchy from the DFS order + children counts: a
+        // node with children opens a level; drained counts close it. Each
+        // window's walk starts at depth 0 (the stack drains between
+        // windows by construction, §16 v0.4).
+        let mut remaining: Vec<u32> = Vec::new();
+        for node in &nodes {
+            while let Some(top) = remaining.last() {
+                if *top == 0 {
+                    remaining.pop();
+                } else {
+                    break;
+                }
+            }
+            let depth = remaining.len();
+            if depth > 0 {
+                *remaining.last_mut().expect("depth > 0 implies a parent") -= 1;
+            }
+            let mut row = String::new();
+            let _ = write!(row, "{}{}", "  ".repeat(depth), node.role);
+            if let Some(name) = &node.name {
+                let _ = write!(row, " \"{name}\"");
+            }
+            if let Some(value) = &node.value {
+                let _ = write!(row, " = {value}");
+            }
+            if let Some([x0, y0, x1, y1]) = node.bounds {
+                let _ = write!(row, " @ [{x0},{y0} → {x1},{y1}]");
+            }
+            if Some(&node.key) == focus.as_ref() {
+                row.push_str(" (focus)");
+            }
+            lines.push(Line::Info(row));
+            if node.children > 0 {
+                remaining.push(node.children);
+            }
+        }
+        Ok(lines)
+    }
+
+    // --- render domain (§7, M10) -------------------------------------------------
+
+    /// `screenshot [path]` — pull the window frame as PNG (§10 capture).
+    /// The client owns the artifact path (Playwright parity): a missing
+    /// argument writes `guiwright-shot-<epoch-ms>.png` into the process
+    /// cwd. Element shots are the programmatic surface (the TypeScript
+    /// client's `screenshotElement`) — the REPL holds no selector to
+    /// re-resolve honestly.
+    async fn screenshot_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let path = match tokens.get(1) {
+            Some(path) => path.clone(),
+            None => format!(
+                "guiwright-shot-{}.png",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis())
+            ),
+        };
+        match self
+            .request(RequestV1::Screenshot(ScreenshotV1::Window))
+            .await?
+        {
+            ResponseV1::Shot {
+                frame_seq,
+                width,
+                height,
+                png,
+            } => {
+                std::fs::write(&path, &png).map_err(|e| format!("{path}: {e}"))?;
+                Ok(vec![Line::Ok(format!(
+                    "shot: {path} ({width}×{height}, frame {frame_seq})"
+                ))])
+            }
+            other => Err(unexpected("Shot", &other)),
+        }
+    }
+
     // --- help -------------------------------------------------------------------------
 
     fn help() -> Vec<Line> {
@@ -737,6 +836,7 @@ impl Repl {
             "commands:",
             "  ping                        liveness probe",
             "  snapshot                    tree snapshot summary",
+            "  snapshot full               the whole tree, indented (§7 dump)",
             "  get role <Role> [name]      resolve a locator (strict mode)",
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
@@ -759,6 +859,7 @@ impl Repl {
             "  window use <handle>         aim this connection at one target",
             "  codegen start | stop        record actions as kit code (§13)",
             "  video start [fps] [dir] | video stop",
+            "  screenshot [path]           pull a PNG shot of the window (§10)",
             "  timeout <ms>                resolve/action deadline",
             "  last                        show the current node handle",
             "  bye | exit | quit           close the session",
