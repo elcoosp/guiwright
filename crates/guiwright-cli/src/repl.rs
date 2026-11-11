@@ -836,17 +836,22 @@ impl Repl {
 
     // --- event channel (§7, M12) ---------------------------------------------
 
-    /// `events on | off` (§7, M12): subscribe this connection to tree +
-    /// frame events; the drain between commands prints what arrived (see
-    /// [`Repl::drain_events`]). The `Log` kind is intentionally not
-    /// subscribable here — the driver rejects it with `Unsupported` until
-    /// the log-tail milestone.
+    /// `events on | off` (§7, M12 + the log-tail milestone): subscribe
+    /// this connection to tree + frame events **and** the session log
+    /// tail's records; the drain between commands prints what arrived (see
+    /// [`Repl::drain_events`]). The `Log` kind needs the server-side tap
+    /// (`ServerOptions::log_tail`) — a session spawned without it answers
+    /// a typed `Unsupported` and the error surfaces here verbatim.
     async fn events_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
         match tokens.get(1).map(String::as_str) {
             Some("on") => {
                 let resp = self
                     .request(RequestV1::Subscribe(SubscribeV1::On {
-                        kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+                        kinds: vec![
+                            EventKindV1::TreeChanged,
+                            EventKindV1::FramePresented,
+                            EventKindV1::Log,
+                        ],
                     }))
                     .await?;
                 let ResponseV1::Subscribed { kinds } = resp else {
@@ -1019,7 +1024,19 @@ fn render_event(event: &GwpEvent) -> String {
         EventV1::FramePresented { seq, hash } => {
             format!("event frame_presented seq={seq} hash={hash:#x}")
         }
-        EventV1::Log { record } => format!("event log {record}"),
+        // The log-tail milestone: each record is one `logs.ndjson`-shape
+        // JSON line — pretty-print level + target + message for the REPL
+        // reader. A line that does not parse (an app-fed record in another
+        // shape) prints raw: the wire format stays the source of truth.
+        EventV1::Log { record } => match serde_json::from_str::<serde_json::Value>(record) {
+            Ok(value) => format!(
+                "event log {} {}: {}",
+                value["level"].as_str().unwrap_or("?"),
+                value["target"].as_str().unwrap_or("?"),
+                value["message"].as_str().unwrap_or("?"),
+            ),
+            Err(_) => format!("event log {record}"),
+        },
     }
 }
 
