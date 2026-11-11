@@ -82,7 +82,7 @@
         {
           "index": 2,
           "name": "Log",
-          "payload": "a log record — not served yet; subscribing to it fails with Error { Unsupported } until the log-tail milestone"
+          "payload": "a log record — one logs.ndjson-shape JSON line per record, streamed from the session thread's per-session tracing tap; the tap is opt-in (ServerOptions::log_tail), and a session spawned without it still rejects the kind with Error { Unsupported } (the log-tail milestone)"
         }
       ]
     },
