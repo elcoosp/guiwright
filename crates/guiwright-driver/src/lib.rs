@@ -13,6 +13,10 @@
 //!   thread (commands are queued and applied inside the next frame, §5.1).
 //! * [`events`] — the §7 server-push event channel (M12): the session
 //!   thread's subscriber registry + fan-out, flushed between responses.
+//! * [`log_tail`] — the event channel's log half (the log-tail milestone):
+//!   the per-session `tracing` tap whose records stream as
+//!   [`guiwright_proto::schema::EventV1::Log`] frames to `Log` subscribers
+//!   when the server opts in with [`server::ServerOptions::log_tail`].
 //! * [`gesture`] — gesture synthesis (§9, M7): the wire's high-level
 //!   `Gesture` vocabulary → raw `InputEvent` sequences, paced per adapter.
 //! * [`mock`] — a scriptable adapter used by tests and benches (feature
@@ -24,6 +28,7 @@ pub mod adapter;
 pub mod clock;
 pub mod events;
 pub mod gesture;
+pub mod log_tail;
 pub mod seams;
 pub mod server;
 pub mod session;
@@ -40,6 +45,7 @@ pub use clock::{ClockLedgerEntry, ClockReport, ClockService, FRAME_STEP, LedgerC
 pub use gesture::{
     CodegenSurface, Gesture, codegen_call, codegen_event_call, codegen_line, synthesize,
 };
+pub use log_tail::{LOG_TAIL_CAPACITY, LogTail, LogTap};
 pub use seams::{SeamFn, SeamRegistry, SeamTask};
-pub use server::{GwpServerHandle, spawn_session_server};
+pub use server::{GwpServerHandle, ServerOptions, spawn_session_server, spawn_session_server_with};
 pub use session::{ActionOpts, GestureOutcome, Session, SnapshotNode, TreeDump, WireShot};
