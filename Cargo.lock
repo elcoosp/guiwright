@@ -1839,6 +1839,7 @@ dependencies = [
 name = "guiwright-cli"
 version = "0.4.0"
 dependencies = [
+ "accesskit 0.25.2",
  "guiwright-core",
  "guiwright-driver",
  "guiwright-proto",
@@ -1862,7 +1863,6 @@ dependencies = [
  "proptest",
  "thiserror 2.0.21",
  "tracing",
- "twox-hash",
 ]
 
 [[package]]
