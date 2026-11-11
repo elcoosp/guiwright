@@ -20,6 +20,8 @@ export { PROTO_VERSION } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
 import {
   type ClockCmd,
+  type EventKind,
+  type EventV1,
   type GwpRequest,
   type GwpResponse,
   type GestureCmd,
@@ -32,6 +34,7 @@ import {
   type TreeDump,
   type VideoCmd,
   type Welcome,
+  type WindowInfoV1,
   PointerButtonV1,
   PROTO_VERSION,
 } from "./schema.ts";
@@ -61,12 +64,14 @@ const ERROR_NAMES: Record<number, string> = {
   8: "UnknownWindow",
 };
 
-/** The protocol version this client speaks. */
-
 export class GwpClient {
   private pending: ((resp: GwpResponse) => void) | null = null;
   private reader = new FrameReader();
   private handshakeDone = false;
+  /** Buffered pushed events (§7, M12): arrived between responses. */
+  private eventQueue: EventV1[] = [];
+  /** The event waiter, armed by `nextEvent()` while nothing is queued. */
+  private eventWaiter: ((event: EventV1) => void) | null = null;
   private readonly transport: {
     write: (bytes: Uint8Array) => void;
     close: () => Promise<void>;
@@ -145,11 +150,25 @@ export class GwpClient {
   private onBytes(bytes: Uint8Array): void {
     for (const frame of this.reader.push(bytes)) {
       const resp = decodeResponse(frame);
+      // Pushed events (§7, M12) route to the event queue — never to the
+      // pending-response slot, which belongs to the request the client
+      // actually sent. The queue is bounded at the driver's §15.6
+      // capacity; a slow consumer drops the oldest (seq numbers expose
+      // the gap, same as the Rust client's buffer).
+      if (resp.kind === "event") {
+        if (this.eventWaiter) {
+          const waiter = this.eventWaiter;
+          this.eventWaiter = null;
+          waiter(resp.event);
+        } else {
+          this.eventQueue.push(resp.event);
+          if (this.eventQueue.length > 64) this.eventQueue.shift();
+        }
+        continue;
+      }
       const resolve = this.pending;
       this.pending = null;
       if (resolve) resolve(resp);
-      // Unsolicited frames (events) are tolerated and dropped until the
-      // event-subscription milestone (§7 multiplexing).
     }
   }
 
@@ -391,6 +410,62 @@ export class GwpClient {
     const resp = await this.request({ kind: "snapshot", cmd: { kind: "full" } });
     if (resp.kind !== "tree_dump") throw new Error(`expected TreeDump, got ${resp.kind}`);
     return { tree_seq: resp.tree_seq, node_count: resp.node_count, focus: resp.focus, nodes: resp.nodes };
+  }
+
+  /**
+   * `snapshot under <selector>` — read one subtree as data (§7 tree-dump
+   * domain, M13): resolve the selector (auto-wait `Attached` within
+   * `timeout_ms`, honoring the connection's window target) and dump only
+   * the depth-first walk rooted at the match.
+   */
+  async treeDumpUnder(selector: Selector, timeoutMs = 5000): Promise<TreeDump> {
+    this.assertHandshaked();
+    const resp = await this.request({
+      kind: "snapshot",
+      cmd: { kind: "filtered", selector, timeout_ms: timeoutMs },
+    });
+    if (resp.kind !== "tree_dump") throw new Error(`expected TreeDump, got ${resp.kind}`);
+    return { tree_seq: resp.tree_seq, node_count: resp.node_count, focus: resp.focus, nodes: resp.nodes };
+  }
+
+  /**
+   * Subscribe this connection to the named event kinds (§7 event
+   * channel, M12): `Event` frames flow between responses while the app
+   * advances; read them with `nextEvent()`. Re-subscribing replaces the
+   * filter; the ack echoes the kinds the driver honored (all-or-nothing:
+   * naming `log` — not served yet — rejects the whole request with
+   * `Unsupported`).
+   */
+  async subscribe(kinds: EventKind[]): Promise<EventKind[]> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "subscribe", cmd: { kind: "on", kinds } });
+    if (resp.kind !== "subscribed") throw new Error(`expected Subscribed, got ${resp.kind}`);
+    return resp.kinds;
+  }
+
+  /** Drop this connection's event subscription (§7, M12). */
+  async unsubscribe(): Promise<void> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "subscribe", cmd: { kind: "off" } });
+    if (resp.kind !== "subscribed" || resp.kinds.length !== 0) {
+      throw new Error(`expected an empty Subscribed ack, got ${resp.kind}`);
+    }
+  }
+
+  /**
+   * The next pushed event (§7, M12): from the buffer of events that
+   * interleaved earlier responses, or off the wire. Blocks until one
+   * arrives — pair it with the subscriber's own pacing, never a hot path.
+   */
+  async nextEvent(): Promise<EventV1> {
+    const buffered = this.eventQueue.shift();
+    if (buffered) return buffered;
+    if (this.eventWaiter) {
+      throw new Error("nextEvent() is already waiting — one event consumer at a time");
+    }
+    return new Promise<EventV1>((resolve) => {
+      this.eventWaiter = resolve;
+    });
   }
 
   /** The optional button name on the mouse helpers (default primary). */
