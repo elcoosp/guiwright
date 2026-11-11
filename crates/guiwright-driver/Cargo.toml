@@ -19,6 +19,7 @@ guiwright-core.workspace = true
 accesskit.workspace = true
 accesskit_consumer.workspace = true
 guiwright-proto.workspace = true
+guiwright-shot.workspace = true
 guiwright-trace.workspace = true
 guiwright-inspect.workspace = true
 thiserror.workspace = true
