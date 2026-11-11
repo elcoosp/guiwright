@@ -2,7 +2,8 @@
 //! (architecture §10 "Frames, screenshots, video, visual regression").
 //!
 //! This crate is framework-free: adapters hand it RGBA8 buffers, the kit
-//! calls it from `expect(locator).to_have_screenshot(name)`. Three pieces:
+//! calls it from its screenshot surfaces (`App::screenshot` for the
+//! window, `Locator::screenshot` for one element). Three pieces:
 //!
 //! * [`codec`] — PNG encode/decode (lossless, §10 "Output: PNG (lossless)").
 //! * [`diff`] — the per-pixel **weighted squared YIQ distance** with a
