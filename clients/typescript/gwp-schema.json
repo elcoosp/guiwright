@@ -21,7 +21,7 @@
     "client connects, sends Hello { proto_version, agent } as the FIRST frame",
     "driver replies Welcome { proto_version, session_id, tree_seq, frame_seq, adapter } or Error { UnsupportedVersion }",
     "any other first frame is rejected with Error { NotHandshaked }",
-    "each subsequent request is answered by exactly one response frame; queued events may be flushed between responses",
+    "each subsequent request is answered by exactly one response frame; pushed Event frames may be flushed between responses (M12: subscribe with the Subscribe domain; a connection that never subscribes never receives one)",
     "Bye is answered by Bye and closes the connection"
   ],
   "description": "Binary-first CDP-style protocol: sessions -> targets (windows) -> domains; request/response + server-push events. This document is the contract for non-Rust clients (§16).",
@@ -66,6 +66,26 @@
         }
       ]
     },
+    "event_kind": {
+      "name": "EventKindV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "TreeChanged",
+          "payload": "the logical tree changed (the seq space TreeSnapshot/TreeDump report)"
+        },
+        {
+          "index": 1,
+          "name": "FramePresented",
+          "payload": "a frame was presented { seq, hash } — the same vocabulary the trace recorder dedups on (§15.5)"
+        },
+        {
+          "index": 2,
+          "name": "Log",
+          "payload": "a log record — not served yet; subscribing to it fails with Error { Unsupported } until the log-tail milestone"
+        }
+      ]
+    },
     "gesture": {
       "name": "GestureV1",
       "variants": [
@@ -102,12 +122,27 @@
         {
           "index": 0,
           "name": "StartRecording",
-          "payload": "—"
+          "payload": "— → Codegen"
         },
         {
           "index": 1,
           "name": "StopRecording",
-          "payload": "—"
+          "payload": "— → Codegen"
+        },
+        {
+          "index": 2,
+          "name": "EnableOverlay",
+          "payload": "— → Pong; the §13 live overlay session composites hover outlines + interactive-role badges at present time (M8)"
+        },
+        {
+          "index": 3,
+          "name": "DisableOverlay",
+          "payload": "— → Pong; drops the overlay + highlight"
+        },
+        {
+          "index": 4,
+          "name": "Highlight",
+          "payload": "{ node: option<NodeKeyV1> } → Pong; aims the hover outline (None clears it); implies EnableOverlay — Unsupported without an overlay surface (§6.2)"
         }
       ]
     },
@@ -158,6 +193,26 @@
           "index": 0,
           "name": "Full",
           "payload": "— → TreeDump; the whole logical tree, depth-first per window root (§16 v0.4), each row carrying key/role/name/value/bounds/children — the CDP 'DOM snapshot' analog (M11)"
+        },
+        {
+          "index": 1,
+          "name": "Filtered",
+          "payload": "{ selector: SelectorV1, timeout_ms: u64 varint } → TreeDump; resolve the node (auto-wait Attached within timeout_ms, §8.2, honoring the connection's window scope) and dump only the depth-first walk rooted at the match (M13)"
+        }
+      ]
+    },
+    "subscribe": {
+      "name": "SubscribeV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "On",
+          "payload": "{ kinds: seq<EventKindV1> } → Subscribed; subscribe (or re-subscribe) this connection to the named event kinds — all-or-nothing: naming an unsupported kind fails the whole request with Error { Unsupported } (M12)"
+        },
+        {
+          "index": 1,
+          "name": "Off",
+          "payload": "— → Subscribed { kinds: [] }; drop the connection's subscription"
         }
       ]
     },
@@ -306,6 +361,11 @@
       "index": 14,
       "name": "Snapshot",
       "payload": "SnapshotV1 (see domains.snapshot)"
+    },
+    {
+      "index": 15,
+      "name": "Subscribe",
+      "payload": "SubscribeV1 (see domains.subscribe)"
     }
   ],
   "responses": [
@@ -393,6 +453,16 @@
       "index": 16,
       "name": "TreeDump",
       "payload": "{ tree_seq: u64 varint, node_count: u64 varint, focus: option<NodeKeyV1>, nodes: seq<SnapshotNodeV1 { key: NodeKeyV1, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, children: u32 varint }> } — depth-first per window root; children counts rebuild the hierarchy"
+    },
+    {
+      "index": 17,
+      "name": "Event",
+      "payload": "EventV1 (see events) — a server-push event for a subscribed connection, flushed between responses (§15.6 bounded queue); connections that never subscribe never receive one"
+    },
+    {
+      "index": 18,
+      "name": "Subscribed",
+      "payload": "{ kinds: seq<EventKindV1> } — the subscription ack, echoing the deduplicated kinds now active on this connection (empty after Off)"
     }
   ],
   "schema": "gwp-schema/v1",
@@ -401,7 +471,7 @@
     {
       "name": "uds",
       "role": "default (same-host apps)",
-      "server": "GwpServerHandle::spawn (uds://path)"
+      "server": "GwpServerHandle::spawn_with_seams / spawn_session_server (uds://path)"
     },
     {
       "name": "tcp",
