@@ -102,11 +102,6 @@ impl Client {
     }
 }
 
-/// Client-side helper to build events for tests/servers.
-pub fn event(seq: u64) -> crate::schema::GwpEvent {
-    crate::schema::GwpEvent::V1(crate::schema::EventV1::FramePresented { seq, hash: seq })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
