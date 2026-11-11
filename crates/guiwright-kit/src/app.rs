@@ -516,8 +516,9 @@ impl<A: FrameworkAdapter> App<A> {
         Ok(out)
     }
 
-    /// `expect(window).to_have_screenshot(name)` (§10): render on demand,
-    /// diff against the per-platform baseline, bless on demand.
+    /// The window screenshot assertion (§10): render on demand, diff
+    /// against the per-platform baseline, bless on demand — the element
+    /// form is [`App::get_by_*` → `Locator::screenshot`].
     pub fn screenshot(
         &mut self,
         name: &str,
