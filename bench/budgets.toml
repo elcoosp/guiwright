@@ -215,3 +215,21 @@ p95_us = 6000
 notes = "§7 tree-dump domain (M11): pump + per-window DFS walk + row build over the 1k tree (the serialize cost is the snapshot_serialize row); M11 micro-suite guard"
 m0_measurable = true
 sample = "tree_dump_walk"
+
+[[budget]]
+id = "wire_event_delivery"
+name = "Wire event delivery (publish → receipt)"
+p50_us = 20000
+p95_us = 45000
+notes = "§7 event channel (M12): tree diff → idle-tick pump (frame cadence, ≤16.7ms) → Event frame on the subscriber's socket; a liveness bound, not a CPU cost; M12 micro-suite guard"
+m0_measurable = true
+sample = "wire_event_delivery"
+
+[[budget]]
+id = "tree_dump_filtered"
+name = "Filtered tree dump (resolve + subtree walk, 1k nodes)"
+p50_us = 800
+p95_us = 3500
+notes = "§7 tree-dump domain (M13): strict resolve + depth-first subtree walk + row build under the match (the full-tree walk is the tree_dump_walk row); M13 micro-suite guard"
+m0_measurable = true
+sample = "tree_dump_filtered"
