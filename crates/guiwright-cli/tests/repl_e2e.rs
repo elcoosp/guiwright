@@ -821,34 +821,52 @@ async fn repl_snapshot_under_dump() {
     handle.shutdown();
 }
 
-/// M12 (§7 event channel): `events on` subscribes; tree/frame events
+/// M12 (§7 event channel) + the log-tail milestone: `events on` subscribes
+/// to tree, frame **and** log kinds; tree/frame events and log records
 /// flushed between commands print ahead of the next command's output;
-/// `events off` stops the flow.
+/// `events off` stops the flow. The session spawns with the log tail
+/// enabled (`ServerOptions::log_tail`) — the driver's opt-in for the
+/// `Log` kind.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repl_events_command_flushes_between_commands() {
     use std::sync::{Arc, Mutex};
 
     use accesskit::{Node, NodeId, Role, TreeUpdate};
+    use guiwright_driver::ServerOptions;
 
     let path = socket_path("repl-events.sock");
     let shared: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
     let scripts = Arc::clone(&shared);
-    let handle = spawn_session_server(path.clone(), move || {
-        MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts)
-    })
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        move || MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts),
+        ServerOptions {
+            log_tail: true,
+            ..ServerOptions::default()
+        },
+    )
     .expect("server binds");
     let mut repl = Repl::connect(&ConnectTarget::Uds(path))
         .await
         .expect("repl attaches");
 
-    // Subscribe: the ack names the honored kinds. The drain may already
-    // print events ahead of it (the subscribe request's own pump presents
-    // a frame — events start flowing immediately, that is the point).
+    // Subscribe: the ack names the honored kinds — now including the log
+    // tail's records. The drain may already print events ahead of it (the
+    // subscribe request's own pump presents a frame — events start flowing
+    // immediately, that is the point).
     let out = rendered(&repl.step("events on").await);
     assert!(
         out.iter().any(|l| l
-            == "events: subscribed (tree_changed, frame_presented) — flushed between commands"),
+            == "events: subscribed (tree_changed, frame_presented, log) — flushed between commands"),
         "{out:?}"
+    );
+    // The subscription's own session-thread record (`event subscription
+    // registered`) was captured while the command ran, so it flushes with
+    // this step — pretty-printed by the drain renderer.
+    assert!(
+        out.iter().any(|l| l
+            == "event log DEBUG guiwright_driver::server: event subscription registered"),
+        "the tap's own record flushes with the subscribe step: {out:?}"
     );
 
     // Script a rename; the events flush with the NEXT command's output
