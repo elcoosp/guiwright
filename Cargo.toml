@@ -56,6 +56,7 @@ tokio = { version = "1.54.1", default-features = false }
 thiserror = "2.0.21"
 toml = "1.2.0"
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 twox-hash = { version = "2.1.5", default-features = false, features = ["std", "xxhash3_64"] }
 
 # Dev / test / bench
