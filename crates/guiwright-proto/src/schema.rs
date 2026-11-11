@@ -509,9 +509,12 @@ pub enum EventKindV1 {
     /// A frame was presented (seq + the visual-change hash, the same
     /// vocabulary the trace recorder dedups on, §15.5).
     FramePresented,
-    /// A log record (the `tracing`-fed channel). Not served yet: a
-    /// subscription naming `Log` is rejected with
-    /// [`ErrorCode::Unsupported`] until the log-tail milestone — the
+    /// A log record (the `tracing`-fed channel, the log-tail milestone):
+    /// one `logs.ndjson`-shape JSON line per record (`ts_ns`, `level`,
+    /// `target`, `pid`, `message`, plus the event's structured fields —
+    /// the §12 vocabulary), streamed from the session thread's per-session
+    /// tracing tap. The tap is opt-in: a session spawned without it still
+    /// rejects a `Log` subscription with [`ErrorCode::Unsupported`] — the
     /// honest capability answer, never a silent no-op filter.
     Log,
 }
