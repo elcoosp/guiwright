@@ -13,7 +13,7 @@
 //! the copy the TypeScript client vendors: copy the printed path's file to
 //! `clients/typescript/gwp-schema.json`.
 
-use guiwright_proto::schema::{ClockV1, MockV1, SnapshotV1};
+use guiwright_proto::schema::{ClockV1, EventKindV1, InspectV1, MockV1, SnapshotV1, SubscribeV1};
 use guiwright_proto::{RequestV1, ResponseV1, schemadoc::gwp_schema_json};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/schema-golden.json");
@@ -44,7 +44,12 @@ fn published_schema_matches_the_wire_enums() {
         domains["mock"]["variants"].as_array().unwrap().len(),
         mock_variants()
     );
-    assert_eq!(domains["inspect"]["variants"].as_array().unwrap().len(), 2);
+    // The M8 overlay half of the Inspect domain rides the published table
+    // too (exhaustive probe, not a hardcoded count — the pre-M12 hole).
+    assert_eq!(
+        domains["inspect"]["variants"].as_array().unwrap().len(),
+        inspect_variants()
+    );
     assert_eq!(domains["video"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["window"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["gesture"]["variants"].as_array().unwrap().len(), 5);
@@ -56,6 +61,14 @@ fn published_schema_matches_the_wire_enums() {
         domains["snapshot"]["variants"].as_array().unwrap().len(),
         snapshot_variants()
     );
+    assert_eq!(
+        domains["subscribe"]["variants"].as_array().unwrap().len(),
+        subscribe_variants()
+    );
+    assert_eq!(
+        domains["event_kind"]["variants"].as_array().unwrap().len(),
+        event_kind_variants()
+    );
 
     // Wire indices are exactly the enum positions: spot-check the ends of
     // both request/response tables (the append-only frontier).
@@ -65,6 +78,7 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["requests"][12]["name"], "Gesture");
     assert_eq!(doc["requests"][13]["name"], "Screenshot");
     assert_eq!(doc["requests"][14]["name"], "Snapshot");
+    assert_eq!(doc["requests"][15]["name"], "Subscribe");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
     assert_eq!(doc["responses"][12]["name"], "Windows");
@@ -72,6 +86,8 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["responses"][14]["name"], "GestureDone");
     assert_eq!(doc["responses"][15]["name"], "Shot");
     assert_eq!(doc["responses"][16]["name"], "TreeDump");
+    assert_eq!(doc["responses"][17]["name"], "Event");
+    assert_eq!(doc["responses"][18]["name"], "Subscribed");
 
     // The error-code table is flat on the wire: appending UnknownWindow
     // keeps the pre-M6 codes byte-identical.
@@ -107,13 +123,15 @@ fn response_variants() -> usize {
         | ResponseV1::WindowUsed { .. }
         | ResponseV1::GestureDone { .. }
         | ResponseV1::Shot { .. }
-        | ResponseV1::TreeDump { .. } => 17usize,
+        | ResponseV1::TreeDump { .. }
+        | ResponseV1::Event(_)
+        | ResponseV1::Subscribed { .. } => 19usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    15 + match RequestV1::Ping {
+    16 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -128,8 +146,34 @@ fn request_variants() -> usize {
         | RequestV1::Window(_)
         | RequestV1::Gesture(_)
         | RequestV1::Screenshot(_)
-        | RequestV1::Snapshot(_) => 0,
+        | RequestV1::Snapshot(_)
+        | RequestV1::Subscribe(_) => 0,
     }
+}
+
+fn inspect_variants() -> usize {
+    let probe = |i: InspectV1| match i {
+        InspectV1::StartRecording
+        | InspectV1::StopRecording
+        | InspectV1::EnableOverlay
+        | InspectV1::DisableOverlay
+        | InspectV1::Highlight { .. } => 5usize,
+    };
+    probe(InspectV1::StartRecording)
+}
+
+fn subscribe_variants() -> usize {
+    let probe = |s: SubscribeV1| match s {
+        SubscribeV1::On { .. } | SubscribeV1::Off => 2usize,
+    };
+    probe(SubscribeV1::Off)
+}
+
+fn event_kind_variants() -> usize {
+    let probe = |k: EventKindV1| match k {
+        EventKindV1::TreeChanged | EventKindV1::FramePresented | EventKindV1::Log => 3usize,
+    };
+    probe(EventKindV1::Log)
 }
 
 fn screenshot_variants() -> usize {
@@ -142,7 +186,7 @@ fn screenshot_variants() -> usize {
 
 fn snapshot_variants() -> usize {
     let probe = |s: SnapshotV1| match s {
-        SnapshotV1::Full => 1usize,
+        SnapshotV1::Full | SnapshotV1::Filtered { .. } => 2usize,
     };
     probe(SnapshotV1::Full)
 }
