@@ -32,6 +32,8 @@ import {
   ResponseV1,
   SelectorV1,
   SemActionV1,
+  ScreenshotV1,
+  SnapshotV1,
   VideoV1,
   WindowV1,
 } from "../src/schema.ts";
@@ -151,6 +153,20 @@ test("requests encode byte-identical to the Rust wire", () => {
       kind: "gesture",
       cmd: { kind: "key", key: "Enter", modifiers: ["Shift"] },
     }),
+    screenshot_window: () => ({ kind: "screenshot", cmd: { kind: "window" } }),
+    screenshot_element: () => ({
+      kind: "screenshot",
+      cmd: {
+        kind: "element",
+        selector: {
+          kind: "role",
+          role: "Button",
+          name: { text: "Save", exact: false, ignore_case: true },
+        },
+        timeout_ms: 5000,
+      },
+    }),
+    snapshot_full: () => ({ kind: "snapshot", cmd: { kind: "full" } }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -172,7 +188,13 @@ test("responses decode to the expected shapes", () => {
     const frame = hexToBytes(vector.frame_hex);
     const body = frame.subarray(4);
     const decoded = decodeResponse(body);
-    assert.deepEqual(decoded, vector.decoded, `${vector.name} must decode exactly`);
+    // Byte payloads (the §7 Shot png) decode to Uint8Array; the JSON
+    // golden form is the plain array of the same bytes (bytes have no
+    // JSON form — the same rule that renders NodeKey trees as hex).
+    const actual = JSON.parse(
+      JSON.stringify(decoded, (_k, v) => (v instanceof Uint8Array ? Array.from(v) : v)),
+    );
+    assert.deepEqual(actual, vector.decoded, `${vector.name} must decode exactly`);
   }
 });
 
@@ -221,18 +243,27 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-4), ["Bye", "Video", "Window", "Gesture"]);
+  assert.deepEqual(byName(requests).slice(-6), [
+    "Bye",
+    "Video",
+    "Window",
+    "Gesture",
+    "Screenshot",
+    "Snapshot",
+  ]);
   assert.deepEqual(
     Object.values(RequestV1),
     requests.map((v: any) => Number(v.index)),
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-4), [
+  assert.deepEqual(byName(responses).slice(-6), [
     "VideoFile",
     "Windows",
     "WindowUsed",
     "GestureDone",
+    "Shot",
+    "TreeDump",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
@@ -253,6 +284,14 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   assert.deepEqual(
     Object.values(GestureV1),
     domains.gesture.variants.map((v: any) => Number(v.index)),
+  );
+  assert.deepEqual(
+    Object.values(ScreenshotV1),
+    domains.screenshot.variants.map((v: any) => Number(v.index)),
+  );
+  assert.deepEqual(
+    Object.values(SnapshotV1),
+    domains.snapshot.variants.map((v: any) => Number(v.index)),
   );
   assert.equal(schema.protocol_version, PROTO_VERSION);
 });
