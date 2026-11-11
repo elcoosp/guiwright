@@ -251,6 +251,111 @@ async fn repl_video_domain() {
     handle.shutdown();
 }
 
+/// The §7 render domain through the REPL (M10): `screenshot [path]` pulls
+/// the window PNG onto the client's filesystem — the client owns the
+/// artifact path (Playwright parity), the summary line carries the
+/// dimensions and the frame the pixels came from.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_screenshot_domain() {
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let path = socket_path("repl-shot.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons()).with_frame_pixels(
+            24,
+            12,
+            vec![64; 24 * 12 * 4],
+        )
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    let artifact = dir.path().join("window.png");
+    let out = rendered(
+        &repl
+            .step(&format!("screenshot {}", artifact.display()))
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    // `shot: <path> (W×H, frame N)` — the frame number rides the session's
+    // pump history (handshake + attach already presented frames), so the
+    // shape is pinned, not the exact value.
+    let line = &out[0];
+    let rest = line
+        .strip_prefix(&format!("shot: {} (", artifact.display()))
+        .unwrap_or_else(|| panic!("shot line shape: {line}"));
+    assert!(
+        rest.starts_with("24×12, frame ") && rest.ends_with(')'),
+        "{line}"
+    );
+    // The artifact is a real PNG with the scripted dimensions.
+    let bytes = std::fs::read(&artifact).expect("shot written");
+    let image = guiwright_shot::codec::decode_png(&bytes).expect("valid PNG");
+    assert_eq!((image.width, image.height), (24, 12));
+    assert_eq!(image.pixel(3, 5), [64, 64, 64, 64]);
+
+    // An adapter without a pixel path is an honest error, not a file.
+    let bare = socket_path("repl-shot-bare.sock");
+    let bare_handle = spawn_session_server(bare.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut bare_repl = Repl::connect(&ConnectTarget::Uds(bare))
+        .await
+        .expect("repl attaches");
+    let miss = rendered(&bare_repl.step("screenshot").await);
+    assert_eq!(miss.len(), 1, "{miss:?}");
+    assert!(
+        miss[0].starts_with("error:") && miss[0].contains("Unsupported"),
+        "{miss:?}"
+    );
+    bare_handle.shutdown();
+
+    handle.shutdown();
+}
+
+/// The §7 tree-dump domain through the REPL (M11): `snapshot full` renders
+/// the whole tree depth-first, indented by the children counts, the
+/// focused node marked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_snapshot_full_dump() {
+    let path = socket_path("repl-dump.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The summary form is unchanged (the M0 reply).
+    assert_eq!(rendered(&repl.step("snapshot").await).len(), 1);
+
+    let out = rendered(&repl.step("snapshot full").await);
+    // Header + 8 rows: window, group, six fixture children — the group's
+    // six children all at one indent level under it. The window root
+    // carries the focus marker and (like the fixture laid it out) no
+    // bounds; the hidden "Invisible" button has bounds too.
+    assert_eq!(out.len(), 9, "{out:?}");
+    assert!(out[0].ends_with("nodes (full)"), "{out:?}");
+    assert_eq!(out[1], "Window \"Test App\" (focus)", "{out:?}");
+    assert_eq!(out[2], "  Group", "{out:?}");
+    assert_eq!(out[3], "    Button \"Save\" @ [16,16 → 136,48]", "{out:?}");
+    assert_eq!(
+        out[6], "    TextInput \"Email\" = ada@example.dev @ [16,128 → 256,156]",
+        "{out:?}"
+    );
+    assert_eq!(out[7], "    Button \"Invisible\"", "{out:?}");
+    assert_eq!(
+        out[8], "    Button \"Confirm\" @ [16,164 → 136,196]",
+        "{out:?}"
+    );
+
+    handle.shutdown();
+}
+
 /// `help` lists every command family; `timeout` round-trips.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn help_and_timeout() {
