@@ -16,8 +16,9 @@
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, GestureV1, InputEventV1, InspectV1, MockV1,
-    NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1, SemActionV1,
-    TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
+    NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1,
+    SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1,
+    WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -184,7 +185,8 @@ fn service_requests() -> Vec<(&'static str, RequestV1)> {
     ]
 }
 
-/// M6 (§16 v0.4) window + M7 (§9) gesture requests, in wire order.
+/// M6 (§16 v0.4) window + M7 (§9) gesture + M10 (§7 render) requests, in
+/// wire order.
 fn multi_window_gesture_requests() -> Vec<(&'static str, RequestV1)> {
     vec![
         ("window_list", RequestV1::Window(WindowV1::List)),
@@ -220,6 +222,27 @@ fn multi_window_gesture_requests() -> Vec<(&'static str, RequestV1)> {
                 modifiers: vec!["Shift".into()],
             }),
         ),
+        // M10 (§7 render domain): the window + element screenshot requests.
+        (
+            "screenshot_window",
+            RequestV1::Screenshot(ScreenshotV1::Window),
+        ),
+        (
+            "screenshot_element",
+            RequestV1::Screenshot(ScreenshotV1::Element {
+                selector: SelectorV1::Role {
+                    role: "Button".into(),
+                    name: Some(TextMatchV1 {
+                        text: "Save".into(),
+                        exact: false,
+                        ignore_case: true,
+                    }),
+                },
+                timeout_ms: 5000,
+            }),
+        ),
+        // M11 (§7 tree domain): the full-tree dump request.
+        ("snapshot_full", RequestV1::Snapshot(SnapshotV1::Full)),
         ("bye", RequestV1::Bye),
     ]
 }
@@ -450,7 +473,78 @@ fn media_window_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)
                 "detail": "clicked at (12.5, 30) — 3 events",
             }),
         ),
+        // M10 (§7 render domain): the Shot reply appends after GestureDone.
+        // The PNG payload is real bytes (a 1×1 red pixel) so the decoder
+        // proves seq<u8> round-trips through postcard.
+        (
+            "shot",
+            ResponseV1::Shot {
+                frame_seq: 21,
+                width: 1,
+                height: 1,
+                png: vec![
+                    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xDE, 0xAD, 0xBE, 0xEF,
+                ],
+            },
+            serde_json::json!({
+                "kind": "shot",
+                "frame_seq": 21,
+                "width": 1,
+                "height": 1,
+                "png": [137, 80, 78, 71, 13, 10, 26, 10, 222, 173, 190, 239],
+            }),
+        ),
     ]
+}
+
+/// M11 (§7 tree domain): the `TreeDump` reply — a two-row dump (window root
+/// + one child) proves the nested struct rows decode.
+fn tree_dump_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "tree_dump",
+        ResponseV1::TreeDump {
+            tree_seq: 3,
+            node_count: 2,
+            focus: Some(NodeKeyV1::AccessKit {
+                tree: [0u8; 16],
+                node: 0,
+            }),
+            nodes: vec![
+                SnapshotNodeV1 {
+                    key: NodeKeyV1::AccessKit {
+                        tree: [0u8; 16],
+                        node: 0,
+                    },
+                    role: "Window".into(),
+                    name: Some("Test App".into()),
+                    value: None,
+                    bounds: Some([0.0, 0.0, 480.0, 240.0]),
+                    children: 1,
+                },
+                SnapshotNodeV1 {
+                    key: NodeKeyV1::AccessKit {
+                        tree: [0u8; 16],
+                        node: 2,
+                    },
+                    role: "Button".into(),
+                    name: Some("Save".into()),
+                    value: None,
+                    bounds: Some([16.0, 16.0, 136.0, 48.0]),
+                    children: 0,
+                },
+            ],
+        },
+        serde_json::json!({
+            "kind": "tree_dump",
+            "tree_seq": 3,
+            "node_count": 2,
+            "focus": {"kind": "accesskit", "tree": "0".repeat(32), "node": 0},
+            "nodes": [
+                {"key": {"kind": "accesskit", "tree": "0".repeat(32), "node": 0}, "role": "Window", "name": "Test App", "value": null, "bounds": [0.0, 0.0, 480.0, 240.0], "children": 1},
+                {"key": {"kind": "accesskit", "tree": "0".repeat(32), "node": 2}, "role": "Button", "name": "Save", "value": null, "bounds": [16.0, 16.0, 136.0, 48.0], "children": 0},
+            ],
+        }),
+    )]
 }
 
 /// (name, hex of the **framed** response, expected decoded JSON the
@@ -459,7 +553,8 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
     let responses = core_responses()
         .into_iter()
         .chain(service_responses())
-        .chain(media_window_responses());
+        .chain(media_window_responses())
+        .chain(tree_dump_responses());
     responses
         .map(|(name, resp, decoded)| {
             let frame = encode_frame(&guiwright_proto::GwpResponse::V1(resp)).expect("encode");
