@@ -104,17 +104,33 @@ pub enum RequestV1 {
     /// Wire discipline: appended after `Screenshot` (discriminant 14);
     /// see [`RequestV1::Video`].
     Snapshot(SnapshotV1),
+    /// Event-subscription domain (§7 server-push events, M12): turn this
+    /// connection into a subscriber — pushed [`ResponseV1::Event`] frames
+    /// flow between responses while the subscription is on (bounded queue,
+    /// §15.6). Wire discipline: appended after `Snapshot` (discriminant
+    /// 15); see [`RequestV1::Video`].
+    Subscribe(SubscribeV1),
 }
 
-/// `Snapshot { Full }` (§7 tree domain, M11). Extensible on purpose —
-/// filtered/subtree dumps land behind new variants, never a reshape of
-/// `Full` (the append-only discipline).
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// `Snapshot { Full, Filtered }` (§7 tree domain, M11/M13). Extensible on
+/// purpose — new dump forms land behind new variants, never a reshape of
+/// the existing ones (the append-only discipline).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SnapshotV1 {
     /// The whole logical tree, depth-first per window root (§16 v0.4
     /// multi-window: one walk per window target, disjoint by
     /// construction) → [`ResponseV1::TreeDump`].
     Full,
+    /// One subtree: resolve `selector` (auto-wait `Attached` within
+    /// `timeout_ms`, honoring the connection's window scope — the same
+    /// resolve the `Resolve`/`Screenshot::Element` arms run) and dump the
+    /// depth-first walk rooted at the match → [`ResponseV1::TreeDump`]
+    /// with only that subtree's rows (M13; the m11 "filtered dumps land
+    /// behind new variants" note, cashed).
+    Filtered {
+        selector: SelectorV1,
+        timeout_ms: u64,
+    },
 }
 
 /// One node of a [`ResponseV1::TreeDump`] (M11): the identity plus the
@@ -457,6 +473,22 @@ pub enum ResponseV1 {
         /// appears once, roots in adapter-reported window order.
         nodes: Vec<SnapshotNodeV1>,
     },
+    /// Server-push event (§7, M12): an [`EventV1`] the connection is
+    /// subscribed to, flushed between responses (bounded queue, §15.6).
+    /// Events ride the response envelope so every client demultiplexes
+    /// one enum — a connection that never subscribes never sees one
+    /// (byte-identical conversations for pre-M12 clients). Append-only
+    /// wire discipline — see [`RequestV1::Video`].
+    Event(EventV1),
+    /// Event-subscription ack (§7, M12): the kinds now active on this
+    /// connection (empty after `Off`). Append-only wire discipline — see
+    /// [`RequestV1::Video`].
+    Subscribed {
+        /// The deduplicated, server-honored subscription (a named-but-
+        /// unsupported kind fails the whole request instead — the
+        /// all-or-nothing filter contract).
+        kinds: Vec<EventKindV1>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -464,6 +496,37 @@ pub enum EventV1 {
     TreeChanged { seq: u64 },
     FramePresented { seq: u64, hash: u64 },
     Log { record: String },
+}
+
+/// Event-subscription vocabulary (§7 server-push events, M12). The kinds
+/// mirror [`EventV1`]'s variant order — appending a future event kind
+/// appends here too, never reorders.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EventKindV1 {
+    /// The logical tree changed (the same seq space
+    /// [`ResponseV1::TreeSnapshot`] reports).
+    TreeChanged,
+    /// A frame was presented (seq + the visual-change hash, the same
+    /// vocabulary the trace recorder dedups on, §15.5).
+    FramePresented,
+    /// A log record (the `tracing`-fed channel). Not served yet: a
+    /// subscription naming `Log` is rejected with
+    /// [`ErrorCode::Unsupported`] until the log-tail milestone — the
+    /// honest capability answer, never a silent no-op filter.
+    Log,
+}
+
+/// `Subscribe { On, Off }` (§7 event channel, M12). Re-subscribing
+/// replaces the connection's filter; `Off` clears it. Both answer
+/// [`ResponseV1::Subscribed`], echoing the kinds now active (empty after
+/// `Off`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SubscribeV1 {
+    /// Subscribe (or re-subscribe) to the named event kinds. An empty
+    /// list subscribes to nothing (an acknowledged no-op filter).
+    On { kinds: Vec<EventKindV1> },
+    /// Drop the connection's subscription.
+    Off,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -848,6 +911,44 @@ mod tests {
         }
     }
 
+    /// §7 event-subscription domain round-trip (M12): the `Subscribe`
+    /// request vocabulary, the pushed-event reply, and the subscription
+    /// acknowledgement survive postcard both ways.
+    #[test]
+    fn subscribe_and_event_replies_roundtrip() {
+        let requests = [
+            RequestV1::Subscribe(SubscribeV1::On {
+                kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+            }),
+            RequestV1::Subscribe(SubscribeV1::On {
+                kinds: vec![EventKindV1::Log],
+            }),
+            RequestV1::Subscribe(SubscribeV1::On { kinds: Vec::new() }),
+            RequestV1::Subscribe(SubscribeV1::Off),
+        ];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: RequestV1 = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [
+            GwpResponse::V1(ResponseV1::Event(EventV1::TreeChanged { seq: 4 })),
+            GwpResponse::V1(ResponseV1::Event(EventV1::FramePresented {
+                seq: 7,
+                hash: 0xDEAD_BEEF,
+            })),
+            GwpResponse::V1(ResponseV1::Subscribed {
+                kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+            }),
+            GwpResponse::V1(ResponseV1::Subscribed { kinds: Vec::new() }),
+        ];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
     /// §7 clock & mock domains round-trip (M2).
     #[test]
     fn clock_and_mock_domains_roundtrip() {
@@ -1078,10 +1179,12 @@ mod tests {
     /// errors" → within a `V1` envelope variants are append-only: pre-M3
     /// requests keep discriminants 0–9 (`Bye` = 9), `Video` appends at
     /// 10, the M6 `Window` domain at 11, the M7 `Gesture` domain at 12,
-    /// the M10 render domain at 13 and the M11 tree-dump domain at 14;
-    /// responses keep 0–10 (`Bye` = 10), `VideoFile` appends at 11, the
-    /// M6 window replies at 12–13, the M7 `GestureDone` reply at 14, the
-    /// M10 `Shot` reply at 15 and the M11 `TreeDump` reply at 16.
+    /// the M10 render domain at 13, the M11 tree-dump domain at 14 and
+    /// the M12 event-subscription domain at 15; responses keep 0–10
+    /// (`Bye` = 10), `VideoFile` appends at 11, the M6 window replies at
+    /// 12–13, the M7 `GestureDone` reply at 14, the M10 `Shot` reply at
+    /// 15, the M11 `TreeDump` reply at 16 and the M12 event replies
+    /// (`Event`, `Subscribed`) at 17–18.
     /// Reordering or inserting mid-enum fails this test — add new variants
     /// at the end and extend the pin list instead.
     #[test]
@@ -1154,6 +1257,11 @@ mod tests {
         );
         // M11 (§7 tree domain): the tree-dump domain appends after Screenshot.
         assert_eq!(discriminant(&RequestV1::Snapshot(SnapshotV1::Full)), 14);
+        // M12 (§7 event channel): the subscription domain appends after Snapshot.
+        assert_eq!(
+            discriminant(&RequestV1::Subscribe(SubscribeV1::On { kinds: Vec::new() })),
+            15
+        );
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1294,6 +1402,16 @@ mod tests {
             }),
             16
         );
+        // M12 (§7 event channel): pushed events ride the response envelope
+        // (`Event`), the subscription ack appends after it.
+        assert_eq!(
+            discriminant(&ResponseV1::Event(EventV1::TreeChanged { seq: 0 })),
+            17
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::Subscribed { kinds: Vec::new() }),
+            18
+        );
     }
 
     /// Nested domain + `ErrorCode` indices, pinned for other-language clients.
@@ -1389,6 +1507,39 @@ mod tests {
         );
         assert_eq!(
             discriminant(&ScreenshotV1::Element {
+                selector: SelectorV1::TestId(String::new()),
+                timeout_ms: 0
+            }),
+            1
+        );
+        subscribe_pins();
+    }
+
+    /// The M12 subscription + M13 filtered-dump vocabulary, pinned for
+    /// other-language clients (appended after the M11 snapshot table,
+    /// `clients/typescript/src/schema.ts`).
+    fn subscribe_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            // The first byte(s) of a postcard enum are the varint variant
+            // index; every variant index pinned here is < 128 (single byte).
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        assert_eq!(
+            discriminant(&SubscribeV1::On {
+                kinds: vec![EventKindV1::TreeChanged]
+            }),
+            0
+        );
+        assert_eq!(discriminant(&SubscribeV1::Off), 1);
+        // The event-kind vocabulary mirrors `EventV1`'s variant order —
+        // appended, never reordered.
+        assert_eq!(discriminant(&EventKindV1::TreeChanged), 0);
+        assert_eq!(discriminant(&EventKindV1::FramePresented), 1);
+        assert_eq!(discriminant(&EventKindV1::Log), 2);
+        // M13 (§7 tree domain): the filtered-dump arm appends after `Full`.
+        assert_eq!(
+            discriminant(&SnapshotV1::Filtered {
                 selector: SelectorV1::TestId(String::new()),
                 timeout_ms: 0
             }),
