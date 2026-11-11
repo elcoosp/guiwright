@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::{mpsc, oneshot};
+use tracing_subscriber::layer::SubscriberExt;
 
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
@@ -32,6 +33,7 @@ use guiwright_proto::uds::{self, Handler};
 use crate::adapter::{AdapterMeta, FrameworkAdapter, SemAction};
 use crate::clock::FRAME_STEP;
 use crate::events::{EventHub, Subscriber};
+use crate::log_tail::{LOG_TAIL_CAPACITY, LogTail, LogTapLayer};
 use crate::session::Session;
 use guiwright_core::{CoreError, NodeKey, Selector};
 
@@ -55,6 +57,33 @@ enum Internal {
     Gwp(Command),
     /// Session thread exits after draining the queue.
     Shutdown,
+}
+
+/// Remote-mode spawn knobs (everything the stack needs beyond the
+/// adapter). The default is the pre-log-tail shape: no seams, no tap —
+/// a session spawned with it keeps the byte-exact conversation **and**
+/// the process-wide `tracing` behavior.
+#[derive(Default)]
+pub struct ServerOptions {
+    /// App-boot seams (§14): the hooks `Mock::Call`/`ResetState` may run
+    /// over the wire.
+    pub seams: crate::seams::SeamRegistry,
+    /// The per-session `tracing` tap (the log-tail milestone): while
+    /// enabled, the session thread's records (`DEBUG` and above) stream
+    /// to `EventKindV1::Log` subscribers as `EventV1::Log` frames. Capture
+    /// is a thread-local dispatcher on the session thread — other threads
+    /// keep the process subscriber, and the tail is a bounded live tap
+    /// (§15.6), never a replay buffer.
+    pub log_tail: bool,
+}
+
+impl std::fmt::Debug for ServerOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerOptions")
+            .field("seams", &self.seams)
+            .field("log_tail", &self.log_tail)
+            .finish()
+    }
 }
 
 /// Tokio-side bridge: implements the proto `Handler` by proxying to the
@@ -219,7 +248,23 @@ where
     A: FrameworkAdapter,
     F: FnOnce() -> A + Send + 'static,
 {
-    GwpServerHandle::spawn_with_seams(path, make_adapter, crate::seams::SeamRegistry::new())
+    spawn_session_server_with(path, make_adapter, ServerOptions::default())
+}
+
+/// Like [`spawn_session_server`], with the full [`ServerOptions`] knobs —
+/// the boot seams (§14) and the log tail (the log-tail milestone).
+pub fn spawn_session_server_with<A, F>(
+    path: PathBuf,
+    make_adapter: F,
+    options: ServerOptions,
+) -> Result<GwpServerHandle, GwpError>
+where
+    A: FrameworkAdapter,
+    F: FnOnce() -> A + Send + 'static,
+{
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    GwpServerHandle::start(listener, Endpoint::Uds(path), make_adapter, options)
 }
 
 impl GwpServerHandle {
@@ -234,9 +279,28 @@ impl GwpServerHandle {
         A: FrameworkAdapter,
         F: FnOnce() -> A + Send + 'static,
     {
-        let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path)?;
-        Self::start(listener, Endpoint::Uds(path), make_adapter, seams)
+        spawn_session_server_with(
+            path,
+            make_adapter,
+            ServerOptions {
+                seams,
+                ..ServerOptions::default()
+            },
+        )
+    }
+
+    /// Like [`spawn_session_server_with`], with the full [`ServerOptions`]
+    /// (seams + the log tail) on the UDS door.
+    pub fn spawn_with_options<A, F>(
+        path: PathBuf,
+        make_adapter: F,
+        options: ServerOptions,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        spawn_session_server_with(path, make_adapter, options)
     }
 
     /// Spawn the remote-mode stack over **TCP** (§7 "TCP for CI
@@ -253,11 +317,31 @@ impl GwpServerHandle {
         A: FrameworkAdapter,
         F: FnOnce() -> A + Send + 'static,
     {
+        GwpServerHandle::spawn_tcp_with(
+            addr,
+            make_adapter,
+            ServerOptions {
+                seams,
+                ..ServerOptions::default()
+            },
+        )
+    }
+
+    /// Like [`spawn_tcp`], with the full [`ServerOptions`] knobs.
+    pub fn spawn_tcp_with<A, F>(
+        addr: std::net::SocketAddr,
+        make_adapter: F,
+        options: ServerOptions,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
         let listener = std::net::TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
         let bound = listener.local_addr()?;
         let listener = TcpListener::from_std(listener)?;
-        Self::start(listener, Endpoint::Tcp(bound), make_adapter, seams)
+        GwpServerHandle::start(listener, Endpoint::Tcp(bound), make_adapter, options)
     }
 
     /// Shared stack bring-up: session thread + accept loop bridged over
@@ -266,7 +350,7 @@ impl GwpServerHandle {
         listener: L,
         endpoint: Endpoint,
         make_adapter: F,
-        seams: crate::seams::SeamRegistry,
+        options: ServerOptions,
     ) -> Result<GwpServerHandle, GwpError>
     where
         A: FrameworkAdapter,
@@ -278,7 +362,7 @@ impl GwpServerHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(64);
         let session_thread = std::thread::Builder::new()
             .name("guiwright-session".into())
-            .spawn(move || run_session_thread(cmd_rx, make_adapter(), seams))
+            .spawn(move || run_session_thread(cmd_rx, make_adapter(), options))
             .expect("spawn session thread");
 
         let bridge_tx = cmd_tx.clone();
@@ -338,13 +422,25 @@ impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for TcpListen
 fn run_session_thread<A: FrameworkAdapter>(
     cmd_rx: mpsc::Receiver<Internal>,
     adapter: A,
-    seams: crate::seams::SeamRegistry,
+    options: ServerOptions,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("session thread runtime");
-    runtime.block_on(session_loop(cmd_rx, adapter, seams));
+    // The per-session tracing tap (the log-tail milestone): a thread-local
+    // dispatcher whose only layer feeds the tail. Other threads keep the
+    // process subscriber; the guard lives exactly as long as the thread.
+    let (tail, _tap_guard) = if options.log_tail {
+        let (tail, tap) = LogTail::new(LOG_TAIL_CAPACITY);
+        let guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(LogTapLayer::new(tap)),
+        );
+        (Some(tail), Some(guard))
+    } else {
+        (None, None)
+    };
+    runtime.block_on(session_loop(cmd_rx, adapter, options.seams, tail));
 }
 
 /// The async half of the session thread (see [`run_session_thread`]).
@@ -352,6 +448,7 @@ async fn session_loop<A: FrameworkAdapter>(
     mut cmd_rx: mpsc::Receiver<Internal>,
     adapter: A,
     seams: crate::seams::SeamRegistry,
+    tail: Option<LogTail>,
 ) {
     let mut session = Session::new(adapter);
     // App-boot seams are available to the whole session (§14).
@@ -390,8 +487,14 @@ async fn session_loop<A: FrameworkAdapter>(
                         events,
                         reply,
                     })) => {
-                        let response =
-                            handle_request(&mut session, request, window, &mut hub, events);
+                        let response = handle_request(
+                            &mut session,
+                            request,
+                            window,
+                            &mut hub,
+                            events,
+                            tail.is_some(),
+                        );
                         let _ = reply.send(response);
                         // One pump per batch: queued commands apply at the next
                         // frame boundary (§15.4).
@@ -401,6 +504,7 @@ async fn session_loop<A: FrameworkAdapter>(
                             &mut hub,
                             &mut published_tree,
                             &mut published_frame,
+                            tail.as_ref(),
                         );
                     }
                 }
@@ -414,6 +518,7 @@ async fn session_loop<A: FrameworkAdapter>(
                     &mut hub,
                     &mut published_tree,
                     &mut published_frame,
+                    tail.as_ref(),
                 );
             }
         }
@@ -425,14 +530,23 @@ async fn session_loop<A: FrameworkAdapter>(
 /// notification shape (a slow client misses intermediate seqs by design —
 /// the seq numbers say exactly where it stands). A session with no
 /// subscribers only advances the markers, never allocates events.
+///
+/// The log tail (the log-tail milestone) drains at the same points —
+/// unconditionally, so records never sit waiting for a subscriber to be
+/// replayed to — and its records ride the wire only while a subscriber
+/// asked for [`EventKindV1::Log`].
 fn publish_if_advanced<A: FrameworkAdapter>(
     session: &mut Session<A>,
     hub: &mut EventHub,
     published_tree: &mut u64,
     published_frame: &mut u64,
+    tail: Option<&LogTail>,
 ) {
     let tree_seq = session.tree_seq();
     let frame_seq = session.frame_seq();
+    // The tail is a live tap, not a replay buffer: drain first, publish
+    // only to the kinds a subscriber named.
+    let log_records = tail.map_or(Vec::new(), LogTail::drain);
     if hub.is_empty() {
         *published_tree = tree_seq;
         *published_frame = frame_seq;
@@ -450,6 +564,13 @@ fn publish_if_advanced<A: FrameworkAdapter>(
             }));
         }
     }
+    if !log_records.is_empty() && hub.wants(EventKindV1::Log) {
+        events.extend(
+            log_records
+                .into_iter()
+                .map(|record| GwpEvent::V1(EventV1::Log { record })),
+        );
+    }
     *published_tree = tree_seq;
     *published_frame = frame_seq;
     if !events.is_empty() {
@@ -462,12 +583,15 @@ fn publish_if_advanced<A: FrameworkAdapter>(
 /// node identities are already window-unique, actions/clock/mock/inspect/
 /// video are session-wide by design. `events` is the sending connection's
 /// event identity + queue, attached by `Subscribe` requests only (§7, M12).
+/// `tail_enabled` is whether this session carries a log tail (the
+/// log-tail milestone) — the `Log` kind's capability answer.
 fn handle_request<A: FrameworkAdapter>(
     session: &mut Session<A>,
     request: RequestV1,
     window: Option<String>,
     hub: &mut EventHub,
     events: Option<(u64, mpsc::Sender<GwpEvent>)>,
+    tail_enabled: bool,
 ) -> ResponseV1 {
     match request {
         RequestV1::Hello { .. } => {
@@ -481,7 +605,7 @@ fn handle_request<A: FrameworkAdapter>(
             }
         }
         RequestV1::Subscribe(SubscribeV1::On { kinds }) => match events {
-            Some((conn_id, tx)) => subscribe_on(hub, conn_id, tx, kinds),
+            Some((conn_id, tx)) => subscribe_on(hub, conn_id, tx, kinds, tail_enabled),
             None => ResponseV1::Error {
                 code: ErrorCode::Internal,
                 message: "subscribe request arrived without an event channel".into(),
@@ -889,14 +1013,15 @@ fn inspect_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: InspectV
 }
 
 /// Register a subscription (§7, M12): dedupe the kind list, enforce the
-/// all-or-nothing capability contract (`Log` is not streamed yet — the
-/// request fails with `Unsupported`, never a silently ignored filter),
-/// then hand the connection's queue to the hub.
+/// all-or-nothing capability contract (`Log` rides the session's log tail
+/// — a session spawned without it still answers `Unsupported`, never a
+/// silently ignored filter), then hand the connection's queue to the hub.
 fn subscribe_on(
     hub: &mut EventHub,
     conn_id: u64,
     tx: mpsc::Sender<GwpEvent>,
     kinds: Vec<EventKindV1>,
+    tail_enabled: bool,
 ) -> ResponseV1 {
     let mut deduped: Vec<EventKindV1> = Vec::new();
     for kind in kinds {
@@ -904,12 +1029,12 @@ fn subscribe_on(
             deduped.push(kind);
         }
     }
-    if deduped.contains(&EventKindV1::Log) {
+    if deduped.contains(&EventKindV1::Log) && !tail_enabled {
         return ResponseV1::Error {
             code: ErrorCode::Unsupported,
-            message: "log events are not streamed over the wire yet (the log-tail \
-                      milestone owns them); supported kinds: tree_changed, \
-                      frame_presented"
+            message: "log events need the session's log tail — spawn the server with \
+                      ServerOptions { log_tail: true }; supported kinds here: \
+                      tree_changed, frame_presented"
                 .into(),
         };
     }
@@ -1015,7 +1140,7 @@ mod tests {
             run_session_thread(
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
-                crate::seams::SeamRegistry::new(),
+                ServerOptions::default(),
             );
         });
 
@@ -1055,7 +1180,7 @@ mod tests {
             run_session_thread(
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
-                crate::seams::SeamRegistry::new(),
+                ServerOptions::default(),
             );
         });
 
@@ -1111,7 +1236,7 @@ mod tests {
             run_session_thread(
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
-                crate::seams::SeamRegistry::new(),
+                ServerOptions::default(),
             );
         });
 
@@ -1147,7 +1272,7 @@ mod tests {
             run_session_thread(
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
-                crate::seams::SeamRegistry::new(),
+                ServerOptions::default(),
             );
         });
 
@@ -1189,7 +1314,14 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let mut adapter = MockAdapter::with_fixture(&Fixture::buttons());
             adapter = adapter.with_state(AppDb { rows: 7 });
-            run_session_thread(cmd_rx, adapter, app_seams());
+            run_session_thread(
+                cmd_rx,
+                adapter,
+                ServerOptions {
+                    seams: app_seams(),
+                    ..ServerOptions::default()
+                },
+            );
         });
 
         // Canned override wins (§7 InstallSeam).
@@ -1267,7 +1399,7 @@ mod tests {
             run_session_thread(
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
-                crate::seams::SeamRegistry::new(),
+                ServerOptions::default(),
             );
         });
         let resp = send(
