@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use guiwright_proto::schema::{AdapterInfoV1, RequestV1, ResponseV1};
+use guiwright_proto::schema::{AdapterInfoV1, GwpEvent, RequestV1, ResponseV1};
 use guiwright_proto::{GwpError, tcp, uds};
 
 /// Where to attach: a Unix domain socket path or a TCP `host:port`.
@@ -77,6 +77,25 @@ impl Connection {
         match self {
             Connection::Uds(c) => c.request(request).await,
             Connection::Tcp(c) => c.request(request).await,
+        }
+    }
+
+    /// The next pushed event (§7, M12) — blocked until one arrives.
+    pub async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
+        match self {
+            Connection::Uds(c) => c.next_event().await,
+            Connection::Tcp(c) => c.next_event().await,
+        }
+    }
+
+    /// Non-blocking event drain: whatever already arrived (buffered by
+    /// earlier responses or already readable), or `None`. The REPL flushes
+    /// this between commands — "events flush at command boundaries" is the
+    /// honest contract for a line-oriented debugger.
+    pub async fn poll_event(&mut self) -> Result<Option<GwpEvent>, GwpError> {
+        match tokio::time::timeout(std::time::Duration::ZERO, self.next_event()).await {
+            Ok(event) => event.map(Some),
+            Err(_elapsed) => Ok(None),
         }
     }
 }
