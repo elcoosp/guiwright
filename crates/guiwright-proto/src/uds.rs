@@ -5,11 +5,17 @@
 //! lives in [`crate::conn`] and is shared byte-for-byte with the TCP
 //! transport; this module owns the accept loop and the client socket.
 
+use std::collections::VecDeque;
+
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::GwpError;
+use crate::conn::{read_next_event, read_response_demuxing};
 use crate::framing::{read_frame, write_frame};
-use crate::schema::{GwpRequest, GwpResponse, PROTO_VERSION, RequestV1, ResponseV1};
+use crate::schema::{
+    EventKindV1, GwpEvent, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1, ResponseV1,
+    SubscribeV1,
+};
 
 pub use crate::conn::{EVENT_QUEUE_CAPACITY, Handler, run_connection};
 
@@ -39,12 +45,18 @@ pub async fn serve<H: Handler>(listener: UnixListener, mut make_handler: impl Fn
 #[derive(Debug)]
 pub struct Client {
     stream: UnixStream,
+    /// Events that interleaved earlier responses (§7, M12): pushed frames
+    /// read while waiting for a request reply are buffered here, not lost.
+    events: VecDeque<GwpEvent>,
 }
 
 impl Client {
     pub async fn connect(path: &std::path::Path) -> Result<Client, GwpError> {
         let stream = UnixStream::connect(path).await?;
-        Ok(Client { stream })
+        Ok(Client {
+            stream,
+            events: VecDeque::new(),
+        })
     }
 
     /// Send `Hello` and validate the driver's `Welcome`.
@@ -82,15 +94,48 @@ impl Client {
 
     pub async fn request(&mut self, request: RequestV1) -> Result<ResponseV1, GwpError> {
         write_frame(&mut self.stream, &GwpRequest::V1(request)).await?;
-        // Responses only, until one arrives; events are tolerated and
-        // dropped for M0 (subscribers are a later milestone).
-        // Every branch below returns; the loop is collapsed (clippy
-        // `never_loop`) until event frames become a real milestone.
-        let resp: GwpResponse = read_frame(&mut self.stream).await?;
-        let GwpResponse::V1(inner) = resp;
+        // One response, with pushed events buffered for `next_event` (§7,
+        // M12): a subscribed connection receives `Event` frames between
+        // responses; a connection that never subscribes never sees one.
+        let inner = read_response_demuxing(&mut self.stream, &mut self.events).await?;
         match inner {
             ResponseV1::Error { code, message } => Err(GwpError::Rejected { code, message }),
             other => Ok(other),
+        }
+    }
+
+    /// The next pushed event (§7, M12): from the buffer of events that
+    /// interleaved earlier responses, or straight off the wire. Blocks
+    /// until the driver publishes one — pair it with the subscriber's
+    /// own pacing, never on a hot path.
+    pub async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
+        read_next_event(&mut self.stream, &mut self.events).await
+    }
+
+    /// Subscribe this connection to the named event kinds (§7, M12).
+    /// Re-subscribing replaces the filter; the ack echoes the kinds the
+    /// driver honored.
+    pub async fn subscribe(&mut self, kinds: &[EventKindV1]) -> Result<(), GwpError> {
+        let resp = self
+            .request(RequestV1::Subscribe(SubscribeV1::On {
+                kinds: kinds.to_vec(),
+            }))
+            .await?;
+        match resp {
+            ResponseV1::Subscribed { .. } => Ok(()),
+            other => Err(GwpError::Protocol(format!(
+                "expected Subscribed, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Drop this connection's event subscription (§7, M12).
+    pub async fn unsubscribe(&mut self) -> Result<(), GwpError> {
+        match self.request(RequestV1::Subscribe(SubscribeV1::Off)).await? {
+            ResponseV1::Subscribed { kinds } if kinds.is_empty() => Ok(()),
+            other => Err(GwpError::Protocol(format!(
+                "expected an empty Subscribed ack, got {other:?}"
+            ))),
         }
     }
 
