@@ -31,8 +31,9 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// The request table, in wire order (§7). Append-only: `Video` follows
 /// `Bye` (M3), `Window` follows `Video` (M6, §16 v0.4 multi-window),
 /// `Gesture` follows `Window` (M7, §9 input pipeline), `Screenshot`
-/// follows `Gesture` (M10, §7 render domain) and `Snapshot` follows
-/// `Screenshot` (M11, tree dump); the pinning tests enforce the order.
+/// follows `Gesture` (M10, §7 render domain), `Snapshot` follows
+/// `Screenshot` (M11, tree dump) and `Subscribe` follows `Snapshot`
+/// (M12, event channel); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -61,12 +62,14 @@ const REQUESTS: &[Variant] = &[
     v(12, "Gesture", "GestureV1 (see domains.gesture)"),
     v(13, "Screenshot", "ScreenshotV1 (see domains.screenshot)"),
     v(14, "Snapshot", "SnapshotV1 (see domains.snapshot)"),
+    v(15, "Subscribe", "SubscribeV1 (see domains.subscribe)"),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
 /// `Bye` (M3), the M6 window replies append at 12–13, the M7
-/// `GestureDone` reply at 14, the M10 `Shot` reply at 15 and the M11
-/// `TreeDump` reply at 16.
+/// `GestureDone` reply at 14, the M10 `Shot` reply at 15, the M11
+/// `TreeDump` reply at 16 and the M12 event replies (`Event`,
+/// `Subscribed`) at 17–18.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -117,6 +120,16 @@ const RESPONSES: &[Variant] = &[
         "TreeDump",
         "{ tree_seq: u64 varint, node_count: u64 varint, focus: option<NodeKeyV1>, nodes: seq<SnapshotNodeV1 { key: NodeKeyV1, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, children: u32 varint }> } — depth-first per window root; children counts rebuild the hierarchy",
     ),
+    v(
+        17,
+        "Event",
+        "EventV1 (see events) — a server-push event for a subscribed connection, flushed between responses (§15.6 bounded queue); connections that never subscribe never receive one",
+    ),
+    v(
+        18,
+        "Subscribed",
+        "{ kinds: seq<EventKindV1> } — the subscription ack, echoing the deduplicated kinds now active on this connection (empty after Off)",
+    ),
 ];
 
 /// Server-push events (multiplexed by `seq` per topic, §7).
@@ -148,6 +161,68 @@ fn domain_table(name: &str, rows: &[(u64, &str, &str)]) -> serde_json::Value {
         "variants": rows.iter().map(|(i, n, p)| serde_json::json!({
             "index": i, "name": n, "payload": p,
         })).collect::<Vec<_>>(),
+    })
+}
+
+/// The domain tables (nested one level under their requests, in wire
+/// order) — extracted so [`gwp_schema_json`] stays a single readable
+/// document assembly.
+fn domains_json() -> serde_json::Value {
+    serde_json::json!({
+            "clock": domain_table("ClockV1", &[
+                (0, "InstallVirtual", "—"),
+                (1, "FastForward", "{ ms: u64 varint }"),
+                (2, "RunFor", "{ ms: u64 varint }"),
+                (3, "Pause", "—"),
+                (4, "Resume", "—"),
+                (5, "SetTime", "{ ms: u64 varint }"),
+                (6, "State", "—"),
+            ]),
+            "mock": domain_table("MockV1", &[
+                (0, "InstallSeam", "{ id: string, response: option<string> }"),
+                (1, "Clear", "{ id: string }"),
+                (2, "ResetState", "{ scope: string }"),
+                (3, "Call", "{ id: string, scope: string }"),
+            ]),
+            "inspect": domain_table("InspectV1", &[
+                (0, "StartRecording", "— → Codegen"),
+                (1, "StopRecording", "— → Codegen"),
+                (2, "EnableOverlay", "— → Pong; the §13 live overlay session composites hover outlines + interactive-role badges at present time (M8)"),
+                (3, "DisableOverlay", "— → Pong; drops the overlay + highlight"),
+                (4, "Highlight", "{ node: option<NodeKeyV1> } → Pong; aims the hover outline (None clears it); implies EnableOverlay — Unsupported without an overlay surface (§6.2)"),
+            ]),
+            "video": domain_table("VideoV1", &[
+                (0, "Start", "{ opts: VideoOptsV1 { fps: u32 varint (0 = driver default), dir: option<string> (client-owned artifact dir) } }"),
+                (1, "Stop", "—"),
+            ]),
+            "window": domain_table("WindowV1", &[
+                (0, "List", "— → Windows"),
+                (1, "Use", "{ handle: string (WindowInfoV1.handle) } → WindowUsed | Error { UnknownWindow }; aims the CALLING connection at the target — subsequent Resolves only see that window's subtree (per-connection state, §16 v0.4)"),
+            ]),
+            "gesture": domain_table("GestureV1", &[
+                (0, "Click", "{ x: f64, y: f64, button: PointerButtonV1, count: u32 varint (Playwright clickCount: 1 = click, 2 = double-click) } → GestureDone; synthesized as move→down→up ×count (§9)"),
+                (1, "Drag", "{ from_x: f64, from_y: f64, to_x: f64, to_y: f64, button: PointerButtonV1 } → GestureDone; down→ratchet-interpolated moves (adapter pacing, ~5 px/tick)→up (§9)"),
+                (2, "Wheel", "{ dx: f64, dy: f64 } → GestureDone; logical-px deltas"),
+                (3, "Key", "{ key: string, modifiers: seq<string> } → GestureDone; synthesized as down→up (§8.4 key-name vocabulary)"),
+                (4, "Type", "{ text: string } → GestureDone; one TextInput commit — adapters translate to IME or per-key events (§4.2)"),
+            ]),
+            "screenshot": domain_table("ScreenshotV1", &[
+                (0, "Window", "— → Shot; the full window frame, rendered once (§10 render-on-demand path)"),
+                (1, "Element", "{ selector: SelectorV1, timeout_ms: u64 varint } → Shot; resolve the node (auto-wait Attached within timeout_ms, §8.2) and crop the window frame by the resolved physical bounds — never a re-render (§10 element rule)"),
+            ]),
+            "snapshot": domain_table("SnapshotV1", &[
+                (0, "Full", "— → TreeDump; the whole logical tree, depth-first per window root (§16 v0.4), each row carrying key/role/name/value/bounds/children — the CDP 'DOM snapshot' analog (M11)"),
+                (1, "Filtered", "{ selector: SelectorV1, timeout_ms: u64 varint } → TreeDump; resolve the node (auto-wait Attached within timeout_ms, §8.2, honoring the connection's window scope) and dump only the depth-first walk rooted at the match (M13)"),
+            ]),
+            "subscribe": domain_table("SubscribeV1", &[
+                (0, "On", "{ kinds: seq<EventKindV1> } → Subscribed; subscribe (or re-subscribe) this connection to the named event kinds — all-or-nothing: naming an unsupported kind fails the whole request with Error { Unsupported } (M12)"),
+                (1, "Off", "— → Subscribed { kinds: [] }; drop the connection's subscription"),
+            ]),
+            "event_kind": domain_table("EventKindV1", &[
+                (0, "TreeChanged", "the logical tree changed (the seq space TreeSnapshot/TreeDump report)"),
+                (1, "FramePresented", "a frame was presented { seq, hash } — the same vocabulary the trace recorder dedups on (§15.5)"),
+                (2, "Log", "a log record — not served yet; subscribing to it fails with Error { Unsupported } until the log-tail milestone"),
+            ]),
     })
 }
 
@@ -187,7 +262,7 @@ pub fn gwp_schema_json() -> serde_json::Value {
             "max_decompressed_bytes": MAX_BLOB_BYTES
         },
         "transports": [
-            { "name": "uds", "role": "default (same-host apps)", "server": "GwpServerHandle::spawn (uds://path)" },
+            { "name": "uds", "role": "default (same-host apps)", "server": "GwpServerHandle::spawn_with_seams / spawn_session_server (uds://path)" },
             { "name": "tcp", "role": "CI containers + other-language clients (M3)", "server": "GwpServerHandle::spawn_tcp (host:port)" }
         ],
         "codec": {
@@ -207,56 +282,14 @@ pub fn gwp_schema_json() -> serde_json::Value {
             "client connects, sends Hello { proto_version, agent } as the FIRST frame",
             "driver replies Welcome { proto_version, session_id, tree_seq, frame_seq, adapter } or Error { UnsupportedVersion }",
             "any other first frame is rejected with Error { NotHandshaked }",
-            "each subsequent request is answered by exactly one response frame; queued events may be flushed between responses",
+            "each subsequent request is answered by exactly one response frame; pushed Event frames may be flushed between responses (M12: subscribe with the Subscribe domain; a connection that never subscribes never receives one)",
             "Bye is answered by Bye and closes the connection"
         ],
         "requests": variants(REQUESTS),
         "responses": variants(RESPONSES),
         "events": variants(EVENTS),
         "error_codes": ["UnsupportedVersion", "NotHandshaked", "UnknownNode", "StaleGeneration", "StrictModeViolation", "Timeout", "Unsupported", "Internal", "UnknownWindow"],
-        "domains": {
-            "clock": domain_table("ClockV1", &[
-                (0, "InstallVirtual", "—"),
-                (1, "FastForward", "{ ms: u64 varint }"),
-                (2, "RunFor", "{ ms: u64 varint }"),
-                (3, "Pause", "—"),
-                (4, "Resume", "—"),
-                (5, "SetTime", "{ ms: u64 varint }"),
-                (6, "State", "—"),
-            ]),
-            "mock": domain_table("MockV1", &[
-                (0, "InstallSeam", "{ id: string, response: option<string> }"),
-                (1, "Clear", "{ id: string }"),
-                (2, "ResetState", "{ scope: string }"),
-                (3, "Call", "{ id: string, scope: string }"),
-            ]),
-            "inspect": domain_table("InspectV1", &[
-                (0, "StartRecording", "—"),
-                (1, "StopRecording", "—"),
-            ]),
-            "video": domain_table("VideoV1", &[
-                (0, "Start", "{ opts: VideoOptsV1 { fps: u32 varint (0 = driver default), dir: option<string> (client-owned artifact dir) } }"),
-                (1, "Stop", "—"),
-            ]),
-            "window": domain_table("WindowV1", &[
-                (0, "List", "— → Windows"),
-                (1, "Use", "{ handle: string (WindowInfoV1.handle) } → WindowUsed | Error { UnknownWindow }; aims the CALLING connection at the target — subsequent Resolves only see that window's subtree (per-connection state, §16 v0.4)"),
-            ]),
-            "gesture": domain_table("GestureV1", &[
-                (0, "Click", "{ x: f64, y: f64, button: PointerButtonV1, count: u32 varint (Playwright clickCount: 1 = click, 2 = double-click) } → GestureDone; synthesized as move→down→up ×count (§9)"),
-                (1, "Drag", "{ from_x: f64, from_y: f64, to_x: f64, to_y: f64, button: PointerButtonV1 } → GestureDone; down→ratchet-interpolated moves (adapter pacing, ~5 px/tick)→up (§9)"),
-                (2, "Wheel", "{ dx: f64, dy: f64 } → GestureDone; logical-px deltas"),
-                (3, "Key", "{ key: string, modifiers: seq<string> } → GestureDone; synthesized as down→up (§8.4 key-name vocabulary)"),
-                (4, "Type", "{ text: string } → GestureDone; one TextInput commit — adapters translate to IME or per-key events (§4.2)"),
-            ]),
-            "screenshot": domain_table("ScreenshotV1", &[
-                (0, "Window", "— → Shot; the full window frame, rendered once (§10 render-on-demand path)"),
-                (1, "Element", "{ selector: SelectorV1, timeout_ms: u64 varint } → Shot; resolve the node (auto-wait Attached within timeout_ms, §8.2) and crop the window frame by the resolved physical bounds — never a re-render (§10 element rule)"),
-            ]),
-            "snapshot": domain_table("SnapshotV1", &[
-                (0, "Full", "— → TreeDump; the whole logical tree, depth-first per window root (§16 v0.4), each row carrying key/role/name/value/bounds/children — the CDP 'DOM snapshot' analog (M11)"),
-            ]),
-        },
+        "domains": domains_json(),
         "window_info": {
             "name": "WindowInfoV1",
             "fields": "{ handle: string (stable target id: the AccessKit subtree TreeId for multi-window adapters, 'main' for single-window), title: string, focused: bool }",
