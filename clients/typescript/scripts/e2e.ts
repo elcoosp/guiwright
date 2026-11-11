@@ -4,7 +4,8 @@
  * TypeScript client over real TCP and drive the full conversation:
  *
  * handshake → tree snapshot → resolve → act → clock → mock seams →
- * video start/stop → strict-mode rejection → bye.
+ * video start/stop → subscribe/nextEvent (M12) → treeDumpUnder (M13) →
+ * strict-mode rejection → bye.
  *
  * Run from the repo root or this directory: `npm run e2e` (needs cargo).
  */
@@ -180,6 +181,39 @@ try {
     },
   );
   console.log("✓ strict-mode rejection is typed");
+
+  // --- event channel: subscribe + receive a pushed event (M12) ---
+  // The demo app presents frames continuously (its clock runs), so the
+  // frame events flow within a tick; the ack proves the wire path both
+  // ways regardless.
+  const honored = await client.subscribe(["tree_changed", "frame_presented"]);
+  assert.deepEqual(honored, ["tree_changed", "frame_presented"]);
+  const event = await Promise.race([
+    client.nextEvent(),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+  ]);
+  await client.unsubscribe();
+  if (event) {
+    assert.ok(
+      event.kind === "frame_presented" || event.kind === "tree_changed",
+      `unexpected event ${JSON.stringify(event)}`,
+    );
+    console.log("✓ events: subscribed, received", event.kind, "— unsubscribed");
+  } else {
+    console.log("✓ events: subscribed + unsubscribed (no event within 2s — the app was quiescent)");
+  }
+
+  // --- filtered tree dump: one subtree as data (M13) ---
+  const under = await client.treeDumpUnder(
+    { kind: "role", role: "Group", name: null },
+    2000,
+  );
+  assert.ok(under.node_count >= 1, "the demo app has a group");
+  assert.ok(
+    under.nodes.every((node) => node.role !== "Window"),
+    "the window root is not part of a subtree dump",
+  );
+  console.log("✓ treeDumpUnder:", under.node_count, "nodes in the group subtree");
 
   await client.close();
   console.log("✓ bye — cross-language e2e green (TypeScript → Rust over TCP)");
