@@ -11,6 +11,8 @@
 //!   executed inside the adapter's runner context via `run_in`.
 //! * [`server`] — serves GWP over UDS by marshalling commands to the session
 //!   thread (commands are queued and applied inside the next frame, §5.1).
+//! * [`events`] — the §7 server-push event channel (M12): the session
+//!   thread's subscriber registry + fan-out, flushed between responses.
 //! * [`gesture`] — gesture synthesis (§9, M7): the wire's high-level
 //!   `Gesture` vocabulary → raw `InputEvent` sequences, paced per adapter.
 //! * [`mock`] — a scriptable adapter used by tests and benches (feature
@@ -20,6 +22,7 @@
 
 pub mod adapter;
 pub mod clock;
+pub mod events;
 pub mod gesture;
 pub mod seams;
 pub mod server;
