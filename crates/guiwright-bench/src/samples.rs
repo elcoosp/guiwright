@@ -638,3 +638,65 @@ pub fn locator_element_screenshot() -> Duration {
     );
     elapsed
 }
+
+// --- Wire screenshot sample (§7 render domain over §10 capture, M10) ---------
+
+/// §7 render domain (M10): one `Session::screenshot_window` end-to-end —
+/// the pump-consistency pass, the single §10 render, and the PNG encode
+/// that the `Shot` reply ships. The fixture launch + settle stay outside
+/// the measured span; the measured operation is the hot path every wire
+/// screenshot request rides (the transport round-trip itself is the
+/// `resolve_remote_*` rows' marshalling pattern, already bound).
+pub fn wire_screenshot_window() -> Duration {
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::Session;
+    use guiwright_driver::mock::MockAdapter;
+
+    let mut adapter = MockAdapter::with_fixture(&Fixture::buttons());
+    adapter.push_frame(1);
+    let rgba: Vec<u8> = (0..240u32)
+        .flat_map(|y| (0..480u32).map(move |x| (x, y)))
+        .flat_map(|(x, y)| [(x & 0xff) as u8, (y & 0xff) as u8, 99u8, 255u8])
+        .collect();
+    let adapter = adapter.with_frame_pixels(480, 240, rgba);
+    let mut session = Session::new(adapter);
+    session.pump();
+
+    let start = Instant::now();
+    let shot = session
+        .screenshot_window()
+        .expect("the scripted adapter renders");
+    let elapsed = start.elapsed();
+    assert_eq!((shot.width, shot.height), (480, 240));
+    assert!(
+        shot.png.len() > 64,
+        "the PNG payload is a real encoded frame"
+    );
+    elapsed
+}
+
+// --- Tree-dump sample (§7 tree domain, M11) ----------------------------------
+
+/// §7 tree-dump domain (M11): one `Session::tree_dump` over the 1k-node
+/// tree — the pump-consistency pass, the per-window DFS walk and the row
+/// build (role/name/value/bounds/children per node) that the `TreeDump`
+/// reply ships. The wire serialization itself is the existing
+/// `snapshot_serialize` row's postcard cost; this is the hot path every
+/// `snapshot full` request rides.
+pub fn tree_dump_walk() -> Duration {
+    use guiwright_driver::Session;
+    use guiwright_driver::mock::MockAdapter;
+
+    let mut adapter = MockAdapter::bare();
+    adapter.push_update(full_thousand_update());
+    adapter.push_frame(1);
+    let mut session = Session::new(adapter);
+    session.pump();
+
+    let start = Instant::now();
+    let dump = session.tree_dump();
+    let elapsed = start.elapsed();
+    assert_eq!(dump.node_count, 1_000, "the whole synthetic tree");
+    assert_eq!(dump.nodes[0].children, 1, "window → group");
+    elapsed
+}
