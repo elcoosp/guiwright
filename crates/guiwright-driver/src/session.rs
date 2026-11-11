@@ -53,6 +53,25 @@ fn adapter_error(err: AdapterError) -> CoreError {
     }
 }
 
+/// The wait-failure error (§8.3 "the error embeds the last tree
+/// snapshot"): the check + reason carry the semantics, the tree summary
+/// carries the state the waiter last saw. One formatter for both failure
+/// sites in [`Session::wait_for`] (initial evaluation and the event loop)
+/// so the wording cannot drift apart again.
+fn wait_failure(
+    selector: &Selector,
+    failure: &guiwright_core::wait::WaitFailure,
+    tree: &TreeService,
+) -> CoreError {
+    CoreError::Other(format!(
+        "wait for `{}` failed: {} ({}) — {}",
+        selector.render(),
+        failure.check,
+        failure.reason,
+        tree.summary()
+    ))
+}
+
 /// Facts for one live node (the codegen vocabulary, §13): role/name and
 /// bounds exactly as the overlay badges and the inspector UIs print them.
 fn node_facts(
@@ -72,6 +91,20 @@ fn node_facts(
     }
 }
 
+/// One [`TreeDump`] row (§7 tree-dump domain, M11): the same facts the
+/// overlay badges and codegen read, plus the child count the DFS order
+/// pairs with.
+fn snapshot_row(key: &NodeKey, node: &accesskit_consumer::NodeRef<'_>) -> SnapshotNode {
+    SnapshotNode {
+        key: *key,
+        role: format!("{:?}", node.role()),
+        name: node.label(),
+        value: node.value(),
+        bounds: node.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
+        children: node.children().count() as u32,
+    }
+}
+
 /// Result of a synthesized gesture (§9, M7) — the `GestureDone` reply's
 /// payload in embedded form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +115,80 @@ pub struct GestureOutcome {
     pub events: usize,
     /// Human-readable summary (positions, key names, event count).
     pub detail: String,
+}
+
+/// A captured shot (§7 `Shot`, M10): the PNG bytes of one window frame or
+/// element crop plus the frame they came from — the wire reply's payload
+/// in embedded form. PNG is already DEFLATE-compressed, so the bytes ride
+/// as-is (no LZ4 stage, §15.6; [`guiwright_proto::schema::MAX_FRAME_BYTES`]
+/// bounds the size).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WireShot {
+    /// The session frame the pixels came from.
+    pub frame_seq: u64,
+    /// Pixel width of `png`.
+    pub width: u32,
+    /// Pixel height of `png`.
+    pub height: u32,
+    /// PNG-encoded RGBA8 (lossless, §10 "Output: PNG").
+    pub png: Vec<u8>,
+}
+
+/// One row of a [`TreeDump`] (§7 tree-dump domain, M11): identity + the
+/// facts the REPL/viewer render. Depth-first order + `children` rebuild
+/// the hierarchy without parent pointers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SnapshotNode {
+    pub key: NodeKey,
+    /// AccessKit role `Debug` name (`Button`, …) — the wire selector
+    /// vocabulary.
+    pub role: String,
+    pub name: Option<String>,
+    pub value: Option<String>,
+    /// Window-relative bounds, physical px.
+    pub bounds: Option<[f64; 4]>,
+    /// Immediate children (DFS order + this count rebuilds the tree).
+    pub children: u32,
+}
+
+/// The full-tree dump (§7 tree-dump domain, M11): the whole logical tree
+/// as data, depth-first per window root (§16 v0.4 — disjoint subtrees, one
+/// walk per window target).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeDump {
+    /// The tree generation the dump was taken at.
+    pub tree_seq: u64,
+    /// Dumped node count (== `nodes.len()`).
+    pub node_count: usize,
+    /// The focused node, when the tree has one.
+    pub focus: Option<NodeKey>,
+    /// Depth-first per window root, roots in adapter-reported window
+    /// order.
+    pub nodes: Vec<SnapshotNode>,
+}
+
+/// PNG-encode a captured frame, optionally cropping it first (the §10
+/// element path). Shared by [`Session::screenshot_window`] and
+/// [`Session::screenshot_element`]; errors keep the capture context.
+fn encode_frame_png(
+    frame: &crate::adapter::FrameRef,
+    crop: Option<(u32, u32, u32, u32)>,
+) -> Result<Vec<u8>, CoreError> {
+    let pixels = frame.pixels.as_ref().ok_or(CoreError::Unsupported(
+        "screenshot (adapter returned a frame without pixels, §6.2)",
+    ))?;
+    let image = guiwright_shot::Image {
+        width: frame.size.0,
+        height: frame.size.1,
+        rgba: pixels.to_vec(),
+    };
+    let cropped = match crop {
+        Some((x0, y0, x1, y1)) => guiwright_shot::crop(&image, x0, y0, x1, y1)
+            .map_err(|e| CoreError::other(format!("element crop failed (§10): {e}")))?,
+        None => image,
+    };
+    guiwright_shot::codec::encode_png(&cropped)
+        .map_err(|e| CoreError::other(format!("shot PNG encode failed: {e}")))
 }
 
 /// The `GestureDone` detail line: positions and event count, matching the
@@ -344,6 +451,116 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Is a recording currently running?
     pub fn recording(&self) -> bool {
         self.video.is_some()
+    }
+
+    // --- Screenshots (§7 render domain, §10 capture) ----------------------
+
+    /// Render the window frame once and PNG-encode it (§7 `Screenshot::
+    /// Window` → `Shot`). The §10 capture path: `render_frame` (the
+    /// headless on-demand hook — the same path the kit's window-level
+    /// `App::screenshot` uses), no re-render beyond that one pass.
+    ///
+    /// Adapters without a pixel path report `Unsupported` (§6.2) — the
+    /// capability row is the contract, so remote clients get the same
+    /// honest error the embedded surface gives.
+    pub fn screenshot_window(&mut self) -> Result<WireShot, CoreError> {
+        self.pump();
+        let frame = self.render_once()?;
+        let png = encode_frame_png(&frame, None)?;
+        Ok(WireShot {
+            frame_seq: self.frame_seq,
+            width: frame.size.0,
+            height: frame.size.1,
+            png,
+        })
+    }
+
+    /// Crop one resolved node's bounds out of a single window frame
+    /// (§7 `Screenshot::Element` → `Shot`; §10 "crop from the window frame
+    /// by the node's clip-aware rect — never re-render"). Resolution (and
+    /// its auto-wait) is the caller's job — the GWP server resolves with
+    /// the request's `timeout_ms` exactly like the `Resolve` arm, embedded
+    /// callers resolve through [`Session::resolve`].
+    ///
+    /// A node without bounds (windows/containers the framework lays out
+    /// virtually) is an honest error, not an empty crop (the M9 wording).
+    pub fn screenshot_element(&mut self, key: &NodeKey) -> Result<WireShot, CoreError> {
+        self.pump();
+        let node = self
+            .tree
+            .node(key)
+            .ok_or(CoreError::UnknownNode { key: *key })?;
+        let rect = node.bounding_box().ok_or_else(|| {
+            CoreError::other(format!("{key:?} has no bounds — nothing to crop (§10)"))
+        })?;
+        let frame = self.render_once()?;
+        // Physical px → the crop window, clamped into the frame (the same
+        // guarded conversion the kit's locator screenshot runs: the clamp
+        // pins the value into `[0, max]` before the conversion, and the
+        // `u32::try_from` proves the range instead of truncating —
+        // `unwrap_or(max)` is the unreachable arm, kept honest by the
+        // clamp).
+        let clamp = |v: f64, max: u32| {
+            u32::try_from(v.round().clamp(0.0, f64::from(max)) as i64).unwrap_or(max)
+        };
+        let x0 = clamp(rect.x0, frame.size.0);
+        let y0 = clamp(rect.y0, frame.size.1);
+        let x1 = clamp(rect.x1, frame.size.0);
+        let y1 = clamp(rect.y1, frame.size.1);
+        let png = encode_frame_png(&frame, Some((x0, y0, x1, y1)))?;
+        Ok(WireShot {
+            frame_seq: self.frame_seq,
+            width: x1.saturating_sub(x0),
+            height: y1.saturating_sub(y0),
+            png,
+        })
+    }
+
+    /// The one §10 render pass both screenshot paths share. A pump first:
+    /// freshly-queued diffs are visible and the frame stamp is current
+    /// (the same consistency rule `resolve` follows).
+    fn render_once(&mut self) -> Result<crate::adapter::FrameRef, CoreError> {
+        let frame = self.adapter.render_frame(None).map_err(adapter_error)?;
+        if frame.pixels.is_none() {
+            return Err(CoreError::Unsupported(
+                "screenshot (adapter returned a frame without pixels, §6.2)",
+            ));
+        }
+        Ok(frame)
+    }
+
+    // --- Tree dump (§7 tree domain, M11) ----------------------------------
+
+    /// Read the whole logical tree as data (§7 `Snapshot::Full` →
+    /// `TreeDump`): the CDP "DOM snapshot" analog — the M0-era promise the
+    /// summary-only `TreeSnapshot` carried ("full snapshot rides the wire
+    /// once traces land"; traces shipped in M1, this is the dump).
+    ///
+    /// The walk is depth-first per window root (§16 v0.4): every window's
+    /// subtree appears exactly once, roots in adapter-reported window
+    /// order, so `children` counts rebuild the hierarchy. Session-wide by
+    /// design — the connection's resolve scope narrows locators, not
+    /// whole-tree reads.
+    pub fn tree_dump(&mut self) -> TreeDump {
+        self.pump();
+        let focus = self.tree.focus();
+        let mut nodes = Vec::new();
+        for window in self.tree.windows() {
+            let Some(root) = self.tree.node(&window.root) else {
+                continue;
+            };
+            nodes.push(snapshot_row(&window.root, &root));
+            self.tree.descendants(&window.root, &mut |key, node| {
+                nodes.push(snapshot_row(&key, node))
+            });
+        }
+        let node_count = nodes.len();
+        TreeDump {
+            tree_seq: self.tree_seq,
+            node_count,
+            focus,
+            nodes,
+        }
     }
 
     // --- Inspector overlay (§13, M8) ---------------------------------------
@@ -757,12 +974,7 @@ impl<A: FrameworkAdapter> Session<A> {
                 return Ok(resolved.map_or(WaitResolved::Absent, WaitResolved::Node));
             }
             WaitOutcome::Failed(failure) => {
-                return Err(CoreError::Other(format!(
-                    "wait for `{}` failed: {} ({})",
-                    selector.render(),
-                    failure.check,
-                    failure.reason
-                )));
+                return Err(wait_failure(selector, &failure, &self.tree));
             }
             WaitOutcome::Pending => {}
         }
@@ -800,12 +1012,7 @@ impl<A: FrameworkAdapter> Session<A> {
                         return Ok(resolved.map_or(WaitResolved::Absent, WaitResolved::Node));
                     }
                     WaitOutcome::Failed(failure) => {
-                        return Err(CoreError::Other(format!(
-                            "wait for `{}` failed: {} ({})",
-                            selector.render(),
-                            failure.check,
-                            failure.reason
-                        )));
+                        return Err(wait_failure(selector, &failure, &self.tree));
                     }
                     WaitOutcome::Pending => {}
                 }
