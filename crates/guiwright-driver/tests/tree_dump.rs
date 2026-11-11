@@ -10,7 +10,10 @@ use accesskit::{Node, NodeId, Role, TreeUpdate};
 use guiwright_core::test_util::{Fixture, MultiWindowFixture};
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::spawn_session_server;
-use guiwright_proto::schema::{NodeKeyV1, RequestV1, ResponseV1, SnapshotV1};
+use guiwright_proto::GwpError;
+use guiwright_proto::schema::{
+    ErrorCode, NodeKeyV1, RequestV1, ResponseV1, SelectorV1, SnapshotV1, WindowV1,
+};
 use guiwright_proto::uds::Client;
 
 fn socket_path(tag: &str) -> std::path::PathBuf {
@@ -157,6 +160,249 @@ async fn dump_reflects_a_late_tree_change() {
         nodes[2].name.as_deref(),
         Some("Save (renamed)"),
         "the dump reads the tree as it is now"
+    );
+
+    handle.shutdown();
+}
+
+// --- M13: `Snapshot::Filtered` — one subtree as data ------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn filtered_dump_walks_only_the_match_subtree() {
+    let path = socket_path("dump-filtered.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    // The fixture's window root has one Group child with six children —
+    // dumping under the Group yields 7 rows, not the whole 8-node tree.
+    let resp = client
+        .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+            selector: SelectorV1::Role {
+                role: "Group".into(),
+                name: None,
+            },
+            timeout_ms: 1_000,
+        }))
+        .await
+        .unwrap();
+    let ResponseV1::TreeDump {
+        tree_seq,
+        node_count,
+        focus,
+        nodes,
+    } = resp
+    else {
+        panic!("expected TreeDump, got {resp:?}");
+    };
+    assert_eq!(node_count, 7, "the Group subtree only");
+    assert_eq!(nodes.len(), node_count);
+    assert!(tree_seq >= 1);
+
+    // The root row is the match itself; the walk is depth-first below it.
+    assert_eq!(nodes[0].role, "Group");
+    let counts: Vec<u32> = nodes.iter().map(|n| n.children).collect();
+    assert_eq!(counts, vec![6, 0, 0, 0, 0, 0, 0], "{counts:?}");
+    let roles: Vec<&str> = nodes.iter().map(|n| n.role.as_str()).collect();
+    assert_eq!(
+        roles,
+        vec![
+            "Group",
+            "Button",
+            "Button",
+            "Label",
+            "TextInput",
+            "Button",
+            "Button"
+        ],
+        "{roles:?}"
+    );
+    // The window root is NOT part of this dump (a node outside the
+    // subtree is not this dump's fact to report).
+    assert!(
+        nodes.iter().all(|n| n.role != "Window"),
+        "no window root row in a filtered dump"
+    );
+
+    // Focus rides along only when it lives inside the dumped subtree: the
+    // fixture focuses the window root — outside this Group dump, so the
+    // honest reply carries no focus at all.
+    assert!(
+        focus.is_none(),
+        "a focus outside the subtree is not this dump's fact to report"
+    );
+
+    handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn filtered_dump_auto_waits_for_a_late_node() {
+    // The auto-wait contract: a selector that matches only after the next
+    // scripted diff resolves within `timeout_ms` (the same behavior the
+    // `Resolve` arm pins).
+    let path = socket_path("dump-filtered-late.sock");
+    let shared: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts = Arc::clone(&shared);
+    let handle = spawn_session_server(path.clone(), move || {
+        MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts)
+    })
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    // Script a NEW group under the fixture root (NodeId 0): a Group node
+    // with one Button, landed on a later pump — the resolve inside the
+    // filtered dump auto-waits for it.
+    let mut group = Node::new(Role::Group);
+    group.set_label("Dialog");
+    group.push_child(NodeId(101));
+    let mut ok = Node::new(Role::Button);
+    ok.set_label("OK");
+    let mut root = Node::new(Role::Window);
+    root.set_label("Test App");
+    root.push_child(NodeId(100));
+    let root_update = TreeUpdate {
+        nodes: vec![(NodeId(0), root), (NodeId(100), group), (NodeId(101), ok)],
+        tree: None,
+        tree_id: accesskit::TreeId::ROOT,
+        // Focus INSIDE the dumped subtree: the filtered dump reports it.
+        focus: accesskit::NodeId(101),
+    };
+    shared.lock().unwrap().push(root_update);
+
+    let resp = client
+        .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+            selector: SelectorV1::Role {
+                role: "Group".into(),
+                name: Some(guiwright_proto::schema::TextMatchV1 {
+                    text: "Dialog".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+            },
+            timeout_ms: 5_000,
+        }))
+        .await
+        .unwrap();
+    let ResponseV1::TreeDump { nodes, focus, .. } = resp else {
+        panic!("expected TreeDump, got {resp:?}");
+    };
+    // Group "Dialog" + its OK button, nothing else.
+    assert_eq!(nodes.len(), 2, "{nodes:?}");
+    assert_eq!(nodes[0].role, "Group");
+    assert_eq!(nodes[0].name.as_deref(), Some("Dialog"));
+    assert_eq!(nodes[1].role, "Button");
+    assert_eq!(nodes[1].name.as_deref(), Some("OK"));
+    // The focus moved INSIDE the subtree (the OK button): the dump
+    // reports it, tied to the row a client can act on.
+    assert_eq!(focus.as_ref(), Some(&nodes[1].key), "{focus:?}");
+
+    handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn filtered_dump_without_a_match_is_a_typed_rejection() {
+    let path = socket_path("dump-filtered-miss.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    // A selector the fixture cannot match: strict-mode violation at
+    // timeout 0 (one honest try, no waiting), `Timeout` with a wait.
+    // `Client::request` maps `Error` replies to `GwpError::Rejected` —
+    // the typed codes are the assertion surface.
+    let err = client
+        .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+            selector: SelectorV1::Role {
+                role: "TabPanel".into(),
+                name: None,
+            },
+            timeout_ms: 0,
+        }))
+        .await
+        .expect_err("no match at timeout 0");
+    let GwpError::Rejected {
+        code: strict_code, ..
+    } = err
+    else {
+        panic!("expected a typed rejection");
+    };
+    assert_eq!(strict_code, ErrorCode::StrictModeViolation);
+
+    let err = client
+        .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+            selector: SelectorV1::Role {
+                role: "TabPanel".into(),
+                name: None,
+            },
+            timeout_ms: 250,
+        }))
+        .await
+        .expect_err("the auto-wait expires honestly");
+    let GwpError::Rejected {
+        code: timeout_code, ..
+    } = err
+    else {
+        panic!("expected a typed rejection");
+    };
+    assert_eq!(timeout_code, ErrorCode::Timeout);
+
+    handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn filtered_dump_honors_the_connection_window_scope() {
+    // §16 v0.4: a connection aimed at one window resolves within that
+    // window's subtree only — the filtered dump is no exception.
+    let path = socket_path("dump-filtered-scope.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_multi_window(&MultiWindowFixture::new())
+    })
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    let resp = client
+        .request(RequestV1::Window(WindowV1::List))
+        .await
+        .unwrap();
+    let ResponseV1::Windows { windows } = resp else {
+        panic!("expected Windows, got {resp:?}");
+    };
+    assert!(windows.len() >= 2, "the multi-window fixture");
+
+    // Aim at the second window; the same selector now resolves inside it.
+    let second = &windows[1];
+    let resp = client
+        .request(RequestV1::Window(WindowV1::Use {
+            handle: second.handle.clone(),
+        }))
+        .await
+        .unwrap();
+    assert!(matches!(resp, ResponseV1::WindowUsed { .. }));
+
+    let resp = client
+        .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: None,
+            },
+            timeout_ms: 1_000,
+        }))
+        .await
+        .unwrap();
+    let ResponseV1::TreeDump { nodes, .. } = resp else {
+        panic!("expected TreeDump, got {resp:?}");
+    };
+    assert!(
+        !nodes.is_empty(),
+        "the aimed window's buttons are visible to the scoped dump"
     );
 
     handle.shutdown();
