@@ -233,3 +233,12 @@ p95_us = 3500
 notes = "§7 tree-dump domain (M13): strict resolve + depth-first subtree walk + row build under the match (the full-tree walk is the tree_dump_walk row); M13 micro-suite guard"
 m0_measurable = true
 sample = "tree_dump_filtered"
+
+[[budget]]
+id = "log_tail_batch"
+name = "Log tail: drain + frame-build one 64-record batch"
+p50_us = 20
+p95_us = 120
+notes = "the log-tail milestone's publish-point cost while a Log subscriber is attached: tap send + tail drain + EventV1::Log frame build (record formatting rides the TraceLogLayer-shaped JSON path, §12; wire delivery is the wire_event_delivery row)"
+m0_measurable = true
+sample = "log_tail_batch"
