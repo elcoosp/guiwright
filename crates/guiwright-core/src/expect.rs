@@ -17,7 +17,9 @@ use crate::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
 /// Default assertion timeout (Playwright default: 5 s).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Entry point: `expect(locator).to_be_visible().check(&tree, deadline)`.
+/// Entry point: `expect(locator).to_be_visible()` — a builder whose
+/// `to_*` methods evaluate now (`Expectation::check_now(&tree)`) or
+/// retry-until-timeout through [`crate::wait`].
 pub fn expect(locator: Selector) -> ExpectBuilder {
     ExpectBuilder {
         locator,
