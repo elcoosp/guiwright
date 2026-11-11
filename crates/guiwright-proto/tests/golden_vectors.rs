@@ -15,10 +15,10 @@
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, GestureV1, InputEventV1, InspectV1, MockV1,
-    NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1,
-    SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1,
-    WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GestureV1, InputEventV1,
+    InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1,
+    VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -243,6 +243,25 @@ fn multi_window_gesture_requests() -> Vec<(&'static str, RequestV1)> {
         ),
         // M11 (§7 tree domain): the full-tree dump request.
         ("snapshot_full", RequestV1::Snapshot(SnapshotV1::Full)),
+        // M13 (§7 tree domain): the filtered-dump arm appends after Full.
+        (
+            "snapshot_filtered",
+            RequestV1::Snapshot(SnapshotV1::Filtered {
+                selector: SelectorV1::Role {
+                    role: "Group".into(),
+                    name: None,
+                },
+                timeout_ms: 2_500,
+            }),
+        ),
+        // M12 (§7 event channel): the subscription domain appends after Snapshot.
+        (
+            "subscribe_on",
+            RequestV1::Subscribe(SubscribeV1::On {
+                kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+            }),
+        ),
+        ("subscribe_off", RequestV1::Subscribe(SubscribeV1::Off)),
         ("bye", RequestV1::Bye),
     ]
 }
@@ -554,13 +573,57 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .into_iter()
         .chain(service_responses())
         .chain(media_window_responses())
-        .chain(tree_dump_responses());
+        .chain(tree_dump_responses())
+        .chain(event_responses());
     responses
         .map(|(name, resp, decoded)| {
             let frame = encode_frame(&guiwright_proto::GwpResponse::V1(resp)).expect("encode");
             (name, hex(&frame), decoded)
         })
         .collect()
+}
+
+/// M12 (§7 event channel): the pushed-event replies and the subscription
+/// ack — the frames a subscribed connection receives between responses.
+fn event_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![
+        (
+            "event_tree_changed",
+            ResponseV1::Event(EventV1::TreeChanged { seq: 4 }),
+            serde_json::json!({ "kind": "event", "event": { "kind": "tree_changed", "seq": 4 } }),
+        ),
+        (
+            "event_frame_presented",
+            ResponseV1::Event(EventV1::FramePresented {
+                seq: 7,
+                hash: 0xDEAD_BEEF,
+            }),
+            serde_json::json!({
+                "kind": "event",
+                "event": { "kind": "frame_presented", "seq": 7, "hash": 3_735_928_559_u64 }
+            }),
+        ),
+        (
+            "event_log",
+            ResponseV1::Event(EventV1::Log {
+                record: "video writer dropped 2 static frames".into(),
+            }),
+            serde_json::json!({
+                "kind": "event",
+                "event": { "kind": "log", "record": "video writer dropped 2 static frames" }
+            }),
+        ),
+        (
+            "subscribed",
+            ResponseV1::Subscribed {
+                kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+            },
+            serde_json::json!({
+                "kind": "subscribed",
+                "kinds": ["tree_changed", "frame_presented"],
+            }),
+        ),
+    ]
 }
 
 #[test]
