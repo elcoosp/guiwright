@@ -227,8 +227,6 @@ impl TreeService {
             .update_and_process_changes(update, &mut handler);
 
         let mut summary = TreeDiffSummary::default();
-        // Drain pending updates now that the tree exists — no: tree exists,
-        // pending must have been empty.
         for (key, old, new) in std::mem::take(&mut handler.updated) {
             self.index.remove(key, &old);
             self.index.add(key, &new);
