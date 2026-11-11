@@ -197,3 +197,21 @@ p95_us = 6000
 notes = "§10 element path: resolve + one frame render + clip-aware crop + baseline PNG encode/IO; M9 micro-suite guard (the crop hot path itself is the element_screenshot_crop row)"
 m0_measurable = true
 sample = "locator_element_screenshot"
+
+[[budget]]
+id = "wire_screenshot_window"
+name = "Wire screenshot (window frame render + PNG encode)"
+p50_us = 5000
+p95_us = 12000
+notes = "§7 render domain (M10): pump-consistency pass + one §10 render + PNG encode of the frame the Shot reply ships (480×240 fixture); M10 micro-suite guard"
+m0_measurable = true
+sample = "wire_screenshot_window"
+
+[[budget]]
+id = "tree_dump_walk"
+name = "Tree dump walk (1k nodes, rows built)"
+p50_us = 1500
+p95_us = 6000
+notes = "§7 tree-dump domain (M11): pump + per-window DFS walk + row build over the 1k tree (the serialize cost is the snapshot_serialize row); M11 micro-suite guard"
+m0_measurable = true
+sample = "tree_dump_walk"
