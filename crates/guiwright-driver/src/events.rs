@@ -58,6 +58,13 @@ impl EventHub {
         self.subs.is_empty()
     }
 
+    /// Does any subscriber want this kind? The publish path drains the log
+    /// tail unconditionally (a live tap, never a replay buffer) but builds
+    /// [`EventV1::Log`] frames only while a subscriber named the kind.
+    pub(crate) fn wants(&self, kind: EventKindV1) -> bool {
+        self.subs.iter().any(|sub| sub.kinds.contains(&kind))
+    }
+
     /// Fan one batch of events out to the matching subscribers. Returns
     /// the delivered count; closed connections unsubscribe themselves,
     /// full queues drop (and log once per drop, debug level).
