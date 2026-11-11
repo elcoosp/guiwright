@@ -19,8 +19,10 @@
 //! * [`expect`] — retry-until-timeout assertions (`expect(locator)
 //!   .to_be_visible()`, §16 "Assertions with retry").
 //!
-//! The crate depends **only** on `accesskit` + `accesskit_consumer`
-//! (the one universal substrate, §5.2 dependency rule).
+//! The crate's runtime dependencies are the one universal substrate —
+//! `accesskit` + `accesskit_consumer` (the §5.2 dependency rule) — plus
+//! `thiserror` (the error vocabulary) and `tracing` (the dropped-diff /
+//! pre-init warnings, §15.3). Nothing else: no framework, no runtime.
 //!
 //! [Guiwright architecture]: https://github.com/elcoosp/guiwright/blob/main/docs/architecture.md
 
