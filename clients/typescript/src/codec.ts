@@ -37,6 +37,11 @@ import {
   type SnapshotCmd,
   SnapshotV1,
   type SnapshotNodeV1,
+  SubscribeV1,
+  type SubscribeCmd,
+  EventKindV1,
+  type EventKind,
+  type EventV1,
 } from "./schema.ts";
 import { Decoder, Encoder } from "./postcard.ts";
 
@@ -136,11 +141,41 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       enc.u32(RequestV1.Snapshot);
       encodeSnapshotCmd(enc, req.cmd);
       break;
+    case "subscribe":
+      enc.u32(RequestV1.Subscribe);
+      encodeSubscribeCmd(enc, req.cmd);
+      break;
     case "bye":
       enc.u32(RequestV1.Bye);
       break;
   }
   return enc.finish();
+}
+
+function encodeSubscribeCmd(enc: Encoder, cmd: SubscribeCmd): void {
+  switch (cmd.kind) {
+    case "on": {
+      enc.u32(SubscribeV1.On);
+      enc.u32(cmd.kinds.length);
+      for (const kind of cmd.kinds) {
+        switch (kind) {
+          case "tree_changed":
+            enc.u32(EventKindV1.TreeChanged);
+            break;
+          case "frame_presented":
+            enc.u32(EventKindV1.FramePresented);
+            break;
+          case "log":
+            enc.u32(EventKindV1.Log);
+            break;
+        }
+      }
+      break;
+    }
+    case "off":
+      enc.u32(SubscribeV1.Off);
+      break;
+  }
 }
 
 function encodeSelector(enc: Encoder, sel: Selector): void {
@@ -372,6 +407,11 @@ function encodeSnapshotCmd(enc: Encoder, cmd: SnapshotCmd): void {
     case "full":
       enc.u32(SnapshotV1.Full);
       break;
+    case "filtered":
+      enc.u32(SnapshotV1.Filtered);
+      encodeSelector(enc, cmd.selector);
+      enc.u64(cmd.timeout_ms);
+      break;
   }
 }
 
@@ -486,8 +526,47 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       for (let i = 0; i < n; i += 1) nodes.push(decodeSnapshotNode(dec));
       return { kind: "tree_dump", tree_seq, node_count, focus, nodes };
     }
+    case 17: {
+      const event = decodeEventV1(dec);
+      return { kind: "event", event };
+    }
+    case 18: {
+      const n = dec.varint();
+      const kinds: EventKind[] = [];
+      for (let i = 0; i < n; i += 1) kinds.push(decodeEventKind(dec));
+      return { kind: "subscribed", kinds };
+    }
     default:
       throw new Error(`unknown response variant ${variant}`);
+  }
+}
+
+function decodeEventKind(dec: Decoder): EventKind {
+  const variant = dec.u32();
+  if (variant === EventKindV1.TreeChanged) return "tree_changed";
+  if (variant === EventKindV1.FramePresented) return "frame_presented";
+  if (variant === EventKindV1.Log) return "log";
+  throw new Error(`unknown event-kind variant ${variant}`);
+}
+
+function decodeEventV1(dec: Decoder): EventV1 {
+  const variant = dec.u32();
+  switch (variant) {
+    case 0: {
+      const seq = dec.u64n();
+      return { kind: "tree_changed", seq };
+    }
+    case 1: {
+      const seq = dec.u64n();
+      const hash = dec.u64n();
+      return { kind: "frame_presented", seq, hash };
+    }
+    case 2: {
+      const record = dec.str();
+      return { kind: "log", record };
+    }
+    default:
+      throw new Error(`unknown event variant ${variant}`);
   }
 }
 
