@@ -6,8 +6,10 @@
  *
  * Wire discipline: variants are append-only within the `V1` envelope —
  * `Video` follows `Bye` (M3), the `Window` domain follows `Video`
- * (M6, §16 v0.4 multi-window) and the `Gesture` domain follows `Window`
- * (M7, §9 input pipeline); a mid-enum reorder fails the Rust
+ * (M6, §16 v0.4 multi-window), the `Gesture` domain follows `Window`
+ * (M7, §9 input pipeline), the `Screenshot` domain follows `Gesture`
+ * (M10, §7 render domain) and the `Snapshot` domain follows `Screenshot`
+ * (M11, tree dump); a mid-enum reorder fails the Rust
  * discriminant pinning test and the schema golden at the same time.
  */
 
@@ -36,6 +38,8 @@ export const RequestV1 = {
   Video: 10,
   Window: 11,
   Gesture: 12,
+  Screenshot: 13,
+  Snapshot: 14,
 } as const;
 
 export const ClockV1 = {
@@ -83,6 +87,17 @@ export const GestureV1 = {
   Type: 4,
 } as const;
 
+/** §7 render domain (M10): window + element PNG shots (§10 capture). */
+export const ScreenshotV1 = {
+  Window: 0,
+  Element: 1,
+} as const;
+
+/** §7 tree-dump domain (M11): the full logical-tree read. */
+export const SnapshotV1 = {
+  Full: 0,
+} as const;
+
 // --- Response variants -------------------------------------------------------
 
 export const ResponseV1 = {
@@ -101,6 +116,8 @@ export const ResponseV1 = {
   Windows: 12,
   WindowUsed: 13,
   GestureDone: 14,
+  Shot: 15,
+  TreeDump: 16,
 } as const;
 
 export const ErrorCode = {
@@ -237,6 +254,36 @@ export interface WindowInfoV1 {
   focused: boolean;
 }
 
+/** §7 `Shot` (M10): the PNG bytes of the captured frame + provenance. */
+export interface Shot {
+  frame_seq: number;
+  width: number;
+  height: number;
+  /** PNG-encoded RGBA8 (lossless) — decode with any PNG decoder. */
+  png: Uint8Array;
+}
+
+/** One `TreeDump` row (M11): identity + the facts viewers render. */
+export interface SnapshotNodeV1 {
+  key: NodeKey;
+  /** AccessKit role `Debug` name (`Button`, …) — the selector vocabulary. */
+  role: string;
+  name: string | null;
+  value: string | null;
+  /** Window-relative bounds, physical px. */
+  bounds: [number, number, number, number] | null;
+  /** Immediate children — DFS order + this count rebuilds the tree. */
+  children: number;
+}
+
+/** §7 `TreeDump` (M11): the whole logical tree, depth-first per window. */
+export interface TreeDump {
+  tree_seq: number;
+  node_count: number;
+  focus: NodeKey | null;
+  nodes: SnapshotNodeV1[];
+}
+
 // --- Request/response union types --------------------------------------------
 
 export type GwpRequest =
@@ -259,7 +306,9 @@ export type GwpRequest =
   | { kind: "bye" }
   | { kind: "video"; cmd: VideoCmd }
   | { kind: "window"; cmd: WindowCmd }
-  | { kind: "gesture"; cmd: GestureCmd };
+  | { kind: "gesture"; cmd: GestureCmd }
+  | { kind: "screenshot"; cmd: ScreenshotCmd }
+  | { kind: "snapshot"; cmd: SnapshotCmd };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -339,6 +388,23 @@ export type GestureCmd =
   | { kind: "key"; key: string; modifiers: string[] }
   | { kind: "type"; text: string };
 
+/**
+ * §7 render domain (M10): pull a PNG shot of the session's current frame —
+ * the whole window, or the crop of one resolved element (§10 "crop from
+ * the window frame by the node's clip-aware rect — never re-render").
+ * Element resolution auto-waits `Attached` within `timeout_ms`.
+ */
+export type ScreenshotCmd =
+  | { kind: "window" }
+  | { kind: "element"; selector: Selector; timeout_ms: number };
+
+/**
+ * §7 tree-dump domain (M11): read the session's whole logical tree as
+ * data — the CDP "DOM snapshot" analog. Extensible: filtered/subtree
+ * dumps land behind new variants (append-only discipline).
+ */
+export type SnapshotCmd = { kind: "full" };
+
 export type GwpResponse =
   | ({ kind: "welcome" } & Welcome)
   | { kind: "pong" }
@@ -354,4 +420,6 @@ export type GwpResponse =
   | ({ kind: "video_file" } & VideoFile)
   | { kind: "windows"; windows: WindowInfoV1[] }
   | { kind: "window_used"; handle: string }
-  | { kind: "gesture_done"; frame_seq: number; detail: string };
+  | { kind: "gesture_done"; frame_seq: number; detail: string }
+  | ({ kind: "shot" } & Shot)
+  | ({ kind: "tree_dump" } & TreeDump);
