@@ -788,6 +788,43 @@ pub fn wire_event_delivery() -> Duration {
     measured.max(Duration::from_nanos(1))
 }
 
+// --- Log-tail sample (§7 event channel, the log-tail milestone) -----------
+
+/// The log-tail milestone's session-side cost: ONE publish-point batch —
+/// 64 records pushed through the bounded live tap (`LOG_TAIL_CAPACITY`,
+/// the same mechanics `ServerOptions::log_tail` runs server-side), then
+/// the tail drain + `EventV1::Log` frame build the publish performs while
+/// a `Log` subscriber is attached. Record formatting rides the §12
+/// `TraceLogLayer`-shaped JSON path upstream of the tap; the wire
+/// round-trip is the `wire_event_delivery` row.
+pub fn log_tail_batch() -> Duration {
+    use guiwright_driver::{LOG_TAIL_CAPACITY, LogTail};
+    use guiwright_proto::schema::{EventV1, GwpEvent};
+
+    let (tail, tap) = LogTail::new(LOG_TAIL_CAPACITY);
+    let records: Vec<String> = (0..64)
+        .map(|i| {
+            format!(
+                r#"{{"ts_ns":{},"level":"DEBUG","target":"gw-bench","pid":{},"message":"record {i}"}}"#,
+                i * 1_000,
+                std::process::id()
+            )
+        })
+        .collect();
+
+    let start = Instant::now();
+    for record in &records {
+        tap.send(record.clone());
+    }
+    let drained = tail.drain();
+    let events: Vec<GwpEvent> = drained
+        .into_iter()
+        .map(|record| GwpEvent::V1(EventV1::Log { record }))
+        .collect();
+    assert_eq!(events.len(), 64, "the batch drains fully");
+    start.elapsed()
+}
+
 // --- Filtered-dump sample (§7 tree domain, M13) ------------------------------
 
 /// §7 tree-dump domain (M13): one filtered dump over the 1k-node tree —
