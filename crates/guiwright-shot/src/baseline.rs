@@ -106,7 +106,8 @@ impl BaselineStore {
         )
     }
 
-    /// The full §10 flow for one `expect(...).to_have_screenshot(name)`.
+    /// The full §10 flow for one kit screenshot assertion
+    /// (`App::screenshot` / `Locator::screenshot`, §10).
     ///
     /// * missing baseline: write it when blessing, else fail;
     /// * present baseline: diff within tolerance budget (§10);
