@@ -110,6 +110,18 @@
       "name": "snapshot_full"
     },
     {
+      "frame_hex": "0d000000000e01000547726f757000c413",
+      "name": "snapshot_filtered"
+    },
+    {
+      "frame_hex": "06000000000f00020001",
+      "name": "subscribe_on"
+    },
+    {
+      "frame_hex": "03000000000f01",
+      "name": "subscribe_off"
+    },
+    {
       "frame_hex": "020000000009",
       "name": "bye"
     }
@@ -357,6 +369,51 @@
       },
       "frame_hex": "a00000000010030201000000000000000000000000000000000000020000000000000000000000000000000000000657696e646f77010854657374204170700001000000000000000000000000000000000000000000007e400000000000006e400100000000000000000000000000000000000206427574746f6e0104536176650001000000000000304000000000000030400000000000006140000000000000484000",
       "name": "tree_dump"
+    },
+    {
+      "decoded": {
+        "event": {
+          "kind": "tree_changed",
+          "seq": 4
+        },
+        "kind": "event"
+      },
+      "frame_hex": "0400000000110004",
+      "name": "event_tree_changed"
+    },
+    {
+      "decoded": {
+        "event": {
+          "hash": 3735928559,
+          "kind": "frame_presented",
+          "seq": 7
+        },
+        "kind": "event"
+      },
+      "frame_hex": "0900000000110107effdb6f50d",
+      "name": "event_frame_presented"
+    },
+    {
+      "decoded": {
+        "event": {
+          "kind": "log",
+          "record": "video writer dropped 2 static frames"
+        },
+        "kind": "event"
+      },
+      "frame_hex": "2800000000110224766964656f207772697465722064726f70706564203220737461746963206672616d6573",
+      "name": "event_log"
+    },
+    {
+      "decoded": {
+        "kind": "subscribed",
+        "kinds": [
+          "tree_changed",
+          "frame_presented"
+        ]
+      },
+      "frame_hex": "050000000012020001",
+      "name": "subscribed"
     }
   ],
   "schema": "gwp-golden/v1"
