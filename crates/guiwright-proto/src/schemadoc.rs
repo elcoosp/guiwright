@@ -221,7 +221,7 @@ fn domains_json() -> serde_json::Value {
             "event_kind": domain_table("EventKindV1", &[
                 (0, "TreeChanged", "the logical tree changed (the seq space TreeSnapshot/TreeDump report)"),
                 (1, "FramePresented", "a frame was presented { seq, hash } — the same vocabulary the trace recorder dedups on (§15.5)"),
-                (2, "Log", "a log record — not served yet; subscribing to it fails with Error { Unsupported } until the log-tail milestone"),
+                (2, "Log", "a log record — one logs.ndjson-shape JSON line per record, streamed from the session thread's per-session tracing tap; the tap is opt-in (ServerOptions::log_tail), and a session spawned without it still rejects the kind with Error { Unsupported } (the log-tail milestone)"),
             ]),
     })
 }
