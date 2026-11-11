@@ -15,7 +15,9 @@ use accesskit::{Node, NodeId, Role, TreeUpdate};
 use guiwright_core::test_util::Fixture;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::{Endpoint, GwpServerHandle};
-use guiwright_driver::{SeamRegistry, spawn_session_server};
+use guiwright_driver::{
+    SeamRegistry, ServerOptions, spawn_session_server, spawn_session_server_with,
+};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     ErrorCode, EventKindV1, EventV1, GwpEvent, RequestV1, ResponseV1, SubscribeV1,
@@ -244,8 +246,11 @@ async fn unsubscribing_stops_delivery() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_log_subscription_is_an_honest_unsupported() {
-    let path = socket_path("events-log.sock");
+async fn a_log_subscription_without_a_tail_is_an_honest_unsupported() {
+    // The log tail is opt-in (ServerOptions::log_tail): a session spawned
+    // without it still answers the honest capability error — all-or-nothing
+    // (the M8 typed-error discipline), never a silent no-op filter.
+    let path = socket_path("events-log-off.sock");
     let handle = spawn_session_server(path.clone(), || {
         MockAdapter::with_fixture(&Fixture::buttons())
     })
@@ -253,23 +258,144 @@ async fn a_log_subscription_is_an_honest_unsupported() {
     let mut client = Client::connect(&path).await.expect("client connects");
     client.handshake("guiwright-tests/0.1").await.unwrap();
 
-    // All-or-nothing: naming an unsupported kind fails the whole request
-    // (the M8 typed-error discipline — a capability answer, never a
-    // string match or a silent no-op filter).
     let err = client
         .request(RequestV1::Subscribe(SubscribeV1::On {
             kinds: vec![EventKindV1::TreeChanged, EventKindV1::Log],
         }))
         .await
-        .expect_err("the log kind is not served");
+        .expect_err("the log kind needs the session's log tail");
     let GwpError::Rejected { code, message } = err else {
         panic!("expected a typed rejection, got {err:?}");
     };
     assert_eq!(code, ErrorCode::Unsupported);
     assert!(
-        message.contains("log"),
+        message.contains("log tail"),
         "the message names the gap: {message}"
     );
+
+    handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_subscription_streams_the_session_tap_over_the_wire() {
+    // The log-tail milestone (M14): with `ServerOptions::log_tail(true)`
+    // the session thread's own `tracing` records stream as `EventV1::Log`
+    // — one `logs.ndjson`-shape JSON line per record. The subscription
+    // itself emits the first one (`event subscription registered`, a
+    // session-thread debug record), so the flow is deterministic.
+    let path = socket_path("events-log-tail.sock");
+    let handle = spawn_session_server_with(
+        path.clone(),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        ServerOptions {
+            log_tail: true,
+            ..ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    let ack = client
+        .request(RequestV1::Subscribe(SubscribeV1::On {
+            kinds: vec![EventKindV1::Log],
+        }))
+        .await
+        .expect("the tail session serves the Log kind");
+    assert_eq!(
+        ack,
+        ResponseV1::Subscribed {
+            kinds: vec![EventKindV1::Log]
+        },
+        "the ack echoes the filter"
+    );
+
+    // The registration record: emitted by the session thread while the
+    // subscribe command ran, published on that command's pump point.
+    let event = tokio::time::timeout(Duration::from_secs(5), client.next_event())
+        .await
+        .expect("the log record arrives")
+        .expect("event frame");
+    let record = match event {
+        GwpEvent::V1(EventV1::Log { record }) => record,
+        other => panic!("expected a log event, got {other:?}"),
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&record).expect("each record is one JSON line");
+    assert_eq!(parsed["level"], "DEBUG");
+    assert_eq!(parsed["target"], "guiwright_driver::server");
+    assert_eq!(parsed["message"], "event subscription registered");
+    assert!(
+        parsed["ts_ns"].is_u64(),
+        "the ts_ns field rides the logs.ndjson vocabulary: {parsed}"
+    );
+
+    // Later session-thread records keep flowing: a second subscription
+    // (re-subscribe) logs again on the session thread.
+    client
+        .request(RequestV1::Subscribe(SubscribeV1::On {
+            kinds: vec![EventKindV1::Log],
+        }))
+        .await
+        .expect("re-subscribe");
+    let event = tokio::time::timeout(Duration::from_secs(5), client.next_event())
+        .await
+        .expect("the second record arrives")
+        .expect("event frame");
+    assert!(
+        matches!(event, GwpEvent::V1(EventV1::Log { .. })),
+        "{event:?}"
+    );
+
+    handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_log_filter_coexists_with_tree_events() {
+    // Mixed filter: tree events and log records both flow; the kind
+    // filter still excludes the un-named kinds (frames here).
+    let path = socket_path("events-log-mixed.sock");
+    let shared: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts = Arc::clone(&shared);
+    let handle = spawn_session_server_with(
+        path.clone(),
+        move || MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts),
+        ServerOptions {
+            log_tail: true,
+            ..ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    client
+        .subscribe(&[EventKindV1::TreeChanged, EventKindV1::Log])
+        .await
+        .expect("subscribe");
+
+    shared.lock().unwrap().push(rename_save_update());
+
+    // The rename produces a tree event; the registration produced a log
+    // record. Drain a window and assert both kinds arrive, no frames.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(700);
+    let mut saw_tree = false;
+    let mut saw_log = false;
+    while tokio::time::Instant::now() < deadline && (!saw_tree || !saw_log) {
+        let event = tokio::time::timeout_at(deadline, client.next_event()).await;
+        let Ok(event) = event else { break }; // quiet window: done
+        match event.expect("event frame") {
+            GwpEvent::V1(EventV1::TreeChanged { .. }) => saw_tree = true,
+            GwpEvent::V1(EventV1::Log { record }) => {
+                saw_log = true;
+                serde_json::from_str::<serde_json::Value>(&record)
+                    .expect("log records stay one JSON line each");
+            }
+            other => panic!("the filter let a frame through: {other:?}"),
+        }
+    }
+    assert!(saw_tree, "the tree event arrived");
+    assert!(saw_log, "a log record arrived");
 
     handle.shutdown();
 }
