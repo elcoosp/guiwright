@@ -15,9 +15,9 @@ use std::fmt::Write;
 use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    AdapterInfoV1, ClockV1, ErrorCode, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1,
-    PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1,
-    TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
+    AdapterInfoV1, ClockV1, ErrorCode, EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1,
+    InspectV1, MockV1, NodeKeyV1, PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1,
+    SemActionV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
 };
 
 /// One output line of a REPL step.
@@ -80,6 +80,9 @@ pub struct Repl {
     /// title). Display-only state — the server bridge scopes the requests,
     /// the REPL just remembers what it aimed at.
     window: Option<(String, String)>,
+    /// The §7 event subscription (M12): `events on` sets this; events
+    /// drain between commands (see [`Repl::drain_events`]).
+    events_subscribed: bool,
     /// Set by `bye`/`exit`/`quit`.
     exit_requested: bool,
 }
@@ -95,6 +98,7 @@ impl Repl {
             timeout_ms: 5_000,
             current: None,
             window: None,
+            events_subscribed: false,
             exit_requested: false,
         })
     }
@@ -133,12 +137,53 @@ impl Repl {
             Err(err) => return Self::err(err),
         };
         match self.execute(&tokens).await {
-            Ok(lines) => StepOutcome {
-                lines,
-                exit: self.exit_requested,
-            },
-            Err(err) => Self::err(err),
+            Ok(lines) => {
+                let drained = self.drain_events().await;
+                StepOutcome {
+                    lines: drained.into_iter().chain(lines).collect(),
+                    exit: self.exit_requested,
+                }
+            }
+            Err(err) => {
+                let drained = self.drain_events().await;
+                let mut lines = drained;
+                lines.push(Line::Err(err));
+                StepOutcome {
+                    lines,
+                    exit: self.exit_requested,
+                }
+            }
         }
+    }
+
+    /// The event drain between commands (§7, M12): while subscribed, the
+    /// events that arrived while the last command ran print ahead of its
+    /// output — the live-debug view. The contract is honest about the
+    /// line-oriented shape: what landed mid-command is flushed here; what
+    /// lands while the prompt waits shows up with the next command.
+    async fn drain_events(&mut self) -> Vec<Line> {
+        const MAX_DRAIN: usize = 32;
+        if !self.events_subscribed {
+            return Vec::new();
+        }
+        let mut lines = Vec::new();
+        for _ in 0..MAX_DRAIN {
+            match self.conn.poll_event().await {
+                Ok(Some(event)) => lines.push(Line::Info(render_event(&event))),
+                Ok(None) => break,
+                Err(err) => {
+                    lines.push(Line::Warn(format!(
+                        "event stream broke ({err}) — re-run `events on` to resubscribe"
+                    )));
+                    self.events_subscribed = false;
+                    break;
+                }
+            }
+        }
+        if lines.len() == MAX_DRAIN {
+            lines.push(Line::Info("… more events pending".into()));
+        }
+        lines
     }
 
     /// The `last` line: the current node's identity + rect (§8.2 output).
@@ -177,6 +222,7 @@ impl Repl {
                 Ok(vec![Line::Ok("pong".into())])
             }
             "snapshot" => self.snapshot_command(tokens).await,
+            "events" => self.events_command(tokens).await,
             "timeout" => {
                 let ms = parse_ms(tokens.get(1))?;
                 self.timeout_ms = ms;
@@ -318,40 +364,11 @@ impl Repl {
     // --- locator resolution (§8) --------------------------------------------
 
     async fn get_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
-        let sub = tokens
-            .get(1)
-            .ok_or("`get` needs a locator — role | text | label | testid | value")?;
-        let selector = match sub.as_str() {
-            "role" => {
-                let role = tokens
-                    .get(2)
-                    .ok_or("`get role` needs a role — e.g. `get role Button Save`")?;
-                let name = joined(tokens.get(3..));
-                SelectorV1::Role {
-                    role: canonical_role(role),
-                    name: name.map(|text| TextMatchV1 {
-                        text,
-                        exact: false,
-                        ignore_case: true,
-                    }),
-                }
-            }
-            "text" => SelectorV1::Text(match_arg(tokens.get(2..), "get text <text>")?),
-            "label" => SelectorV1::Label(match_arg(tokens.get(2..), "get label <text>")?),
-            "testid" => SelectorV1::TestId(
-                tokens
-                    .get(2)
-                    .ok_or("`get testid` needs an id — e.g. `get testid save-btn`")?
-                    .clone(),
-            ),
-            "value" => SelectorV1::Value(match_arg(tokens.get(2..), "get value <text>")?),
-            other => {
-                return Err(format!(
-                    "unknown locator `{other}` — role | text | label | testid | value"
-                ));
-            }
-        };
-        let describe = render_selector(&selector);
+        let (selector, describe) = parse_selector(
+            tokens
+                .get(1..)
+                .ok_or("`get` needs a locator — role | text | label | testid | value")?,
+        )?;
         match self
             .request(RequestV1::Resolve {
                 selector,
@@ -730,8 +747,9 @@ impl Repl {
     /// `children` counts (§7 `Snapshot::Full` → `TreeDump`). The focused
     /// node is marked so live debugging sees selection changes.
     async fn snapshot_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
-        if tokens.get(1).map(String::as_str) != Some("full") {
-            return match self.request(RequestV1::TreeSnapshot).await? {
+        match tokens.get(1).map(String::as_str) {
+            // `snapshot` (no subcommand): the M0 summary.
+            None => match self.request(RequestV1::TreeSnapshot).await? {
                 ResponseV1::TreeSnapshot {
                     tree_seq,
                     node_count,
@@ -739,24 +757,48 @@ impl Repl {
                     "tree @{tree_seq}: {node_count} nodes"
                 ))]),
                 other => Err(unexpected("TreeSnapshot", &other)),
-            };
+            },
+            // `snapshot full` (M11): the whole tree.
+            Some("full") => Self::render_dump(
+                self.request(RequestV1::Snapshot(SnapshotV1::Full)).await?,
+                "full",
+            ),
+            // `snapshot under <get-args…>` (M13): one subtree, resolved
+            // like `get` (auto-wait, strict mode, window scope).
+            Some("under") => {
+                let (selector, describe) = parse_selector(tokens.get(2..).ok_or(
+                    "`snapshot under` needs a locator — e.g. `snapshot under role Group`",
+                )?)?;
+                let dump = self
+                    .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+                        selector,
+                        timeout_ms: self.timeout_ms,
+                    }))
+                    .await?;
+                Self::render_dump(dump, &format!("under {describe}"))
+            }
+            Some(other) => Err(format!(
+                "unknown `snapshot` form `{other}` — snapshot | snapshot full | snapshot under <get-args…>"
+            )),
         }
+    }
+
+    /// Render a `TreeDump` reply: the header line, then the DFS rows
+    /// indented by the rebuilt hierarchy (children counts + a running
+    /// stack; each walk starts at depth 0, §16 v0.4).
+    fn render_dump(resp: ResponseV1, form: &str) -> Result<Vec<Line>, String> {
         let ResponseV1::TreeDump {
             tree_seq,
             node_count,
             focus,
             nodes,
-        } = self.request(RequestV1::Snapshot(SnapshotV1::Full)).await?
+        } = resp
         else {
-            return Err("expected TreeDump".into());
+            return Err(unexpected("TreeDump", &resp));
         };
         let mut lines = vec![Line::Ok(format!(
-            "tree @{tree_seq}: {node_count} nodes (full)"
+            "tree @{tree_seq}: {node_count} nodes ({form})"
         ))];
-        // Rebuild the hierarchy from the DFS order + children counts: a
-        // node with children opens a level; drained counts close it. Each
-        // window's walk starts at depth 0 (the stack drains between
-        // windows by construction, §16 v0.4).
         let mut remaining: Vec<u32> = Vec::new();
         for node in &nodes {
             while let Some(top) = remaining.last() {
@@ -779,7 +821,7 @@ impl Repl {
                 let _ = write!(row, " = {value}");
             }
             if let Some([x0, y0, x1, y1]) = node.bounds {
-                let _ = write!(row, " @ [{x0},{y0} → {x1},{y1}]");
+                let _ = write!(row, " @ [{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
             }
             if Some(&node.key) == focus.as_ref() {
                 row.push_str(" (focus)");
@@ -790,6 +832,47 @@ impl Repl {
             }
         }
         Ok(lines)
+    }
+
+    // --- event channel (§7, M12) ---------------------------------------------
+
+    /// `events on | off` (§7, M12): subscribe this connection to tree +
+    /// frame events; the drain between commands prints what arrived (see
+    /// [`Repl::drain_events`]). The `Log` kind is intentionally not
+    /// subscribable here — the driver rejects it with `Unsupported` until
+    /// the log-tail milestone.
+    async fn events_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        match tokens.get(1).map(String::as_str) {
+            Some("on") => {
+                let resp = self
+                    .request(RequestV1::Subscribe(SubscribeV1::On {
+                        kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+                    }))
+                    .await?;
+                let ResponseV1::Subscribed { kinds } = resp else {
+                    return Err(unexpected("Subscribed", &resp));
+                };
+                self.events_subscribed = true;
+                let names: Vec<&str> = kinds
+                    .iter()
+                    .map(|kind| match kind {
+                        EventKindV1::TreeChanged => "tree_changed",
+                        EventKindV1::FramePresented => "frame_presented",
+                        EventKindV1::Log => "log",
+                    })
+                    .collect();
+                Ok(vec![Line::Ok(format!(
+                    "events: subscribed ({}) — flushed between commands",
+                    names.join(", ")
+                ))])
+            }
+            Some("off") => {
+                self.request(RequestV1::Subscribe(SubscribeV1::Off)).await?;
+                self.events_subscribed = false;
+                Ok(vec![Line::Ok("events: unsubscribed".into())])
+            }
+            _ => Err("`events` needs `on` or `off`".into()),
+        }
     }
 
     // --- render domain (§7, M10) -------------------------------------------------
@@ -837,6 +920,8 @@ impl Repl {
             "  ping                        liveness probe",
             "  snapshot                    tree snapshot summary",
             "  snapshot full               the whole tree, indented (§7 dump)",
+            "  snapshot under <get-args…>  one subtree, indented (M13)",
+            "  events on | off             tree/frame events flushed between commands (M12)",
             "  get role <Role> [name]      resolve a locator (strict mode)",
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
@@ -880,6 +965,61 @@ fn canonical_role(role: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+/// Parse the `get`-shaped locator vocabulary shared by `get` (§8) and
+/// `snapshot under` (M13): one selector + its rendered form (the same
+/// describe both print). The tokens start at the locator kind — `role …`,
+/// `text …`, `label …`, `testid …`, `value …`.
+fn parse_selector(tokens: &[String]) -> Result<(SelectorV1, String), String> {
+    let sub = tokens
+        .first()
+        .ok_or("needs a locator — role | text | label | testid | value")?;
+    let selector = match sub.as_str() {
+        "role" => {
+            let role = tokens
+                .get(1)
+                .ok_or("`role` needs a role — e.g. `role Button Save`")?;
+            let name = joined(tokens.get(2..));
+            SelectorV1::Role {
+                role: canonical_role(role),
+                name: name.map(|text| TextMatchV1 {
+                    text,
+                    exact: false,
+                    ignore_case: true,
+                }),
+            }
+        }
+        "text" => SelectorV1::Text(match_arg(tokens.get(1..), "text <text>")?),
+        "label" => SelectorV1::Label(match_arg(tokens.get(1..), "label <text>")?),
+        "testid" => SelectorV1::TestId(
+            tokens
+                .get(1)
+                .ok_or("`testid` needs an id — e.g. `testid save-btn`")?
+                .clone(),
+        ),
+        "value" => SelectorV1::Value(match_arg(tokens.get(1..), "value <text>")?),
+        other => {
+            return Err(format!(
+                "unknown locator `{other}` — role | text | label | testid | value"
+            ));
+        }
+    };
+    let describe = render_selector(&selector);
+    Ok((selector, describe))
+}
+
+/// The one-line event rendering between commands (§7, M12): the kind, the
+/// seq, and the facts a debugging human wants (the frame hash).
+fn render_event(event: &GwpEvent) -> String {
+    let GwpEvent::V1(inner) = event;
+    match inner {
+        EventV1::TreeChanged { seq } => format!("event tree_changed seq={seq}"),
+        EventV1::FramePresented { seq, hash } => {
+            format!("event frame_presented seq={seq} hash={hash:#x}")
+        }
+        EventV1::Log { record } => format!("event log {record}"),
     }
 }
 
