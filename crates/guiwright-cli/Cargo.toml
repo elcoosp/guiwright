@@ -28,6 +28,7 @@ tokio = { workspace = true, features = ["io-util", "net", "rt", "macros"] }
 serde_json.workspace = true
 guiwright-core.workspace = true
 guiwright-driver.workspace = true
+guiwright-shot.workspace = true
 guiwright-trace.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 tempfile.workspace = true
