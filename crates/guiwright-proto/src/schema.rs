@@ -44,8 +44,9 @@ pub enum RequestV1 {
     Hello { proto_version: u32, agent: String },
     /// Liveness/latency probe.
     Ping,
-    /// Snapshot of the logical tree (summary in M0; full snapshot rides the
-    /// blob side-channel once traces land).
+    /// Snapshot of the logical tree (summary in M0; the M11
+    /// [`RequestV1::Snapshot`] dump carries the full tree as typed
+    /// postcard).
     TreeSnapshot,
     /// Resolve a selector with the strict-mode policy (§8.2).
     Resolve {
@@ -89,6 +90,72 @@ pub enum RequestV1 {
     /// window's real pipeline. Wire discipline: appended after `Window`
     /// (discriminant 12); see [`RequestV1::Video`].
     Gesture(GestureV1),
+    /// Render domain (§7 `Screenshot { target }`, M10): pull a PNG shot of
+    /// the session's current frame — the whole window, or the crop of one
+    /// resolved element (§10 "crop from the window frame by the node's
+    /// clip-aware rect — never re-render"). Wire discipline: appended
+    /// after `Gesture` (discriminant 13); see [`RequestV1::Video`].
+    Screenshot(ScreenshotV1),
+    /// Tree-dump domain (§7 `TreeSnapshot` full form, M11): read the
+    /// session's whole logical tree as data — the CDP "DOM snapshot"
+    /// analog, and the M0 promise this file's `TreeSnapshot` doc carried
+    /// ("full snapshot rides the wire once traces land" — traces shipped
+    /// in M1; the dump rides as typed postcard, see [`SnapshotV1`]).
+    /// Wire discipline: appended after `Screenshot` (discriminant 14);
+    /// see [`RequestV1::Video`].
+    Snapshot(SnapshotV1),
+}
+
+/// `Snapshot { Full }` (§7 tree domain, M11). Extensible on purpose —
+/// filtered/subtree dumps land behind new variants, never a reshape of
+/// `Full` (the append-only discipline).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SnapshotV1 {
+    /// The whole logical tree, depth-first per window root (§16 v0.4
+    /// multi-window: one walk per window target, disjoint by
+    /// construction) → [`ResponseV1::TreeDump`].
+    Full,
+}
+
+/// One node of a [`ResponseV1::TreeDump`] (M11): the identity plus the
+/// facts the REPL/viewer render. `children` + depth-first order rebuild
+/// the hierarchy without a parent pointer per node.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotNodeV1 {
+    /// The node identity (the same vocabulary [`RequestV1::Action`] and
+    /// [`RequestV1::Inspect`] take — a dump row is directly usable as a
+    /// handle).
+    pub key: NodeKeyV1,
+    /// AccessKit role `Debug` name (`Button`, `TextInput`, …) — the same
+    /// vocabulary [`SelectorV1::Role`] speaks.
+    pub role: String,
+    /// Accessible name, when the node has one.
+    pub name: Option<String>,
+    /// Value (inputs), when the node carries one.
+    pub value: Option<String>,
+    /// Window-relative bounds, physical px (AccessKit convention).
+    pub bounds: Option<[f64; 4]>,
+    /// Immediate children — DFS order + this count rebuilds the tree.
+    pub children: u32,
+}
+
+/// `Screenshot { Window | Element { selector, timeout_ms } }` (§7 render
+/// domain, M10). The driver renders the window frame once (the §10
+/// "prefer `render_frame` headless on-demand" path) and answers with
+/// [`ResponseV1::Shot`]; element shots resolve the selector first (§8.2
+/// auto-wait over the wire, `Attached` within `timeout_ms`) and crop the
+/// frame by the resolved node's physical bounds.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ScreenshotV1 {
+    /// The full window frame (§10 window screenshot).
+    Window,
+    /// Resolve `selector` (auto-wait `Attached` within `timeout_ms`, like
+    /// [`RequestV1::Resolve`]) and crop the window frame by the resolved
+    /// node's physical bounds — never a re-render (§10 element rule).
+    Element {
+        selector: SelectorV1,
+        timeout_ms: u64,
+    },
 }
 
 /// `Clock { InstallVirtual | FastForward(ms) | RunFor(ms) | Pause | Resume |
@@ -351,6 +418,44 @@ pub enum ResponseV1 {
         frame_seq: u64,
         /// Human-readable synthesis summary (event count, positions).
         detail: String,
+    },
+    /// Render domain reply (§7 `Shot`, M10): the PNG bytes of the captured
+    /// frame — the whole window, or the element crop — with the session
+    /// frame they came from and their pixel dimensions. The payload rides
+    /// the response frame directly: PNG is already losslessly compressed
+    /// (DEFLATE), so the §15.6 LZ4 blob stage would double-encode without
+    /// shrinking it; [`MAX_FRAME_BYTES`] bounds hostile sizes. Append-only
+    /// wire discipline — see [`RequestV1::Video`].
+    Shot {
+        /// The session frame the pixels came from (the same seq space
+        /// [`ResponseV1::ActionDone`] reports — clients can correlate).
+        frame_seq: u64,
+        /// Pixel width of `png` (the full frame for `Window`, the crop
+        /// width for `Element`).
+        width: u32,
+        /// Pixel height of `png`.
+        height: u32,
+        /// PNG-encoded RGBA8 (lossless, §10 "Output: PNG").
+        png: Vec<u8>,
+    },
+    /// Tree-dump domain reply (§7 full `TreeSnapshot`, M11): the whole
+    /// logical tree as typed postcard — depth-first per window root, so
+    /// `children` counts rebuild the hierarchy. The dump rides the frame
+    /// directly (a debugging payload, bounded by [`MAX_FRAME_BYTES`]); the
+    /// LZ4 blob stage stays with the trace-frame traffic it was sized for
+    /// (§15.6), keeping other-language clients dependency-free.
+    /// Append-only wire discipline — see [`RequestV1::Video`].
+    TreeDump {
+        /// The tree generation the dump was taken at (the same seq space
+        /// [`ResponseV1::TreeSnapshot`] reports).
+        tree_seq: u64,
+        /// Dumped node count (== `nodes.len()`, redundancy for readers).
+        node_count: usize,
+        /// The focused node, when the tree has one.
+        focus: Option<NodeKeyV1>,
+        /// Depth-first per window root (§16 v0.4): every window's subtree
+        /// appears once, roots in adapter-reported window order.
+        nodes: Vec<SnapshotNodeV1>,
     },
 }
 
@@ -895,13 +1000,88 @@ mod tests {
         }
     }
 
+    /// §7 render domain round-trip (M10): the `Screenshot` requests and
+    /// the `Shot` reply (PNG payload survives postcard verbatim).
+    #[test]
+    fn screenshot_domain_roundtrip() {
+        let requests = [
+            GwpRequest::V1(RequestV1::Screenshot(ScreenshotV1::Window)),
+            GwpRequest::V1(RequestV1::Screenshot(ScreenshotV1::Element {
+                selector: SelectorV1::Role {
+                    role: "Button".into(),
+                    name: Some(TextMatchV1 {
+                        text: "Save".into(),
+                        exact: false,
+                        ignore_case: true,
+                    }),
+                },
+                timeout_ms: 5000,
+            })),
+        ];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [GwpResponse::V1(ResponseV1::Shot {
+            frame_seq: 7,
+            width: 120,
+            height: 32,
+            png: vec![0x89, b'P', b'N', b'G', 0, 1, 2, 3],
+        })];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
+    /// §7 tree-dump domain round-trip (M11): the `Snapshot::Full` request
+    /// and the `TreeDump` reply (nested `SnapshotNodeV1` rows survive
+    /// postcard verbatim).
+    #[test]
+    fn tree_dump_domain_roundtrip() {
+        let requests = [GwpRequest::V1(RequestV1::Snapshot(SnapshotV1::Full))];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [GwpResponse::V1(ResponseV1::TreeDump {
+            tree_seq: 3,
+            node_count: 2,
+            focus: Some(NodeKeyV1::AccessKit {
+                tree: [0u8; 16],
+                node: 0,
+            }),
+            nodes: vec![SnapshotNodeV1 {
+                key: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 0,
+                },
+                role: "Window".into(),
+                name: Some("Test App".into()),
+                value: None,
+                bounds: Some([0.0, 0.0, 480.0, 240.0]),
+                children: 1,
+            }],
+        })];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
     /// postcard encodes enum variants as a varint of the variant index, so
     /// **variant order is the wire format**. §7 "old clients get clean
     /// errors" → within a `V1` envelope variants are append-only: pre-M3
     /// requests keep discriminants 0–9 (`Bye` = 9), `Video` appends at
-    /// 10, the M6 `Window` domain at 11 and the M7 `Gesture` domain at 12;
+    /// 10, the M6 `Window` domain at 11, the M7 `Gesture` domain at 12,
+    /// the M10 render domain at 13 and the M11 tree-dump domain at 14;
     /// responses keep 0–10 (`Bye` = 10), `VideoFile` appends at 11, the
-    /// M6 window replies at 12–13 and the M7 `GestureDone` reply at 14.
+    /// M6 window replies at 12–13, the M7 `GestureDone` reply at 14, the
+    /// M10 `Shot` reply at 15 and the M11 `TreeDump` reply at 16.
     /// Reordering or inserting mid-enum fails this test — add new variants
     /// at the end and extend the pin list instead.
     #[test]
@@ -967,6 +1147,13 @@ mod tests {
             discriminant(&RequestV1::Gesture(GestureV1::Wheel { dx: 0.0, dy: 0.0 })),
             12
         );
+        // M10 (§7 render domain): the screenshot domain appends after Gesture.
+        assert_eq!(
+            discriminant(&RequestV1::Screenshot(ScreenshotV1::Window)),
+            13
+        );
+        // M11 (§7 tree domain): the tree-dump domain appends after Screenshot.
+        assert_eq!(discriminant(&RequestV1::Snapshot(SnapshotV1::Full)), 14);
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1087,6 +1274,26 @@ mod tests {
             }),
             14
         );
+        // M10 (§7 render domain): the Shot reply appends after GestureDone.
+        assert_eq!(
+            discriminant(&ResponseV1::Shot {
+                frame_seq: 0,
+                width: 0,
+                height: 0,
+                png: Vec::new()
+            }),
+            15
+        );
+        // M11 (§7 tree domain): the TreeDump reply appends after Shot.
+        assert_eq!(
+            discriminant(&ResponseV1::TreeDump {
+                tree_seq: 0,
+                node_count: 0,
+                focus: None,
+                nodes: Vec::new()
+            }),
+            16
+        );
     }
 
     /// Nested domain + `ErrorCode` indices, pinned for other-language clients.
@@ -1170,6 +1377,22 @@ mod tests {
                 text: String::new()
             }),
             4
+        );
+        // M10 (§7 render domain): the Screenshot element arm appends after
+        // the Window arm (clients/typescript/src/schema.ts).
+        assert_eq!(
+            discriminant(&RequestV1::Screenshot(ScreenshotV1::Element {
+                selector: SelectorV1::TestId(String::new()),
+                timeout_ms: 0
+            })),
+            13
+        );
+        assert_eq!(
+            discriminant(&ScreenshotV1::Element {
+                selector: SelectorV1::TestId(String::new()),
+                timeout_ms: 0
+            }),
+            1
         );
         // ErrorCode is flat on the wire (u8 in Error payloads) — appending
         // UnknownWindow keeps the pre-M6 codes byte-identical.
