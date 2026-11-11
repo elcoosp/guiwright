@@ -567,19 +567,19 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Auto-waiting / actionability | §8.3 event-driven checks | MVP |
 | Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths) | MVP |
 | Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines | MVP |
-| Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff) | MVP |
-| Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML | MVP (nextest-native), v0.5 (own runner) |
+| Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); the §7 render domain ships them over GWP (M10) | MVP (embedded), M10 (wire) |
+| Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML; the §16 v0.5 own runner is `guiwright test` over `gwtest/v1` specs (M5) | MVP (nextest-native), M5 (own runner) |
 | Trace viewer (time travel, live) | §12 | v0.3 |
-| Codegen + inspector overlay | §13 | v0.3 |
-| Video recording | §10 (ffmpeg pipe) | v0.4 |
+| Codegen + inspector overlay | §13 | M2/M4 (codegen), M8 (live overlay) |
+| Video recording | §10 (ffmpeg pipe) | M3 (recorder + wire domain) |
 | Virtual clock (`clock.install/fastForward`) | §14 | v0.3 (egui/slint/masonry/freya), v0.5 (gpui/iced live) |
-| Network mocking analog (state seams) | §14 `Mock` domain | v0.4 |
-| Multi-window / tabs | targets per window (all frameworks support multi-window; freya-testing single-window initially) | v0.4 |
+| Network mocking analog (state seams) | §14 `Mock` domain | M2 (`#[seam]` + registry + wire) |
+| Multi-window / tabs | targets per window (all frameworks support multi-window; freya-testing single-window initially) | M6 |
 | Headless CI | §11 | MVP |
 | Error context (call log, DOM snapshot on failure) | error embeds tree snapshot + trace link | MVP |
-| REPL / debugging | `guiwright repl` over GWP | v0.4 |
+| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump) |
 | Component testing | embedded mode = widget-level (Simulator/RenderRoot/harness) | MVP |
-| Other-language clients | GWP over WS; schema-published | v1 |
+| Other-language clients | GWP over TCP/UDS/WS; schema-published | M3 (TypeScript client + e2e) |
 
 ---
 
