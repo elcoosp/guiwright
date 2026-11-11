@@ -154,3 +154,101 @@ test("requests before handshake fail fast (§7 conversation)", async () => {
     server.closeAllConnections?.();
   }
 });
+
+/** A mock server that speaks the §7 event channel (M12): Subscribe →
+ * Subscribed + a pushed Event frame, interleaved with normal replies. */
+function startEventServer(): Promise<{ port: number; close: () => void }> {
+  const server = net.createServer((socket) => {
+    socket.on("data", (chunk: Buffer) => {
+      const len = chunk.readUInt32LE(0);
+      const body = chunk.subarray(4, 4 + len);
+      const variant = body[1];
+      const reply = (payload: Uint8Array) => {
+        const frame = new Uint8Array(4 + payload.length);
+        const view = new DataView(frame.buffer);
+        view.setUint32(0, payload.length, true);
+        frame.set(payload, 4);
+        socket.write(frame);
+      };
+      const resp = (payload: number[]) => reply(Uint8Array.from(payload));
+
+      if (variant === 0) {
+        // Hello → Welcome (the same hand-encoded shape as startMockServer).
+        const enc = new Encoder();
+        enc.u32(0).u32(0).u32(1);
+        enc.str("mock-events");
+        enc.u64(1);
+        enc.u64(2);
+        enc.str("mock");
+        enc.str("fixture");
+        enc.str("0.1");
+        for (const bit of [true, false, true, false, false, true]) enc.bool(bit);
+        resp(Array.from(enc.finish()));
+        return;
+      }
+      if (variant === 1) {
+        // Ping → Pong, with an Event frame pushed right before it — the
+        // interleave the client's demux must survive.
+        resp([0, 17, 0, 4]); // Event(TreeChanged { seq: 4 })
+        resp([0, 1]); // Pong
+        return;
+      }
+      if (variant === 15) {
+        // Subscribe → Subscribed { kinds } (+ the event half above).
+        const cmd = body[2];
+        if (cmd === 0) {
+          resp([0, 18, 2, 0, 1]); // Subscribed { kinds: [TreeChanged, FramePresented] }
+        } else {
+          resp([0, 18, 0]); // Subscribed { kinds: [] }
+        }
+        return;
+      }
+      if (variant === 9) {
+        resp([0, 10]);
+        socket.end();
+        return;
+      }
+      const enc = new Encoder();
+      enc.u32(0).u32(9).u32(7);
+      enc.str("not implemented in the event mock");
+      resp(Array.from(enc.finish()));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as net.AddressInfo;
+      resolve({ port: addr.port, close: () => server.close() });
+    });
+  });
+}
+
+test("subscribe + nextEvent demux pushed events from responses (§7, M12)", async () => {
+  const server = await startEventServer();
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    // The ack echoes the honored kinds.
+    const ack = await client.subscribe(["tree_changed", "frame_presented"]);
+    assert.deepEqual(ack, ["tree_changed", "frame_presented"]);
+
+    // A ping whose Pong arrives interleaved with a pushed Event frame:
+    // the demux must land the Pong on the request and the Event in the
+    // buffer — never swapped.
+    await client.ping();
+    const event = await client.nextEvent();
+    assert.deepEqual(event, { kind: "tree_changed", seq: 4 });
+
+    // The waiter path: arm nextEvent() BEFORE the event arrives.
+    const pending = client.nextEvent();
+    await client.ping(); // the mock pushes an event before every Pong
+    assert.deepEqual(await pending, { kind: "tree_changed", seq: 4 });
+
+    // Off: the ack is empty.
+    await client.unsubscribe();
+    await client.close();
+  } finally {
+    server.close();
+    server.closeAllConnections?.();
+  }
+});
