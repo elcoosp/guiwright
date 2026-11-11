@@ -136,6 +136,31 @@
         }
       ]
     },
+    "screenshot": {
+      "name": "ScreenshotV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "Window",
+          "payload": "— → Shot; the full window frame, rendered once (§10 render-on-demand path)"
+        },
+        {
+          "index": 1,
+          "name": "Element",
+          "payload": "{ selector: SelectorV1, timeout_ms: u64 varint } → Shot; resolve the node (auto-wait Attached within timeout_ms, §8.2) and crop the window frame by the resolved physical bounds — never a re-render (§10 element rule)"
+        }
+      ]
+    },
+    "snapshot": {
+      "name": "SnapshotV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "Full",
+          "payload": "— → TreeDump; the whole logical tree, depth-first per window root (§16 v0.4), each row carrying key/role/name/value/bounds/children — the CDP 'DOM snapshot' analog (M11)"
+        }
+      ]
+    },
     "video": {
       "name": "VideoV1",
       "variants": [
@@ -271,6 +296,16 @@
       "index": 12,
       "name": "Gesture",
       "payload": "GestureV1 (see domains.gesture)"
+    },
+    {
+      "index": 13,
+      "name": "Screenshot",
+      "payload": "ScreenshotV1 (see domains.screenshot)"
+    },
+    {
+      "index": 14,
+      "name": "Snapshot",
+      "payload": "SnapshotV1 (see domains.snapshot)"
     }
   ],
   "responses": [
@@ -348,6 +383,16 @@
       "index": 14,
       "name": "GestureDone",
       "payload": "{ frame_seq: u64 varint, detail: string }"
+    },
+    {
+      "index": 15,
+      "name": "Shot",
+      "payload": "{ frame_seq: u64 varint, width: u32 varint, height: u32 varint, png: seq<u8> (PNG-encoded RGBA8) } — PNG rides the frame directly (already DEFLATE-compressed; the LZ4 blob stage would double-encode)"
+    },
+    {
+      "index": 16,
+      "name": "TreeDump",
+      "payload": "{ tree_seq: u64 varint, node_count: u64 varint, focus: option<NodeKeyV1>, nodes: seq<SnapshotNodeV1 { key: NodeKeyV1, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, children: u32 varint }> } — depth-first per window root; children counts rebuild the hierarchy"
     }
   ],
   "schema": "gwp-schema/v1",
