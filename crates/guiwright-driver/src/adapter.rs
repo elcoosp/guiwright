@@ -209,8 +209,10 @@ impl Default for GesturePacing {
     }
 }
 
-/// A captured frame (§6.1 `FrameRef`). M0 adapters ship hash-only frames;
-/// pixel buffers arrive with the capture pipeline (§15.5, M1).
+/// A captured frame (§6.1 `FrameRef`): the presented stamp plus the
+/// pixel buffer when the adapter has one (§15.5 capture pipeline —
+/// `last_frame` gives hash-only `FrameRef`s on adapters without a
+/// pixel path, the §6.2 capability row is the contract).
 #[derive(Clone, Debug)]
 pub struct FrameRef {
     pub stamp: FrameStamp,
