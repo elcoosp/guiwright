@@ -5,11 +5,17 @@
 //! shared [`crate::conn`] one — a TCP session is byte-identical to a UDS
 //! session, only the socket differs.
 
+use std::collections::VecDeque;
+
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::GwpError;
+use crate::conn::{read_next_event, read_response_demuxing};
 use crate::framing::{read_frame, write_frame};
-use crate::schema::{AdapterInfoV1, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1, ResponseV1};
+use crate::schema::{
+    AdapterInfoV1, EventKindV1, GwpEvent, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1,
+    ResponseV1, SubscribeV1,
+};
 
 pub use crate::conn::Handler;
 
@@ -38,12 +44,18 @@ pub async fn serve<H: Handler>(listener: TcpListener, mut make_handler: impl FnM
 #[derive(Debug)]
 pub struct Client {
     stream: TcpStream,
+    /// Events that interleaved earlier responses (§7, M12): the same
+    /// buffering contract as the UDS [`crate::uds::Client`].
+    events: VecDeque<GwpEvent>,
 }
 
 impl Client {
     pub async fn connect(addr: &str) -> Result<Client, GwpError> {
         let stream = TcpStream::connect(addr).await?;
-        Ok(Client { stream })
+        Ok(Client {
+            stream,
+            events: VecDeque::new(),
+        })
     }
 
     /// Connected peer address (the server's bound port lives here for
@@ -83,14 +95,45 @@ impl Client {
     }
 
     /// One request → response round-trip; `Error` replies map to
-    /// [`GwpError::Rejected`].
+    /// [`GwpError::Rejected`]. Pushed [`ResponseV1::Event`] frames that
+    /// interleave are buffered for [`Client::next_event`] (§7, M12).
     pub async fn request(&mut self, request: RequestV1) -> Result<ResponseV1, GwpError> {
         write_frame(&mut self.stream, &GwpRequest::V1(request)).await?;
-        let resp: GwpResponse = read_frame(&mut self.stream).await?;
-        let GwpResponse::V1(inner) = resp;
+        let inner = read_response_demuxing(&mut self.stream, &mut self.events).await?;
         match inner {
             ResponseV1::Error { code, message } => Err(GwpError::Rejected { code, message }),
             other => Ok(other),
+        }
+    }
+
+    /// The next pushed event (§7, M12) — the TCP mirror of the UDS
+    /// [`crate::uds::Client::next_event`].
+    pub async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
+        read_next_event(&mut self.stream, &mut self.events).await
+    }
+
+    /// Subscribe this connection to the named event kinds (§7, M12).
+    pub async fn subscribe(&mut self, kinds: &[EventKindV1]) -> Result<(), GwpError> {
+        let resp = self
+            .request(RequestV1::Subscribe(SubscribeV1::On {
+                kinds: kinds.to_vec(),
+            }))
+            .await?;
+        match resp {
+            ResponseV1::Subscribed { .. } => Ok(()),
+            other => Err(GwpError::Protocol(format!(
+                "expected Subscribed, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Drop this connection's event subscription (§7, M12).
+    pub async fn unsubscribe(&mut self) -> Result<(), GwpError> {
+        match self.request(RequestV1::Subscribe(SubscribeV1::Off)).await? {
+            ResponseV1::Subscribed { kinds } if kinds.is_empty() => Ok(()),
+            other => Err(GwpError::Protocol(format!(
+                "expected an empty Subscribed ack, got {other:?}"
+            ))),
         }
     }
 
