@@ -22,7 +22,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -64,20 +64,20 @@ tempfile = "3.27.0"
 proptest = "1.12.0"
 
 # Internal crates
-guiwright-shot = { path = "crates/guiwright-shot", version = "0.3.0" }
-guiwright-trace = { path = "crates/guiwright-trace", version = "0.3.0" }
-guiwright-adapter-iced = { path = "crates/guiwright-adapter-iced", version = "0.3.0" }
-guiwright-adapter-freya = { path = "crates/guiwright-adapter-freya", version = "0.3.0" }
-guiwright-macros = { path = "crates/guiwright-macros", version = "0.3.0" }
-guiwright-kit = { path = "crates/guiwright-kit", version = "0.3.0" }
-guiwright-inspect = { path = "crates/guiwright-inspect", version = "0.3.0" }
-guiwright-viewer = { path = "crates/guiwright-viewer", version = "0.3.0" }
+guiwright-shot = { path = "crates/guiwright-shot", version = "0.4.0" }
+guiwright-trace = { path = "crates/guiwright-trace", version = "0.4.0" }
+guiwright-adapter-iced = { path = "crates/guiwright-adapter-iced", version = "0.4.0" }
+guiwright-adapter-freya = { path = "crates/guiwright-adapter-freya", version = "0.4.0" }
+guiwright-macros = { path = "crates/guiwright-macros", version = "0.4.0" }
+guiwright-kit = { path = "crates/guiwright-kit", version = "0.4.0" }
+guiwright-inspect = { path = "crates/guiwright-inspect", version = "0.4.0" }
+guiwright-viewer = { path = "crates/guiwright-viewer", version = "0.4.0" }
 serde_json = "1.0.154"
-guiwright-core = { path = "crates/guiwright-core", version = "0.3.0" }
-guiwright-proto = { path = "crates/guiwright-proto", version = "0.3.0" }
-guiwright-driver = { path = "crates/guiwright-driver", version = "0.3.0" }
-guiwright-adapter-egui = { path = "crates/guiwright-adapter-egui", version = "0.3.0" }
-guiwright-adapter-masonry = { path = "crates/guiwright-adapter-masonry", version = "0.3.0" }
+guiwright-core = { path = "crates/guiwright-core", version = "0.4.0" }
+guiwright-proto = { path = "crates/guiwright-proto", version = "0.4.0" }
+guiwright-driver = { path = "crates/guiwright-driver", version = "0.4.0" }
+guiwright-adapter-egui = { path = "crates/guiwright-adapter-egui", version = "0.4.0" }
+guiwright-adapter-masonry = { path = "crates/guiwright-adapter-masonry", version = "0.4.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

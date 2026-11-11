@@ -12,7 +12,7 @@ accesskit_consumer.workspace = true
 guiwright-driver.workspace = true
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
-guiwright-macros = { path = "../guiwright-macros", version = "0.3.0" }
+guiwright-macros = { path = "../guiwright-macros", version = "0.4.0" }
 guiwright-inspect.workspace = true
 guiwright-viewer.workspace = true
 accesskit.workspace = true
