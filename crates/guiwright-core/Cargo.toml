@@ -14,7 +14,6 @@ accesskit.workspace = true
 accesskit_consumer.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-twox-hash.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
