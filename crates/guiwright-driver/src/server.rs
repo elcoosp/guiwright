@@ -21,7 +21,8 @@ use tokio::sync::{mpsc, oneshot};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
-    RequestV1, ResponseV1, SelectorV1, SemActionV1, VideoV1, WindowInfoV1, WindowV1,
+    RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, VideoV1,
+    WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -439,7 +440,92 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
         RequestV1::Video(cmd) => video_response(session, cmd),
         RequestV1::Window(cmd) => window_response(session, cmd),
+        RequestV1::Screenshot(cmd) => screenshot_response(session, cmd, window.as_deref()),
+        RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd),
         RequestV1::Bye => ResponseV1::Bye,
+    }
+}
+
+/// §7 render domain (§10 capture, M10): window shots render the frame
+/// once; element shots resolve first (auto-wait within `timeout_ms`, the
+/// same `Resolve` arm discipline, honoring the connection's window scope,
+/// §16 v0.4) and crop by the resolved bounds.
+fn screenshot_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    cmd: ScreenshotV1,
+    window: Option<&str>,
+) -> ResponseV1 {
+    match cmd {
+        ScreenshotV1::Window => match session.screenshot_window() {
+            Ok(shot) => shot_response(shot),
+            Err(err) => error_response(err),
+        },
+        ScreenshotV1::Element {
+            selector,
+            timeout_ms,
+        } => {
+            // Window scope (§16 v0.4): element shots aim at the
+            // connection's active target, exactly like `Resolve`.
+            let scope = match window {
+                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => return error_response(err),
+                },
+                _ => None,
+            };
+            session.set_resolve_scope(scope);
+            let result = resolve_result(session, selector, timeout_ms).and_then(|resolved| {
+                let resolved = resolved
+                    .ok_or_else(|| CoreError::other("resolve satisfied by absence".to_string()))?;
+                session.screenshot_element(&resolved.key)
+            });
+            session.clear_resolve_scope();
+            match result {
+                Ok(shot) => shot_response(shot),
+                Err(err) => error_response(err),
+            }
+        }
+    }
+}
+
+/// The `Shot` reply shape (§7): session frame + pixel dimensions + PNG.
+fn shot_response(shot: crate::session::WireShot) -> ResponseV1 {
+    ResponseV1::Shot {
+        frame_seq: shot.frame_seq,
+        width: shot.width,
+        height: shot.height,
+        png: shot.png,
+    }
+}
+
+/// §7 tree-dump domain (M11): the whole logical tree as typed rows —
+/// session-wide by design (the resolve scope narrows locators, not
+/// whole-tree reads).
+fn tree_dump_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    cmd: SnapshotV1,
+) -> ResponseV1 {
+    match cmd {
+        SnapshotV1::Full => {
+            let dump = session.tree_dump();
+            ResponseV1::TreeDump {
+                tree_seq: dump.tree_seq,
+                node_count: dump.node_count,
+                focus: dump.focus.map(Into::into),
+                nodes: dump
+                    .nodes
+                    .into_iter()
+                    .map(|node| guiwright_proto::schema::SnapshotNodeV1 {
+                        key: node.key.into(),
+                        role: node.role,
+                        name: node.name,
+                        value: node.value,
+                        bounds: node.bounds,
+                        children: node.children,
+                    })
+                    .collect(),
+            }
+        }
     }
 }
 
