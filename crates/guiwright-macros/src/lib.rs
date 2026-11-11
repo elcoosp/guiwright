@@ -1,5 +1,5 @@
-//! Proc macros for Guiwright (§5.2 `guiwright-kit`: `#[guiwright::test]`,
-//! `#[guiwright_kit::seam]`, fixtures).
+//! Proc macros for Guiwright (§5.2 `guiwright-kit`: `#[guiwright_kit::test]`,
+//! `#[guiwright_kit::seam]`, `register_seams!`, fixtures).
 //!
 //! `#[test]` turns a plain function taking `&mut App` into a `#[test]`
 //! that launches the embedded harness (§5.1 "embedded mode: guiwright-kit
