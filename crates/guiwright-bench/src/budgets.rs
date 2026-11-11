@@ -96,6 +96,11 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         "locator_element_screenshot",
         crate::samples::locator_element_screenshot,
     ),
+    (
+        "wire_screenshot_window",
+        crate::samples::wire_screenshot_window,
+    ),
+    ("tree_dump_walk", crate::samples::tree_dump_walk),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
