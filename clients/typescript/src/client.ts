@@ -28,6 +28,8 @@ import {
   type Selector,
   type SemAction,
   type NodeKey,
+  type Shot,
+  type TreeDump,
   type VideoCmd,
   type Welcome,
   PointerButtonV1,
@@ -344,6 +346,51 @@ export class GwpClient {
     const resp = await this.request({ kind: "gesture", cmd });
     if (resp.kind !== "gesture_done") throw new Error(`expected GestureDone, got ${resp.kind}`);
     return { frame_seq: resp.frame_seq, detail: resp.detail };
+  }
+
+  // --- screenshots (§7 render domain, M10) ------------------------------------
+
+  /**
+   * `screenshot window` — pull the full window frame as PNG bytes (§10
+   * render-on-demand path). The reply carries the session frame the
+   * pixels came from and their dimensions; adapters without a pixel path
+   * reject with `Unsupported`.
+   */
+  async screenshotWindow(): Promise<Shot> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "screenshot", cmd: { kind: "window" } });
+    if (resp.kind !== "shot") throw new Error(`expected Shot, got ${resp.kind}`);
+    return { frame_seq: resp.frame_seq, width: resp.width, height: resp.height, png: resp.png };
+  }
+
+  /**
+   * `screenshot element` — resolve `selector` (auto-waiting `Attached`
+   * within `timeoutMs`, §8.2 over the wire) and crop the window frame by
+   * the resolved node's physical bounds — never a re-render (§10 element
+   * rule). Nodes without bounds reject with an honest error.
+   */
+  async screenshotElement(selector: Selector, timeoutMs = 5000): Promise<Shot> {
+    this.assertHandshaked();
+    const resp = await this.request({
+      kind: "screenshot",
+      cmd: { kind: "element", selector, timeout_ms: timeoutMs },
+    });
+    if (resp.kind !== "shot") throw new Error(`expected Shot, got ${resp.kind}`);
+    return { frame_seq: resp.frame_seq, width: resp.width, height: resp.height, png: resp.png };
+  }
+
+  /**
+   * `snapshot full` — read the session's whole logical tree as data (§7
+   * tree-dump domain, M11): depth-first per window root, `children`
+   * counts rebuilding the hierarchy, the focused node included. Session-
+   * wide by design — the connection's window target narrows locators,
+   * not whole-tree reads.
+   */
+  async treeDump(): Promise<TreeDump> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "snapshot", cmd: { kind: "full" } });
+    if (resp.kind !== "tree_dump") throw new Error(`expected TreeDump, got ${resp.kind}`);
+    return { tree_seq: resp.tree_seq, node_count: resp.node_count, focus: resp.focus, nodes: resp.nodes };
   }
 
   /** The optional button name on the mouse helpers (default primary). */
