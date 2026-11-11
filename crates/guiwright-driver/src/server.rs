@@ -13,6 +13,8 @@
 
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::net::{TcpListener, UnixListener};
@@ -20,14 +22,16 @@ use tokio::sync::{mpsc, oneshot};
 
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
-    RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, VideoV1,
-    WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1,
+    NodeKeyV1, PROTO_VERSION, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1,
+    SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
 
 use crate::adapter::{AdapterMeta, FrameworkAdapter, SemAction};
+use crate::clock::FRAME_STEP;
+use crate::events::{EventHub, Subscriber};
 use crate::session::Session;
 use guiwright_core::{CoreError, NodeKey, Selector};
 
@@ -39,6 +43,10 @@ use guiwright_core::{CoreError, NodeKey, Selector};
 pub struct Command {
     request: RequestV1,
     window: Option<String>,
+    /// The sending connection's event identity + queue (§7, M12),
+    /// attached only by `Subscribe` requests: the session thread
+    /// registers it into the hub (On) or drops the subscription (Off).
+    events: Option<(u64, mpsc::Sender<GwpEvent>)>,
     reply: oneshot::Sender<ResponseV1>,
 }
 
@@ -53,20 +61,46 @@ enum Internal {
 /// session thread. One instance per connection (the serve loop calls
 /// `make_handler` per accepted socket); the active window target is
 /// **per-connection** (§16 v0.4) — `Window::Use` on one connection never
-/// re-aims another.
-#[derive(Clone)]
+/// re-aims another — and so is the event subscription (§7, M12).
 pub struct GwpBridge {
     cmd_tx: mpsc::Sender<Internal>,
     /// This connection's active window target handle. Shared with the
     /// reply-processing future via `Arc<Mutex<..>>` (the `Handler` future
     /// cannot borrow `self`).
-    window: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    window: Arc<std::sync::Mutex<Option<String>>>,
+    /// This connection's stable event identity (the hub's key).
+    conn_id: u64,
+    /// This connection's event queue (§7, M12): the receiver half is
+    /// handed to the connection loop once (`event_stream`); the sender
+    /// travels through `Subscribe` commands into the session hub.
+    event_tx: mpsc::Sender<GwpEvent>,
+    event_rx: Option<mpsc::Receiver<GwpEvent>>,
+}
+
+impl GwpBridge {
+    fn new(cmd_tx: mpsc::Sender<Internal>, conn_id: u64) -> Self {
+        let (event_tx, event_rx) = mpsc::channel(guiwright_proto::conn::EVENT_QUEUE_CAPACITY);
+        Self {
+            cmd_tx,
+            window: Arc::new(std::sync::Mutex::new(None)),
+            conn_id,
+            event_tx,
+            event_rx: Some(event_rx),
+        }
+    }
 }
 
 impl Handler for GwpBridge {
     fn handle(&mut self, request: RequestV1) -> impl Future<Output = ResponseV1> + Send {
         let tx = self.cmd_tx.clone();
         let window = self.window.clone();
+        let conn_id = self.conn_id;
+        // `Subscribe` carries this connection's event queue to the session
+        // hub (§7, M12); every other request is event-blind.
+        let events = match &request {
+            RequestV1::Subscribe(_) => Some((conn_id, self.event_tx.clone())),
+            _ => None,
+        };
         // `Window::Use` is the only request that mutates this connection's
         // target — after the session validates the handle (the reply is
         // `WindowUsed`).
@@ -87,6 +121,7 @@ impl Handler for GwpBridge {
                 .send(Internal::Gwp(Command {
                     request,
                     window: stamped,
+                    events,
                     reply: reply_tx,
                 }))
                 .await
@@ -114,6 +149,10 @@ impl Handler for GwpBridge {
             response
         }
     }
+
+    fn event_stream(&mut self) -> Option<mpsc::Receiver<GwpEvent>> {
+        self.event_rx.take()
+    }
 }
 
 /// Where a server handle listens (§7 transports).
@@ -133,12 +172,17 @@ pub struct GwpServerHandle {
     pub endpoint: Endpoint,
 }
 
+/// Per-server connection id counter: the hub keys subscribers by it
+/// (stable across re-subscribes on one connection).
+static CONN_IDS: AtomicU64 = AtomicU64::new(1);
+
+fn next_conn_id() -> u64 {
+    CONN_IDS.fetch_add(1, Ordering::Relaxed)
+}
+
 impl GwpServerHandle {
     pub fn bridge(&self) -> GwpBridge {
-        GwpBridge {
-            cmd_tx: self.cmd_tx.clone(),
-            window: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        }
+        GwpBridge::new(self.cmd_tx.clone(), next_conn_id())
     }
 
     /// The bound endpoint (UDS path or TCP socket address). For an
@@ -240,10 +284,7 @@ impl GwpServerHandle {
         let bridge_tx = cmd_tx.clone();
         let serve_task = tokio::spawn(async move {
             listener
-                .into_serve(move || GwpBridge {
-                    cmd_tx: bridge_tx.clone(),
-                    window: std::sync::Arc::new(std::sync::Mutex::new(None)),
-                })
+                .into_serve(move || GwpBridge::new(bridge_tx.clone(), next_conn_id()))
                 .await;
         });
 
@@ -286,8 +327,28 @@ impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for TcpListen
 
 /// The session thread event loop: drain the command queue, process each
 /// request against the session, pump once per batch (frame-boundary
-/// rendezvous, §15.4).
+/// rendezvous, §15.4) — and, while anyone is subscribed (§7, M12), pump at
+/// frame cadence so pushed events flow even with no request in flight.
+///
+/// The thread hosts its own current-thread runtime for exactly one reason:
+/// the idle tick. Sessions without subscribers block on the command queue
+/// like the pre-M12 thread (the tick branch never arms); with subscribers
+/// the timer fires once per frame step — event-driven work, not a busy
+/// poll.
 fn run_session_thread<A: FrameworkAdapter>(
+    cmd_rx: mpsc::Receiver<Internal>,
+    adapter: A,
+    seams: crate::seams::SeamRegistry,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("session thread runtime");
+    runtime.block_on(session_loop(cmd_rx, adapter, seams));
+}
+
+/// The async half of the session thread (see [`run_session_thread`]).
+async fn session_loop<A: FrameworkAdapter>(
     mut cmd_rx: mpsc::Receiver<Internal>,
     adapter: A,
     seams: crate::seams::SeamRegistry,
@@ -299,32 +360,114 @@ fn run_session_thread<A: FrameworkAdapter>(
     // "app.wait_for_settle()").
     session.settle(std::time::Instant::now() + std::time::Duration::from_secs(5));
 
-    while let Some(cmd) = cmd_rx.blocking_recv() {
-        match cmd {
-            Internal::Shutdown => break,
-            Internal::Gwp(Command {
-                request,
-                window,
-                reply,
-            }) => {
-                let response = handle_request(&mut session, request, window);
-                let _ = reply.send(response);
-                // One pump per batch: queued commands apply at the next
-                // frame boundary (§15.4).
+    // The session thread owns the event hub (§7, M12): subscriptions
+    // arrive through the command queue, publications happen at the pump
+    // sites — no locking, the same single-owner discipline as `Session`.
+    let mut hub = EventHub::default();
+    // What subscribers have already been told about: events are
+    // "tree/frame is at seq N now" notifications, so coalescing a burst of
+    // pumps into one event per batch is the design (seq numbers expose
+    // any gap a slow client missed, §15.6).
+    let mut published_tree = session.tree_seq();
+    let mut published_frame = session.frame_seq();
+
+    loop {
+        // Idle tick: armed only while subscribers exist (§7, M12).
+        let tick = async {
+            if hub.is_empty() {
+                std::future::pending::<()>().await
+            } else {
+                tokio::time::sleep(FRAME_STEP).await
+            }
+        };
+        tokio::select! {
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    None | Some(Internal::Shutdown) => break,
+                    Some(Internal::Gwp(Command {
+                        request,
+                        window,
+                        events,
+                        reply,
+                    })) => {
+                        let response =
+                            handle_request(&mut session, request, window, &mut hub, events);
+                        let _ = reply.send(response);
+                        // One pump per batch: queued commands apply at the next
+                        // frame boundary (§15.4).
+                        session.pump();
+                        publish_if_advanced(
+                            &mut session,
+                            &mut hub,
+                            &mut published_tree,
+                            &mut published_frame,
+                        );
+                    }
+                }
+            }
+            _ = tick => {
+                // Frame cadence with subscribers: the app advances, and
+                // queued diffs/frames become events without any request.
                 session.pump();
+                publish_if_advanced(
+                    &mut session,
+                    &mut hub,
+                    &mut published_tree,
+                    &mut published_frame,
+                );
             }
         }
+    }
+}
+
+/// Publish the seq advancement since the last publish point (§7, M12):
+/// one coalesced `TreeChanged` / `FramePresented` per batch, the honest
+/// notification shape (a slow client misses intermediate seqs by design —
+/// the seq numbers say exactly where it stands). A session with no
+/// subscribers only advances the markers, never allocates events.
+fn publish_if_advanced<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    hub: &mut EventHub,
+    published_tree: &mut u64,
+    published_frame: &mut u64,
+) {
+    let tree_seq = session.tree_seq();
+    let frame_seq = session.frame_seq();
+    if hub.is_empty() {
+        *published_tree = tree_seq;
+        *published_frame = frame_seq;
+        return;
+    }
+    let mut events = Vec::new();
+    if tree_seq > *published_tree {
+        events.push(GwpEvent::V1(EventV1::TreeChanged { seq: tree_seq }));
+    }
+    if frame_seq > *published_frame {
+        if let Some(stamp) = session.last_presented() {
+            events.push(GwpEvent::V1(EventV1::FramePresented {
+                seq: stamp.seq,
+                hash: stamp.hash,
+            }));
+        }
+    }
+    *published_tree = tree_seq;
+    *published_frame = frame_seq;
+    if !events.is_empty() {
+        hub.publish(&events);
     }
 }
 
 /// Process a single GWP request against the session. `window` is the
 /// sending connection's active target (§16 v0.4): resolution-only scoping —
 /// node identities are already window-unique, actions/clock/mock/inspect/
-/// video are session-wide by design.
+/// video are session-wide by design. `events` is the sending connection's
+/// event identity + queue, attached by `Subscribe` requests only (§7, M12).
 fn handle_request<A: FrameworkAdapter>(
     session: &mut Session<A>,
     request: RequestV1,
     window: Option<String>,
+    hub: &mut EventHub,
+    events: Option<(u64, mpsc::Sender<GwpEvent>)>,
 ) -> ResponseV1 {
     match request {
         RequestV1::Hello { .. } => {
@@ -336,6 +479,20 @@ fn handle_request<A: FrameworkAdapter>(
                 frame_seq: session.frame_seq(),
                 adapter: adapter_info(meta),
             }
+        }
+        RequestV1::Subscribe(SubscribeV1::On { kinds }) => match events {
+            Some((conn_id, tx)) => subscribe_on(hub, conn_id, tx, kinds),
+            None => ResponseV1::Error {
+                code: ErrorCode::Internal,
+                message: "subscribe request arrived without an event channel".into(),
+            },
+        },
+        RequestV1::Subscribe(SubscribeV1::Off) => {
+            if let Some((conn_id, _tx)) = events {
+                hub.unsubscribe(conn_id);
+                tracing::debug!(subscriber = conn_id, "event subscription dropped");
+            }
+            ResponseV1::Subscribed { kinds: Vec::new() }
         }
         RequestV1::Ping => ResponseV1::Pong,
         RequestV1::TreeSnapshot => ResponseV1::TreeSnapshot {
@@ -441,7 +598,7 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Video(cmd) => video_response(session, cmd),
         RequestV1::Window(cmd) => window_response(session, cmd),
         RequestV1::Screenshot(cmd) => screenshot_response(session, cmd, window.as_deref()),
-        RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd),
+        RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd, window),
         RequestV1::Bye => ResponseV1::Bye,
     }
 }
@@ -504,28 +661,66 @@ fn shot_response(shot: crate::session::WireShot) -> ResponseV1 {
 fn tree_dump_response<A: FrameworkAdapter>(
     session: &mut Session<A>,
     cmd: SnapshotV1,
+    window: Option<String>,
 ) -> ResponseV1 {
     match cmd {
         SnapshotV1::Full => {
             let dump = session.tree_dump();
-            ResponseV1::TreeDump {
-                tree_seq: dump.tree_seq,
-                node_count: dump.node_count,
-                focus: dump.focus.map(Into::into),
-                nodes: dump
-                    .nodes
-                    .into_iter()
-                    .map(|node| guiwright_proto::schema::SnapshotNodeV1 {
-                        key: node.key.into(),
-                        role: node.role,
-                        name: node.name,
-                        value: node.value,
-                        bounds: node.bounds,
-                        children: node.children,
-                    })
-                    .collect(),
+            dump_response(dump)
+        }
+        SnapshotV1::Filtered {
+            selector,
+            timeout_ms,
+        } => {
+            // M13 (§7 tree domain): resolve (auto-wait, §8.2) under the
+            // connection's window scope — the same resolve the `Resolve`
+            // and `Screenshot::Element` arms run — then dump only the
+            // match's subtree. A dead selector expires as `Timeout` like
+            // every other auto-wait; a non-matching one is a strict-mode
+            // violation, exactly like `Resolve`.
+            let scope = match window.as_deref() {
+                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => return error_response(err),
+                },
+                _ => None,
+            };
+            session.set_resolve_scope(scope);
+            let resolved = resolve_result(session, selector, timeout_ms);
+            session.clear_resolve_scope();
+            match resolved {
+                Ok(Some(resolved)) => match session.tree_dump_under(&resolved.key) {
+                    Ok(dump) => dump_response(dump),
+                    Err(err) => error_response(err),
+                },
+                Ok(None) => ResponseV1::Error {
+                    code: ErrorCode::Internal,
+                    message: "resolve succeeded without a node".into(),
+                },
+                Err(err) => error_response(err),
             }
         }
+    }
+}
+
+/// The wire shape of a domain dump (the M11 row vocabulary).
+fn dump_response(dump: crate::session::TreeDump) -> ResponseV1 {
+    ResponseV1::TreeDump {
+        tree_seq: dump.tree_seq,
+        node_count: dump.node_count,
+        focus: dump.focus.map(Into::into),
+        nodes: dump
+            .nodes
+            .into_iter()
+            .map(|node| guiwright_proto::schema::SnapshotNodeV1 {
+                key: node.key.into(),
+                role: node.role,
+                name: node.name,
+                value: node.value,
+                bounds: node.bounds,
+                children: node.children,
+            })
+            .collect(),
     }
 }
 
@@ -693,6 +888,36 @@ fn inspect_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: InspectV
     }
 }
 
+/// Register a subscription (§7, M12): dedupe the kind list, enforce the
+/// all-or-nothing capability contract (`Log` is not streamed yet — the
+/// request fails with `Unsupported`, never a silently ignored filter),
+/// then hand the connection's queue to the hub.
+fn subscribe_on(
+    hub: &mut EventHub,
+    conn_id: u64,
+    tx: mpsc::Sender<GwpEvent>,
+    kinds: Vec<EventKindV1>,
+) -> ResponseV1 {
+    let mut deduped: Vec<EventKindV1> = Vec::new();
+    for kind in kinds {
+        if !deduped.contains(&kind) {
+            deduped.push(kind);
+        }
+    }
+    if deduped.contains(&EventKindV1::Log) {
+        return ResponseV1::Error {
+            code: ErrorCode::Unsupported,
+            message: "log events are not streamed over the wire yet (the log-tail \
+                      milestone owns them); supported kinds: tree_changed, \
+                      frame_presented"
+                .into(),
+        };
+    }
+    hub.subscribe(Subscriber::new(conn_id, deduped.clone(), tx));
+    tracing::debug!(subscriber = conn_id, "event subscription registered");
+    ResponseV1::Subscribed { kinds: deduped }
+}
+
 fn error_response(err: CoreError) -> ResponseV1 {
     let (code, message) = match &err {
         CoreError::NoMatch { .. } | CoreError::Ambiguous { .. } => {
@@ -775,6 +1000,7 @@ mod tests {
             .send(Internal::Gwp(Command {
                 request,
                 window,
+                events: None,
                 reply: tx,
             }))
             .await
