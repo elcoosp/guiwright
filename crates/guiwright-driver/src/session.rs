@@ -19,7 +19,7 @@ use guiwright_core::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
 use guiwright_core::{CoreError, NodeKey, Selector};
 
 use crate::adapter::{
-    ActionOutcome, AdapterError, FrameDeadline, FrameworkAdapter, InputEvent, SemAction,
+    ActionOutcome, AdapterError, FrameDeadline, FrameStamp, FrameworkAdapter, InputEvent, SemAction,
 };
 use crate::clock::{ClockReport, ClockService, LedgerCommand};
 use crate::gesture::{Gesture, codegen_call, codegen_event_call, codegen_line, synthesize};
@@ -259,8 +259,9 @@ pub struct Session<A: FrameworkAdapter> {
     tree: TreeService,
     tree_seq: u64,
     frame_seq: u64,
-    /// Last frame seq fed to a waiter — events are fed exactly once.
-    fed_frame_seq: u64,
+    /// The most recent presented frame stamp (§7, M12): the seq + hash
+    /// the event channel's `FramePresented` carries.
+    last_presented: Option<FrameStamp>,
     /// Virtual clock service (§14): stepping plans + `clock.bin` ledger.
     clock_service: ClockService,
     /// App-registered state seams (§14 mock domain); executed via
@@ -295,7 +296,7 @@ impl<A: FrameworkAdapter> Session<A> {
             tree: TreeService::new(),
             tree_seq: 0,
             frame_seq: 0,
-            fed_frame_seq: 0,
+            last_presented: None,
             clock_service: ClockService::new(),
             seams: SeamRegistry::new(),
             seam_overrides: BTreeMap::new(),
@@ -309,6 +310,13 @@ impl<A: FrameworkAdapter> Session<A> {
 
     pub fn tree(&self) -> &TreeService {
         &self.tree
+    }
+
+    /// The most recent presented frame stamp (§7, M12): the seq + hash
+    /// the event channel's `FramePresented` carries. `None` until the
+    /// adapter presents its first frame.
+    pub fn last_presented(&self) -> Option<FrameStamp> {
+        self.last_presented
     }
 
     pub fn adapter(&self) -> &A {
@@ -357,6 +365,7 @@ impl<A: FrameworkAdapter> Session<A> {
 
         for stamp in &outcome.frames {
             self.frame_seq = self.frame_seq.max(stamp.seq);
+            self.last_presented = Some(*stamp);
             let _info = self.tree.frame_presented(stamp.hash);
             summary.frames_presented += 1;
         }
@@ -561,6 +570,36 @@ impl<A: FrameworkAdapter> Session<A> {
             focus,
             nodes,
         }
+    }
+
+    /// Read one subtree as data (§7 `Snapshot::Filtered` → `TreeDump`,
+    /// M13): the depth-first walk rooted at `root` — the same row shape
+    /// and ordering rules as [`Session::tree_dump`], restricted to the
+    /// resolved node's descendants (the row for the root itself comes
+    /// first, mirroring the per-window walks). The focus rides along only
+    /// when it lives inside the dumped subtree; a node outside it is not
+    /// this dump's fact to report.
+    ///
+    /// Consistency is the caller's job exactly like the `Full` form: the
+    /// GWP server resolves (and thereby pumps) first, so the dump
+    /// describes the tree as it is *now*.
+    pub fn tree_dump_under(&mut self, root: &NodeKey) -> Result<TreeDump, CoreError> {
+        let node = self
+            .tree
+            .node(root)
+            .ok_or(CoreError::UnknownNode { key: *root })?;
+        let focus = self.tree.focus();
+        let mut nodes = vec![snapshot_row(root, &node)];
+        self.tree
+            .descendants(root, &mut |key, node| nodes.push(snapshot_row(&key, node)));
+        let node_count = nodes.len();
+        let focus = focus.filter(|focused| nodes.iter().any(|row| row.key == *focused));
+        Ok(TreeDump {
+            tree_seq: self.tree_seq,
+            node_count,
+            focus,
+            nodes,
+        })
     }
 
     // --- Inspector overlay (§13, M8) ---------------------------------------
@@ -1008,7 +1047,6 @@ impl<A: FrameworkAdapter> Session<A> {
             if let Some(ev) = event {
                 match waiter.on_event(ev, &self.tree) {
                     WaitOutcome::Satisfied(resolved) => {
-                        self.fed_frame_seq = self.frame_seq;
                         return Ok(resolved.map_or(WaitResolved::Absent, WaitResolved::Node));
                     }
                     WaitOutcome::Failed(failure) => {
