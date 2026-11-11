@@ -13,7 +13,7 @@
 //! the copy the TypeScript client vendors: copy the printed path's file to
 //! `clients/typescript/gwp-schema.json`.
 
-use guiwright_proto::schema::{ClockV1, MockV1};
+use guiwright_proto::schema::{ClockV1, MockV1, SnapshotV1};
 use guiwright_proto::{RequestV1, ResponseV1, schemadoc::gwp_schema_json};
 
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/schema-golden.json");
@@ -48,6 +48,14 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(domains["video"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["window"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["gesture"]["variants"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        domains["screenshot"]["variants"].as_array().unwrap().len(),
+        screenshot_variants()
+    );
+    assert_eq!(
+        domains["snapshot"]["variants"].as_array().unwrap().len(),
+        snapshot_variants()
+    );
 
     // Wire indices are exactly the enum positions: spot-check the ends of
     // both request/response tables (the append-only frontier).
@@ -55,11 +63,15 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["requests"][10]["name"], "Video");
     assert_eq!(doc["requests"][11]["name"], "Window");
     assert_eq!(doc["requests"][12]["name"], "Gesture");
+    assert_eq!(doc["requests"][13]["name"], "Screenshot");
+    assert_eq!(doc["requests"][14]["name"], "Snapshot");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
     assert_eq!(doc["responses"][12]["name"], "Windows");
     assert_eq!(doc["responses"][13]["name"], "WindowUsed");
     assert_eq!(doc["responses"][14]["name"], "GestureDone");
+    assert_eq!(doc["responses"][15]["name"], "Shot");
+    assert_eq!(doc["responses"][16]["name"], "TreeDump");
 
     // The error-code table is flat on the wire: appending UnknownWindow
     // keeps the pre-M6 codes byte-identical.
@@ -93,13 +105,15 @@ fn response_variants() -> usize {
         | ResponseV1::VideoFile { .. }
         | ResponseV1::Windows { .. }
         | ResponseV1::WindowUsed { .. }
-        | ResponseV1::GestureDone { .. } => 15usize,
+        | ResponseV1::GestureDone { .. }
+        | ResponseV1::Shot { .. }
+        | ResponseV1::TreeDump { .. } => 17usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    13 + match RequestV1::Ping {
+    15 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -112,8 +126,25 @@ fn request_variants() -> usize {
         | RequestV1::Bye
         | RequestV1::Video(_)
         | RequestV1::Window(_)
-        | RequestV1::Gesture(_) => 0,
+        | RequestV1::Gesture(_)
+        | RequestV1::Screenshot(_)
+        | RequestV1::Snapshot(_) => 0,
     }
+}
+
+fn screenshot_variants() -> usize {
+    use guiwright_proto::schema::ScreenshotV1;
+    let probe = |s: ScreenshotV1| match s {
+        ScreenshotV1::Window | ScreenshotV1::Element { .. } => 2usize,
+    };
+    probe(ScreenshotV1::Window)
+}
+
+fn snapshot_variants() -> usize {
+    let probe = |s: SnapshotV1| match s {
+        SnapshotV1::Full => 1usize,
+    };
+    probe(SnapshotV1::Full)
 }
 
 fn clock_variants() -> usize {
