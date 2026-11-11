@@ -101,6 +101,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         crate::samples::wire_screenshot_window,
     ),
     ("tree_dump_walk", crate::samples::tree_dump_walk),
+    ("wire_event_delivery", crate::samples::wire_event_delivery),
+    ("tree_dump_filtered", crate::samples::tree_dump_filtered),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
