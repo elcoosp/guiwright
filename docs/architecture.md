@@ -324,6 +324,7 @@ CDP-inspired: sessions → targets (windows) → domains; request/response + ser
 
 - **Transport:** UDS (default; also TCP for CI containers, WS for the viewer). Framing: 4-byte length + postcard-encoded body (schema-versioned enum; `#[serde(skip)]`-free, explicit `V1` variants so old clients get clean errors). Large payloads (frames, trees, traces) go on a **side channel as length-prefixed postcard+LZ4 blobs** to keep command latency independent of payload size.
 - **Multiplexing:** monotonic `request_id`; events tagged with `seq` per topic; every mutation response carries the `frame_seq` it was applied at (clients can await that exact frame — no polling).
+- **Events (M12, shipped shape):** the sketch's `TreeSubscribe` landed as the append-only `Subscribe { On { kinds } | Off }` domain (discriminant 15); pushed events ride the response envelope as `ResponseV1::Event(EventV1)` (17) — every client demultiplexes one enum, a connection that never subscribes keeps the byte-exact pre-M12 conversation, and the tree-dump domain (M11/M13) is the read-side counterpart (`Snapshot::Full` / `Snapshot::Filtered`).
 
 ```
 // Handshake
@@ -577,7 +578,8 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Multi-window / tabs | targets per window (all frameworks support multi-window; freya-testing single-window initially) | M6 |
 | Headless CI | §11 | MVP |
 | Error context (call log, DOM snapshot on failure) | error embeds tree snapshot + trace link | MVP |
-| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump) |
+| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under) |
+| Live event stream (server-push) | §7 event channel: `Subscribe { On | Off }`, events ride `ResponseV1::Event` | M12 |
 | Component testing | embedded mode = widget-level (Simulator/RenderRoot/harness) | MVP |
 | Other-language clients | GWP over TCP/UDS/WS; schema-published | M3 (TypeScript client + e2e) |
 
