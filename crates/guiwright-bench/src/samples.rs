@@ -700,3 +700,121 @@ pub fn tree_dump_walk() -> Duration {
     assert_eq!(dump.nodes[0].children, 1, "window → group");
     elapsed
 }
+
+// --- Event-channel sample (§7 server-push events over §15.6, M12) -----------
+
+/// §7 event channel (M12): one publish-to-receipt round trip — a tree
+/// diff lands on the session (the shared-script path), the idle tick
+/// pumps at frame cadence, and the subscribed client's `next_event`
+/// observes the `TreeChanged` frame. The measured span includes the frame
+/// tick (the event loop pumps once per `FRAME_STEP` while anyone is
+/// subscribed — that pacing IS the design, §15.4), so the row is a
+/// liveness bound, not a CPU cost.
+pub fn wire_event_delivery() -> Duration {
+    const ITERATIONS: u32 = 16;
+    use accesskit::{Node, NodeId, Role, TreeUpdate};
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::schema::EventKindV1;
+    use guiwright_proto::uds::Client;
+    use std::sync::{Arc, Mutex};
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let dir = std::env::temp_dir().join(format!("gw-bench-events-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("events.sock");
+
+    let shared: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts = Arc::clone(&shared);
+
+    let (measured, handle) = runtime.block_on(async {
+        let handle = GwpServerHandle::spawn_with_seams(
+            path.clone(),
+            move || MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench server binds");
+        let mut client = Client::connect(&path).await.expect("bench client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+        client
+            .subscribe(&[EventKindV1::TreeChanged])
+            .await
+            .expect("subscribe");
+
+        // A one-button rename per iteration: each lands as exactly one
+        // coalesced TreeChanged (the frame events are filtered out).
+        let started = Instant::now();
+        for i in 0..ITERATIONS {
+            let mut save = Node::new(Role::Button);
+            save.set_label(format!("Save (v{i})"));
+            save.set_bounds(accesskit::Rect {
+                x0: 16.0,
+                y0: 16.0,
+                x1: 136.0,
+                y1: 48.0,
+            });
+            shared.lock().expect("script lock").push(TreeUpdate {
+                nodes: vec![(NodeId(2), save)],
+                tree: None,
+                tree_id: accesskit::TreeId::ROOT,
+                focus: accesskit::NodeId(2),
+            });
+            let deadline = Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let event = tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    client.next_event(),
+                )
+                .await
+                .expect("event arrives within the tick bound")
+                .expect("event frame");
+                if matches!(
+                    event,
+                    guiwright_proto::schema::GwpEvent::V1(
+                        guiwright_proto::schema::EventV1::TreeChanged { .. }
+                    )
+                ) {
+                    break;
+                }
+            }
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- Filtered-dump sample (§7 tree domain, M13) ------------------------------
+
+/// §7 tree-dump domain (M13): one filtered dump over the 1k-node tree —
+/// strict resolve of the group node + the depth-first subtree walk + row
+/// build for its 998 children. The full-dump walk is the `tree_dump_walk`
+/// row; this is the subtree form `snapshot under`/`treeDumpUnder` ride.
+pub fn tree_dump_filtered() -> Duration {
+    use guiwright_driver::Session;
+    use guiwright_driver::mock::MockAdapter;
+
+    let mut adapter = MockAdapter::bare();
+    adapter.push_update(full_thousand_update());
+    adapter.push_frame(1);
+    let mut session = Session::new(adapter);
+    session.pump();
+
+    let start = Instant::now();
+    let resolved = session
+        .resolve(&Selector::Role {
+            role: Role::Group,
+            name: None,
+        })
+        .expect("the group resolves");
+    let dump = session
+        .tree_dump_under(&resolved.key)
+        .expect("the subtree dumps");
+    let elapsed = start.elapsed();
+    assert_eq!(dump.node_count, 999, "the group + its 998 buttons");
+    elapsed
+}
