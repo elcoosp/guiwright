@@ -1964,7 +1964,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
- "twox-hash",
  "zip",
 ]
 
