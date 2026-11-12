@@ -561,7 +561,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 
 - Micro (criterion): codec round-trips, diff apply, index build on synthetic 10 k-node trees, LZ4 blobs, hash throughput.
 - Macro: scripted 200-action session on the egui demo app and a synthetic masonry app (1 k nodes): end-to-end action latency histogram, suite wall-clock for 1 000 asserts, memory profile.
-- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path — 24 rows today), each bound to a sample in `check_budgets`.
+- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor — 30 rows today), each bound to a sample in `check_budgets`.
 
 ---
 
@@ -570,9 +570,9 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Playwright feature | Guiwright mechanism | Status |
 |---|---|---|
 | Locators (`getByRole/Label/Text/TestId/Value`, filters, strict mode) | §8 selector model over accesskit consumer + L2 logical trees | MVP |
-| Auto-waiting / actionability | §8.3 event-driven checks | MVP |
+| Auto-waiting / actionability | §8.3 event-driven checks; explicit `locator.wait_for(state)` on the kit surface (`attached`/`visible`/`hidden`/`stable`, M21) | MVP |
 | Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths); the wire `Action` honors `force`/`timeout_ms` (M17's pre-resolved gate); the kit locator surface carries `press`/`check`/`uncheck`/`set_checked`/`focus`/`blur` too (M19) | MVP |
-| Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines | MVP |
+| Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines; the checked tri-state rides the §8 check row (`to_be_checked` / `to_be_unchecked` / `to_be_checked_mixed`, M20) | MVP |
 | Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); locator-level element shots (M9), the §7 render domain over GWP (M10) | MVP (embedded), M9 (locator), M10 (wire) |
 | Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML; the §16 v0.5 own runner is `guiwright test` over `gwtest/v1` specs (M5) | MVP (nextest-native), M5 (own runner) |
 | Trace viewer (time travel, live) | §12 | v0.3 (archive), M18 (live feed over the `ClientConn` seam) |
