@@ -7,7 +7,7 @@
 //! let mut app = App::launch_fixture("login_flow");
 //! app.get_by_role(Role::Button, "Save").click().unwrap();
 //! expect(app.get_by_text("Welcome, Ada")).to_be_visible().unwrap();
-//! app.screenshot("main").unwrap();
+//! app.screenshot("main", BlessMode::Off).unwrap();
 //! let trace = app.finish(); // guiwright-<test>-<ts>.zip when tracing
 //! ```
 
@@ -56,8 +56,11 @@ pub enum KitError {
 /// auto-waits through the session's event-driven loop (§15.3) — tests
 /// never `sleep()`.
 pub struct Locator<'a, A: FrameworkAdapter> {
-    app: &'a mut App<A>,
-    selector: Selector,
+    /// Crate-visible so the surface modules (the `expect` helper here, the
+    /// M21 `wait_for` module) share one access path — the locator is a
+    /// borrow-and-act handle, not a data record.
+    pub(crate) app: &'a mut App<A>,
+    pub(crate) selector: Selector,
 }
 
 impl<A: FrameworkAdapter> std::fmt::Debug for Locator<'_, A> {
@@ -1037,6 +1040,13 @@ pub(crate) mod core_expect {
     // assertion is single-shot, so `self` moves into the check (the
     // workspace lint table carries the `wrong_self_convention` carve-out).
     impl<A: FrameworkAdapter> Pending<'_, A> {
+        /// Override the timeout for this assertion (the session builder's
+        /// deadline — default 5 s, Playwright parity).
+        pub fn with_timeout(self, timeout: std::time::Duration) -> Self {
+            Self {
+                builder: self.builder.with_timeout(timeout),
+            }
+        }
         pub fn to_be_visible(self) -> Result<(), CoreError> {
             self.builder.to_be_visible()
         }
@@ -1051,6 +1061,15 @@ pub(crate) mod core_expect {
         }
         pub fn to_be_focused(self) -> Result<(), CoreError> {
             self.builder.to_be_focused()
+        }
+        pub fn to_be_checked(self) -> Result<(), CoreError> {
+            self.builder.to_be_checked()
+        }
+        pub fn to_be_unchecked(self) -> Result<(), CoreError> {
+            self.builder.to_be_unchecked()
+        }
+        pub fn to_be_checked_mixed(self) -> Result<(), CoreError> {
+            self.builder.to_be_checked_mixed()
         }
         pub fn to_have_text(self, text: impl Into<TextMatch>) -> Result<(), CoreError> {
             self.builder.to_have_text(text)
