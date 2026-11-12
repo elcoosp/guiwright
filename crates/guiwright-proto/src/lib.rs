@@ -6,7 +6,9 @@
 //! * [`uds`] — default transport: server loop + client
 //! * [`tcp`] — loopback/container transport for other-language clients
 //! * [`ws`] — the viewer live-mode door: RFC 6455 server + client (M15)
-//! * [`conn`] — the transport-agnostic connection state machine all three share
+//! * [`duplex`] — the embedded door: in-process pipes + client (M16), the
+//!   reference shape for downstream [`Handler`]-based transports
+//! * [`conn`] — the transport-agnostic connection state machine all doors share
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -17,6 +19,7 @@
 pub mod blob;
 pub mod conn;
 pub mod convert;
+pub mod duplex;
 pub mod framing;
 pub mod schema;
 pub mod schemadoc;
@@ -24,6 +27,8 @@ pub mod tcp;
 pub mod uds;
 pub mod ws;
 
+pub use conn::Handler;
+pub use duplex::Client as DuplexClient;
 pub use schema::{
     AdapterInfoV1, CapsV1, ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, InputEventV1,
     NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1,
