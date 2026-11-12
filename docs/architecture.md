@@ -322,7 +322,7 @@ let trace = app.trace().stop().await?;                    // guiwright-<ts>.zip
 
 CDP-inspired: sessions → targets (windows) → domains; request/response + server-push events; versioned, binary-first.
 
-- **Transport:** UDS (default; also TCP for CI containers, WS for the viewer). Framing: 4-byte length + postcard-encoded body (schema-versioned enum; `#[serde(skip)]`-free, explicit `V1` variants so old clients get clean errors). Large payloads (frames, trees, traces) go on a **side channel as length-prefixed postcard+LZ4 blobs** to keep command latency independent of payload size.
+- **Transport:** UDS (default), TCP (CI containers + other-language clients), WS (the viewer live-mode door — served in Rust since M15). Framing: 4-byte length + postcard-encoded body (schema-versioned enum; `#[serde(skip)]`-free, explicit `V1` variants so old clients get clean errors). Large payloads (frames, trees, traces) go on a **side channel as length-prefixed postcard+LZ4 blobs** to keep command latency independent of payload size.
 - **Multiplexing:** monotonic `request_id`; events tagged with `seq` per topic; every mutation response carries the `frame_seq` it was applied at (clients can await that exact frame — no polling).
 - **Events (M12, shipped shape; logs M14):** the sketch's `TreeSubscribe` landed as the append-only `Subscribe { On { kinds } | Off }` domain (discriminant 15); pushed events ride the response envelope as `ResponseV1::Event(EventV1)` (17) — every client demultiplexes one enum, a connection that never subscribes keeps the byte-exact pre-M12 conversation, and the tree-dump domain (M11/M13) is the read-side counterpart (`Snapshot::Full` / `Snapshot::Filtered`). The `Log` kind rides the per-session `tracing` tap (`ServerOptions::log_tail`): a thread-local dispatcher on the session thread feeds a bounded live tail whose records stream as `EventV1::Log` — one `logs.ndjson`-shape JSON line each; a session without the tail still answers the kind with a typed `Unsupported`.
 
@@ -459,7 +459,7 @@ meta.json          app, adapter, versions, os, seed, resolution, scale, settings
 events.ndjson      input events, semantic actions, protocol calls (amortized, seq'd)
 trees/<seq>.bin    logical-tree snapshots (postcard+LZ4) every N frames
 trees/diff.bin     incremental diffs between snapshots (ChangeHandler output)
-frames/<seq>.webp  framebuffer captures (hash-deduped: identical frames skipped)
+frames/<seq>.png   framebuffer captures (hash-deduped: identical frames skipped)
 logs.ndjson        `tracing` subscriber output (frameworks already use tracing)
 clock.bin          virtual-time ledger (install/fast-forward history)
 index.bin          frame_seq → offsets (O(1) random access)
@@ -490,7 +490,7 @@ index.bin          frame_seq → offsets (O(1) random access)
 - **State seams (mocking):** Guiwright does not fake the network; it exposes a `Mock` domain where *apps* register reset/init hooks behind the `guiwright-driver` feature:
 
 ```rust
-#[guiwright::seam]                       // app code, compiled out without the feature
+#[guiwright_kit::seam]                   // app code, compiled out without the feature
 fn reset_db() -> Result<(), AppError> { app_state::reset_to_fixture("seed-42") }
 
 // test side
@@ -543,7 +543,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 ### 15.5 Capture pipeline
 
 - Readback: `RENDER_ATTACHMENT|COPY_SRC` texture → `MAP_READ` buffer with 2–3 buffer ring; `device.poll(PollType::Wait)` only when a frame is actually requested; bytes are premultiplied RGBA8, converted once.
-- Trace frames: hash-dedup (xxh3 over strided samples; full hash on mismatch), WebP-lossless on the writer thread, keyframe interval 1 s. Sliding-window ring keeps memory O(cap) for hour-long runs.
+- Trace frames: hash-dedup (xxh3 over strided samples; full hash on mismatch), PNG-lossless on the writer thread, keyframe interval 1 s. Sliding-window ring keeps memory O(cap) for hour-long runs.
 - Element screenshots: crop-by-rect from the window buffer (composite intersecting layers), single conversion pass.
 
 ### 15.6 IPC design
@@ -581,7 +581,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under) |
 | Live event stream (server-push) | §7 event channel: `Subscribe { On | Off }`, events ride `ResponseV1::Event`; the `Log` kind rides the per-session `tracing` tap | M12 (logs M14) |
 | Component testing | embedded mode = widget-level (Simulator/RenderRoot/harness) | MVP |
-| Other-language clients | GWP over TCP/UDS/WS; schema-published | M3 (TypeScript client + e2e) |
+| Other-language clients | GWP over TCP/UDS/WS; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust) |
 
 ---
 
