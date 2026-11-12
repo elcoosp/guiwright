@@ -104,6 +104,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("wire_event_delivery", crate::samples::wire_event_delivery),
     ("tree_dump_filtered", crate::samples::tree_dump_filtered),
     ("log_tail_batch", crate::samples::log_tail_batch),
+    ("ws_ping_roundtrip", crate::samples::ws_ping_roundtrip),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
