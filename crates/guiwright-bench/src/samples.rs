@@ -408,7 +408,8 @@ pub fn resolve_remote_tcp() -> Duration {
         .expect("bench tcp server binds");
         let addr = match handle.endpoint() {
             guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
-            guiwright_driver::server::Endpoint::Uds(_) => {
+            guiwright_driver::server::Endpoint::Uds(_)
+            | guiwright_driver::server::Endpoint::Ws(_) => {
                 unreachable!("spawn_tcp reports a TCP endpoint")
             }
         };
@@ -447,6 +448,53 @@ pub fn resolve_remote_tcp() -> Duration {
                 .await
                 .expect("bench resolve");
             assert!(matches!(resp, ResponseV1::Resolved { .. }));
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- M15 sample (WebSocket ping round-trip, §7's third door) -----------------
+
+/// §15.1 `ws_ping_roundtrip`: one Ping round-trip over the WebSocket
+/// transport (M15) — the viewer live-mode door's steady-state latency.
+/// Byte-identical to the TCP row; the RFC 6455 upgrade is paid once at
+/// connect, outside the measured window.
+pub fn ws_ping_roundtrip() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::WsClient;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let handle = GwpServerHandle::spawn_ws(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench ws server binds");
+        let addr = match handle.endpoint() {
+            guiwright_driver::server::Endpoint::Ws(addr) => *addr,
+            other => unreachable!("spawn_ws reports a WS endpoint, got {other:?}"),
+        };
+        let mut client = WsClient::connect(&addr.to_string())
+            .await
+            .expect("bench ws client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        for _ in 0..4 {
+            client.ping().await.expect("warm ping");
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            client.ping().await.expect("bench ping");
         }
         (started.elapsed() / ITERATIONS, handle)
     });
