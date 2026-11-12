@@ -574,13 +574,33 @@ export class GwpClient {
 }
 
 function onceEvent(emitter: unknown, event: string): Promise<void> {
+  // The TCP socket is a node EventEmitter (`once`); the WHATWG WebSocket
+  // is an EventTarget (`addEventListener`) — since M15 `connectWs` rides
+  // this helper too, so it speaks both shapes.
+  const e = emitter as {
+    once?: (ev: string, cb: (err?: Error) => void) => void;
+    addEventListener?: (
+      ev: string,
+      cb: (detail?: unknown) => void,
+      opts?: { once?: boolean },
+    ) => void;
+  };
   return new Promise((resolve, reject) => {
-    const e = emitter as {
-      once: (ev: string, cb: () => void) => void;
-      on: (ev: string, cb: (err?: Error) => void) => void;
-    };
-    e.once(event, () => resolve());
-    e.once("error", (err?: Error) => reject(err));
+    if (typeof e.once === "function") {
+      e.once(event, () => resolve());
+      e.once("error", (err?: Error) => reject(err));
+      return;
+    }
+    if (typeof e.addEventListener === "function") {
+      e.addEventListener(event, () => resolve(), { once: true });
+      e.addEventListener(
+        "error",
+        (detail?: unknown) => reject(detail as Error),
+        { once: true },
+      );
+      return;
+    }
+    reject(new Error(`not an event emitter: ${event} never fires`));
   });
 }
 
