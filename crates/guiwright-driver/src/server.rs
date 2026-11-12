@@ -29,6 +29,7 @@ use guiwright_proto::schema::{
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
+use guiwright_proto::ws;
 
 use crate::adapter::{AdapterMeta, FrameworkAdapter, SemAction};
 use crate::clock::FRAME_STEP;
@@ -191,6 +192,9 @@ pub enum Endpoint {
     Uds(PathBuf),
     /// TCP host:port (CI containers + other-language clients, M3).
     Tcp(std::net::SocketAddr),
+    /// WebSocket host:port — the viewer live-mode door (M15), RFC 6455
+    /// upgrade on plain TCP, then the byte-identical GWP conversation.
+    Ws(std::net::SocketAddr),
 }
 
 /// Handle keeping the server + session thread alive.
@@ -344,6 +348,53 @@ impl GwpServerHandle {
         GwpServerHandle::start(listener, Endpoint::Tcp(bound), make_adapter, options)
     }
 
+    /// Spawn the remote-mode stack over **WebSocket** (§7's third door,
+    /// M15): the RFC 6455 upgrade on plain TCP ([`guiwright_proto::ws`]),
+    /// then the byte-identical GWP conversation on the same session
+    /// thread. This is the server `connectWs` (the TypeScript client, M3)
+    /// has been waiting for — pass port `0` for an ephemeral bind and
+    /// read the bound address back from [`GwpServerHandle::endpoint`].
+    pub fn spawn_ws<A, F>(
+        addr: std::net::SocketAddr,
+        make_adapter: F,
+        seams: crate::seams::SeamRegistry,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        GwpServerHandle::spawn_ws_with(
+            addr,
+            make_adapter,
+            ServerOptions {
+                seams,
+                ..ServerOptions::default()
+            },
+        )
+    }
+
+    /// Like [`spawn_ws`], with the full [`ServerOptions`] knobs.
+    pub fn spawn_ws_with<A, F>(
+        addr: std::net::SocketAddr,
+        make_adapter: F,
+        options: ServerOptions,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        let listener = std::net::TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        let bound = listener.local_addr()?;
+        let listener = TcpListener::from_std(listener)?;
+        GwpServerHandle::start(
+            WsListener(listener),
+            Endpoint::Ws(bound),
+            make_adapter,
+            options,
+        )
+    }
+
     /// Shared stack bring-up: session thread + accept loop bridged over
     /// one command queue (§5.1).
     fn start<A, F, L, S>(
@@ -405,6 +456,48 @@ impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for TcpListen
     ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async move {
             tcp::serve(self, make_handler).await;
+        })
+    }
+}
+
+/// Newtype so the WebSocket door reuses the transport-blind
+/// [`GwpServerHandle::start`]: each accepted TCP stream takes the RFC
+/// 6455 upgrade ([`ws::accept`]) and then hands the session to the same
+/// shared connection loop the UDS and TCP doors run.
+struct WsListener(TcpListener);
+
+impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for WsListener {
+    fn into_serve<H: Handler>(
+        self,
+        make_handler: impl FnMut() -> H + Send + 'static,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+        Box::pin(async move {
+            let mut make_handler = make_handler;
+            loop {
+                match self.0.accept().await {
+                    Ok((stream, _addr)) => {
+                        let handler = make_handler();
+                        tokio::spawn(async move {
+                            match ws::accept(stream).await {
+                                Ok(ws) => {
+                                    if let Err(err) =
+                                        guiwright_proto::conn::run_connection(ws, handler).await
+                                    {
+                                        tracing::debug!(%err, "ws connection closed");
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::debug!(%err, "ws upgrade rejected");
+                                }
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, "ws accept failed");
+                        return;
+                    }
+                }
+            }
         })
     }
 }
