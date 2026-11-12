@@ -110,6 +110,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         crate::samples::inprocess_ping_roundtrip,
     ),
     ("wire_action_click", crate::samples::wire_action_click),
+    ("viewer_live_sync", crate::samples::viewer_live_sync),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
