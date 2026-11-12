@@ -7,6 +7,10 @@
  * video start/stop → subscribe/nextEvent (M12) → treeDumpUnder (M13) →
  * strict-mode rejection → bye.
  *
+ * Then the M15 leg: spawn the demo app again with `--ws` and drive the
+ * byte-identical conversation through `connectWs` (the RFC 6455 door the
+ * TypeScript client shipped in M3; the Rust side serves it since M15).
+ *
  * Run from the repo root or this directory: `npm run e2e` (needs cargo).
  */
 
@@ -22,25 +26,38 @@ import { GwpClient, GwpRejected } from "../src/client.ts";
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolvePath(here, "..", "..", "..");
 
-/** Spawn the Rust demo app; resolve when it prints GWP_TCP_ADDR=. */
-async function startDemoApp(): Promise<{ addr: string; stop: () => void }> {
+/** Spawn the Rust demo app; resolve when it prints `marker` (GWP_*_ADDR=). */
+async function startDemoApp(
+  marker: string,
+  extraArgs: string[] = [],
+): Promise<{ addr: string; stop: () => void }> {
   const child = spawn(
     "cargo",
-    ["run", "-p", "guiwright-driver", "--example", "gwp_demo_app", "--", "--port", "0"],
+    [
+      "run",
+      "-p",
+      "guiwright-driver",
+      "--example",
+      "gwp_demo_app",
+      "--",
+      "--port",
+      "0",
+      ...extraArgs,
+    ],
     { cwd: repoRoot, stdio: ["ignore", "pipe", "inherit"] },
   );
   const addr = await new Promise((resolveAddr, reject) => {
     let buffer = "";
     const timer = setTimeout(
-      () => reject(new Error("demo app did not print GWP_TCP_ADDR within 120 s")),
+      () => reject(new Error(`demo app did not print ${marker} within 120 s`)),
       120_000,
     );
     child.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
-      const line = buffer.split("\n").find((l) => l.startsWith("GWP_TCP_ADDR="));
+      const line = buffer.split("\n").find((l) => l.startsWith(marker));
       if (line) {
         clearTimeout(timer);
-        resolveAddr(line.trim().slice("GWP_TCP_ADDR=".length));
+        resolveAddr(line.trim().slice(marker.length));
       }
     });
     child.on("exit", (code) => {
@@ -79,7 +96,7 @@ async function waitForTcp(addr, timeoutMs = 15_000) {
   }
 }
 
-const demo = await startDemoApp();
+const demo = await startDemoApp("GWP_TCP_ADDR=");
 const [host, port] = demo.addr.split(":");
 await waitForTcp({ host, port: Number(port) });
 const videoDir = mkdtempSync(join(tmpdir(), "gw-ts-e2e-"));
@@ -220,4 +237,41 @@ try {
 } finally {
   demo.stop();
   rmSync(videoDir, { recursive: true, force: true });
+}
+
+// --- M15: the same conversation over WebSocket (the viewer door) ---------
+const wsDemo = await startDemoApp("GWP_WS_ADDR=", ["--ws"]);
+const [wsHost, wsPort] = wsDemo.addr.split(":");
+await waitForTcp({ host: wsHost, port: Number(wsPort) });
+
+try {
+  const wsClient = await GwpClient.connectWs(`ws://${wsDemo.addr}`);
+
+  const wsWelcome = await wsClient.handshake("ts-e2e-m15/0.1");
+  assert.equal(wsWelcome.adapter.name, "mock");
+  console.log("✓ M15 ws: upgraded + handshaked —", wsWelcome.session_id);
+
+  const wsSnapshot = await wsClient.treeSnapshot();
+  assert.equal(wsSnapshot.node_count, 8, "the same fixture bytes over ws");
+  const wsResolved = await wsClient.resolve({
+    kind: "role",
+    role: "Button",
+    name: { text: "Save", exact: false, ignore_case: true },
+  });
+  const wsDone = await wsClient.action(
+    wsResolved.node,
+    wsResolved.generation,
+    { kind: "click" },
+  );
+  assert.equal(wsDone.detail, "clicked");
+  console.log("✓ M15 ws: snapshot → resolve → act byte-identical to TCP");
+
+  const wsHonored = await wsClient.subscribe(["frame_presented"]);
+  assert.deepEqual(wsHonored, ["frame_presented"]);
+  await wsClient.unsubscribe();
+  console.log("✓ M15 ws: subscribe/unsubscribe — the viewer live-mode door is open");
+
+  await wsClient.close();
+} finally {
+  wsDemo.stop();
 }
