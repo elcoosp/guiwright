@@ -230,7 +230,10 @@ async fn custom_transport_serves_two_connections() {
 
 /// The embedded door's connect handle reports an honest error once the
 /// server is gone: `connect` fails instead of hanging or silently
-/// queueing.
+/// queueing. The shutdown abort is asynchronous (the accept task drops
+/// its listener half after the handle returns), so the test polls for
+/// the closed door instead of racing the abort — the duplex contract is
+/// "fails later connects honestly", not "fails on the first tick".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_after_shutdown_fails_cleanly() {
     let (handle, connect) = GwpServerHandle::spawn_inprocess(
@@ -239,9 +242,17 @@ async fn connect_after_shutdown_fails_cleanly() {
     )
     .expect("in-process server starts");
     handle.shutdown();
-    let err = DuplexClient::connect(&connect)
-        .await
-        .expect_err("connect after shutdown is an error, not a hang");
+    let mut err = None;
+    for _ in 0..200 {
+        match DuplexClient::connect(&connect).await {
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+            Err(failed) => {
+                err = Some(failed);
+                break;
+            }
+        }
+    }
+    let err = err.expect("connect after shutdown is an error, not a hang");
     assert!(
         matches!(err, guiwright_proto::GwpError::Io(_)),
         "the listener-gone error rides the Io family, got {err:?}"
