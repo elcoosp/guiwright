@@ -17,9 +17,9 @@ pub const SPEC_SUFFIX: &str = ".spec.toml";
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
-    /// Optional file-level GWP target (`uds:///…` / `tcp://host:port`, the
-    /// §5.3 `GUIWRIGHT_DRIVER` form). The CLI `--uds` / `--tcp` flags
-    /// override it.
+    /// Optional file-level GWP target (`uds:///…` / `tcp://host:port` /
+    /// `ws://host:port`, the §5.3 `GUIWRIGHT_DRIVER` form). The CLI
+    /// `--uds` / `--tcp` / `--ws` flags override it.
     pub target: Option<String>,
     /// Optional file-level resolve/action deadline (ms).
     pub timeout_ms: Option<u64>,
