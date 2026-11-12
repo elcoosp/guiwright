@@ -242,3 +242,12 @@ p95_us = 120
 notes = "the log-tail milestone's publish-point cost while a Log subscriber is attached: tap send + tail drain + EventV1::Log frame build (record formatting rides the TraceLogLayer-shaped JSON path, §12; wire delivery is the wire_event_delivery row)"
 m0_measurable = true
 sample = "log_tail_batch"
+
+[[budget]]
+id = "ws_ping_roundtrip"
+name = "WS: one Ping round-trip over the WebSocket door"
+p50_us = 40
+p95_us = 200
+notes = "the M15 viewer live-mode door's steady-state latency: Ping request frame over the RFC 6455 upgrade, session-thread round-trip, Pong frame back (the upgrade handshake itself is paid once at connect, outside the window; byte-identical to resolve_remote_tcp's transport work)"
+m0_measurable = true
+sample = "ws_ping_roundtrip"
