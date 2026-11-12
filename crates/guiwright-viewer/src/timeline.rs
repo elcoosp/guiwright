@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use guiwright_trace::schema::TreeNode;
 
 use crate::archive::ArchiveEvent;
-
+use crate::archive::ArchiveParts;
 use crate::archive::TraceArchive;
 
 /// One scrubber tick (one presented frame).
@@ -74,9 +74,51 @@ pub struct Timeline {
 
 impl Timeline {
     pub fn from_archive(archive: &TraceArchive) -> Self {
+        let stored_png = archive.frames_png_keys();
+        Self::build(
+            archive.meta.test.clone(),
+            &archive.events,
+            &archive.snapshots,
+            archive.diffs.clone(),
+            &archive.frame_index,
+            &archive.clock,
+            &stored_png,
+        )
+    }
+
+    /// Build the scrubber model from in-memory record collections — the
+    /// M18 live path: a feed accumulates frames, events and wire dumps
+    /// into [`ArchiveParts`] and hands them here, reusing the archive
+    /// timeline's tick-union and snapshot+diffs resolution unchanged.
+    pub fn from_parts(test: impl Into<String>, parts: ArchiveParts) -> Self {
+        let png_keys: BTreeSet<u64> = parts.frames.keys().copied().collect();
+        Self::build(
+            test.into(),
+            &parts.events,
+            &parts.snapshots,
+            parts.diffs,
+            &parts.frame_index,
+            &parts.clock,
+            &png_keys,
+        )
+    }
+
+    /// The shared constructor: the scrubber axis is every frame the
+    /// records mention; snapshots and diffs land in their seq maps for
+    /// the [`Timeline::tree_at`] resolution. (Logs ride along in the
+    /// archive view only — the scrubber model never reads them.)
+    fn build(
+        meta_test: String,
+        events: &[ArchiveEvent],
+        snapshots: &BTreeMap<u64, guiwright_trace::schema::TreeSnapshot>,
+        diffs: Vec<guiwright_trace::schema::TreeDiffRecord>,
+        frame_index: &[guiwright_trace::schema::FrameIndexEntry],
+        clock: &[guiwright_trace::schema::ClockJump],
+        stored_png: &BTreeSet<u64>,
+    ) -> Self {
         // Events grouped by their frame stamp.
         let mut events_by_frame: BTreeMap<u64, Vec<ArchiveEvent>> = BTreeMap::new();
-        for ev in &archive.events {
+        for ev in events {
             events_by_frame
                 .entry(ev.frame_seq)
                 .or_default()
@@ -84,26 +126,22 @@ impl Timeline {
         }
         // Clock commands per frame (last wins at a frame).
         let mut clock_by_frame: BTreeMap<u64, String> = BTreeMap::new();
-        for jump in &archive.clock {
+        for jump in clock {
             clock_by_frame.insert(jump.frame_seq, format!("{:?}", jump.command));
         }
-        let index_hashes: BTreeMap<u64, u64> = archive
-            .frame_index
-            .iter()
-            .map(|e| (e.seq, e.hash))
-            .collect();
-        let stored_png: BTreeSet<u64> = archive.frames_png_keys();
+        let index_hashes: BTreeMap<u64, u64> =
+            frame_index.iter().map(|e| (e.seq, e.hash)).collect();
 
-        // The scrubber axis: every frame the archive mentions.
+        // The scrubber axis: every frame the records mention.
         let mut all_frames: BTreeSet<u64> = BTreeSet::new();
         all_frames.extend(index_hashes.keys().copied());
         all_frames.extend(events_by_frame.keys().copied());
         all_frames.extend(clock_by_frame.keys().copied());
-        all_frames.extend(archive.snapshots.keys().copied());
+        all_frames.extend(snapshots.keys().copied());
         all_frames.extend(stored_png.iter().copied());
         // Diff frames belong on the axis too — a removal changes the tree
         // even when the frame produced no new payload.
-        all_frames.extend(archive.diffs.iter().map(|d| d.frame_seq));
+        all_frames.extend(diffs.iter().map(|d| d.frame_seq));
 
         let ticks = all_frames
             .into_iter()
@@ -116,19 +154,19 @@ impl Timeline {
             })
             .collect();
 
-        let mut snapshots = BTreeMap::new();
+        let mut snapshot_payloads = BTreeMap::new();
         let mut snapshot_focus = BTreeMap::new();
-        for (seq, snap) in &archive.snapshots {
-            snapshots.insert(*seq, snap.nodes.clone());
+        for (seq, snap) in snapshots {
+            snapshot_payloads.insert(*seq, snap.nodes.clone());
             snapshot_focus.insert(*seq, snap.focus);
         }
 
         Self {
-            meta_test: archive.meta.test.clone(),
+            meta_test,
             ticks,
-            snapshots,
+            snapshots: snapshot_payloads,
             snapshot_focus,
-            diffs: archive.diffs.clone(),
+            diffs,
         }
     }
 
