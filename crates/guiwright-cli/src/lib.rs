@@ -3,7 +3,7 @@
 //! wire protocol.
 //!
 //! * [`repl`] — `guiwright repl`: attaches to a live remote-mode session
-//!   (UDS or TCP) and drives it with Playwright-shaped commands —
+//!   (UDS, TCP or WebSocket) and drives it with Playwright-shaped commands —
 //!   locators, actions, the virtual clock, state seams, codegen and video
 //!   (§13 "a REPL attaches to a live session for ad-hoc locators/eval").
 //! * [`show_trace`] — `guiwright show-trace`: renders a `gwtrace/v1` zip
