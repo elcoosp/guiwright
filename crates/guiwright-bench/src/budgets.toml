@@ -278,3 +278,12 @@ p95_us = 500
 notes = "the M18 viewer live mode's steady-state update step over the embedded door: one Snapshot::Full request, the DFS-row → TreeNode conversion with the parent-link rebuild, and the scrubber rebuild tree_at reads — attach is paid once, outside the window; rides the inprocess_ping_roundtrip transport floor"
 m0_measurable = true
 sample = "viewer_live_sync"
+
+[[budget]]
+id = "checked_assert"
+name = "Kit: one to_be_checked() assertion (resolve + evaluate)"
+p50_us = 100
+p95_us = 500
+notes = "the M20 checked-state assertion's steady-state cost on the checkbox-trio fixture: one strict resolve (auto-wait index path) plus the checked evaluation through the session's zero-polling wait — the assertion completes on the initial evaluation, so this is the floor every expect(locator).to_* adds on top of a resolve; rides the resolve_cached_index row"
+m0_measurable = true
+sample = "checked_assert"
