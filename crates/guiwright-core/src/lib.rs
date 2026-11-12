@@ -43,4 +43,4 @@ pub use error::CoreError;
 pub use key::{Generation, MAIN_WINDOW, NodeKey};
 pub use selector::{Nth, Selector, TextMatch, TextPattern};
 pub use tree::{FrameInfo, Resolved, TreeDiffSummary, TreeService, WindowScope};
-pub use wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
+pub use wait::{ChecksWaiter, StabilityTracker, WaitOutcome, Waiter, WaiterEvent};
