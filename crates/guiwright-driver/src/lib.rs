@@ -9,7 +9,8 @@
 //!   pause/resume semantics, the `clock.bin` ledger.
 //! * [`seams`] — state seams (§14 mock domain): app-registered hooks
 //!   executed inside the adapter's runner context via `run_in`.
-//! * [`server`] — serves GWP over UDS, TCP and WebSocket (M15) by
+//! * [`server`] — serves GWP over UDS, TCP, WebSocket (M15) and the
+//!   in-process embedded door (M16, the [`server::Transport`] seam) by
 //!   marshalling commands to the session thread (commands are queued and
 //!   applied inside the next frame, §5.1).
 //! * [`events`] — the §7 server-push event channel (M12): the session
@@ -48,5 +49,8 @@ pub use gesture::{
 };
 pub use log_tail::{LOG_TAIL_CAPACITY, LogTail, LogTap};
 pub use seams::{SeamFn, SeamRegistry, SeamTask};
-pub use server::{GwpServerHandle, ServerOptions, spawn_session_server, spawn_session_server_with};
+pub use server::{
+    BoxServeFuture, GwpServerHandle, ServerOptions, Transport, spawn_session_server,
+    spawn_session_server_with,
+};
 pub use session::{ActionOpts, GestureOutcome, Session, SnapshotNode, TreeDump, WireShot};
