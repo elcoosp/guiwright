@@ -1,7 +1,7 @@
 # Guiwright — Technical Architecture
 
-**Status:** v0.1 draft, grounded in codebase reconnaissance
-**Date:** 2026-11-06
+**Status:** living design doc — the original v0.1 draft, amended through milestone 17 (records: `docs/m2-*.md` … `docs/m17-*.md`); the §16 parity map and §7 transport list track what shipped
+**Date:** 2026-11-06 (drafted), 2026-11-12 (last amended)
 **Scope:** a Playwright-grade test & automation driver for Rust GUI frameworks — GPUI, Xilem/Masonry, Floem, Iced, egui, Slint, Freya
 **Evidence base:** shallow clones of `zed`, `linebender/xilem`, `lapce/floem`, `iced-rs/iced`, `emilk/egui`, `slint-ui/slint`, `marc2332/freya`, `AccessKit/accesskit`, `rerun-io/kittest` (HEADs of 2026-11-03..06; versions and file paths cited inline). Paths are relative to each repo root.
 
@@ -203,14 +203,19 @@ guiwright/
 │                         #   (UDS, TCP, optional WS), backpressure, binary frame side-channel
 ├── guiwright-driver      # in-app host: session manager, tree service, action scheduler,
 │                         #   frame service, trace recorder, clock service
-├── guiwright-adapter-*   # per-framework adapters (feature of guiwright-driver):
-│                         #   egui, masonry, freya, slint, gpui, iced, floem
+├── guiwright-adapter-*   # standalone per-framework adapter crates (egui, masonry,
+│                         #   iced, freya, slint, floem, gpui) — not driver features;
+│                         #   iced/freya carry feature-gated harness glue, the rest ship
+│                         #   framework-free engines + recorded downstream contracts
 ├── guiwright-kit         # user-facing: App, Locators, #[guiwright::test], fixtures,
 │                         #   expect!, embedded Harness (mirrors Playwright's fixture system)
+├── guiwright-shot        # framework-free screenshot stack: PNG codec, YIQ diff,
+│                         #   per-OS baselines + the GUIWRIGHT_BLESS flow
+├── guiwright-macros      # proc macros: #[guiwright_kit::test], #[seam], register_seams!
 ├── guiwright-trace       # recorder (lock-free SPSC ring → zip writer thread), schema v1
-├── guiwright-viewer      # self-contained HTML+WASM trace viewer (loads .zip, replays)
+├── guiwright-viewer      # self-contained HTML trace viewer (loads .zip, replays)
 ├── guiwright-inspect     # inspector overlay injection + interaction→code recorder
-├── guiwright-cli         # `guiwright codegen|test|show-trace|bless|install-deps`,
+├── guiwright-cli         # `guiwright repl|test|show-trace|bless|install-deps`,
 │                         #   nextest/report glue, sharding
 └── guiwright-bench       # criterion suites + CI perf guards (§15.7)
 ```
@@ -225,8 +230,8 @@ Dependency rule: `core` depends only on `accesskit` + `accesskit_consumer` (the 
 guiwright-driver = { version = "0.1", optional = true }
 
 [features]
-gw-egui   = ["dep:guiwright-driver", "guiwright-driver/egui"]
-gw-gpui   = ["dep:guiwright-driver", "guiwright-driver/gpui", "gpui/test-support"]
+gw-egui   = ["dep:guiwright-driver", "dep:guiwright-adapter-egui"]
+gw-gpui   = ["dep:guiwright-driver", "dep:guiwright-adapter-gpui", "gpui/test-support"]
 ```
 
 Launch modes: `GUIWRIGHT_DRIVER=uds:///tmp/app.gwp ./app` (remote), or `cargo test` with `guiwright-kit` (embedded). Release builds without the feature compile the driver to nothing (`#[cfg]`-gated taps).
@@ -322,7 +327,7 @@ let trace = app.trace().stop().await?;                    // guiwright-<ts>.zip
 
 CDP-inspired: sessions → targets (windows) → domains; request/response + server-push events; versioned, binary-first.
 
-- **Transport:** UDS (default), TCP (CI containers + other-language clients), WS (the viewer live-mode door — served in Rust since M15). Framing: 4-byte length + postcard-encoded body (schema-versioned enum; `#[serde(skip)]`-free, explicit `V1` variants so old clients get clean errors). Large payloads (frames, trees, traces) go on a **side channel as length-prefixed postcard+LZ4 blobs** to keep command latency independent of payload size.
+- **Transport:** UDS (default), TCP (CI containers + other-language clients), WS (the viewer live-mode door — served in Rust since M15), in-process duplex pipes (the embedded door — served since M16, with the public `Transport` seam turning the transport-blind bring-up into a downstream extension point: any listener that yields byte streams serves the byte-identical conversation). Framing: 4-byte length + postcard-encoded body (schema-versioned enum; `#[serde(skip)]`-free, explicit `V1` variants so old clients get clean errors). Large payloads (frames, trees, traces) go on a **side channel as length-prefixed postcard+LZ4 blobs** to keep command latency independent of payload size.
 - **Multiplexing:** monotonic `request_id`; events tagged with `seq` per topic; every mutation response carries the `frame_seq` it was applied at (clients can await that exact frame — no polling).
 - **Events (M12, shipped shape; logs M14):** the sketch's `TreeSubscribe` landed as the append-only `Subscribe { On { kinds } | Off }` domain (discriminant 15); pushed events ride the response envelope as `ResponseV1::Event(EventV1)` (17) — every client demultiplexes one enum, a connection that never subscribes keeps the byte-exact pre-M12 conversation, and the tree-dump domain (M11/M13) is the read-side counterpart (`Snapshot::Full` / `Snapshot::Filtered`). The `Log` kind rides the per-session `tracing` tap (`ServerOptions::log_tail`): a thread-local dispatcher on the session thread feeds a bounded live tail whose records stream as `EventV1::Log` — one `logs.ndjson`-shape JSON line each; a session without the tail still answers the kind with a typed `Unsupported`.
 
@@ -466,7 +471,7 @@ index.bin          frame_seq → offsets (O(1) random access)
 ```
 
 - **Recorder:** lock-free SPSC ring on the UI thread → writer thread (LZ4, ring buffer with sliding-window eviction; cap default 256 MB, oldest-first eviction). Frames captured at a configurable rate (default: every frame up to 60 fps, hash-deduped).
-- **Viewer:** self-contained `trace.html` (WASM): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode: viewer attaches to a running session via WS and streams events (Playwright TraceViewer's live mode analog).
+- **Viewer:** self-contained `trace.html` (WASM): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16): the transport is served — `connectWs` (M3) and `spawn_ws`/`spawn_inprocess` (M15/M16) are its doors — but the viewer's live-mode client itself remains the unstarted milestone; today the viewer replays `gwtrace/v1` archives.
 
 ---
 
@@ -556,7 +561,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 
 - Micro (criterion): codec round-trips, diff apply, index build on synthetic 10 k-node trees, LZ4 blobs, hash throughput.
 - Macro: scripted 200-action session on the egui demo app and a synthetic masonry app (1 k nodes): end-to-end action latency histogram, suite wall-clock for 1 000 asserts, memory profile.
-- Perf guards in CI: p95 budget regressions fail the build (budgets from §15.1 stored in `bench/budgets.toml`).
+- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path — 24 rows today), each bound to a sample in `check_budgets`.
 
 ---
 
@@ -566,9 +571,9 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 |---|---|---|
 | Locators (`getByRole/Label/Text/TestId/Value`, filters, strict mode) | §8 selector model over accesskit consumer + L2 logical trees | MVP |
 | Auto-waiting / actionability | §8.3 event-driven checks | MVP |
-| Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths) | MVP |
+| Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths); the wire `Action` honors `force`/`timeout_ms` (M17's pre-resolved gate) | MVP |
 | Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines | MVP |
-| Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); the §7 render domain ships them over GWP (M10) | MVP (embedded), M10 (wire) |
+| Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); locator-level element shots (M9), the §7 render domain over GWP (M10) | MVP (embedded), M9 (locator), M10 (wire) |
 | Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML; the §16 v0.5 own runner is `guiwright test` over `gwtest/v1` specs (M5) | MVP (nextest-native), M5 (own runner) |
 | Trace viewer (time travel, live) | §12 | v0.3 |
 | Codegen + inspector overlay | §13 | M2/M4 (codegen), M8 (live overlay) |
@@ -578,10 +583,10 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Multi-window / tabs | targets per window (all frameworks support multi-window; freya-testing single-window initially) | M6 |
 | Headless CI | §11 | MVP |
 | Error context (call log, DOM snapshot on failure) | error embeds tree snapshot + trace link | MVP |
-| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under) |
+| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under, M14 log kind) |
 | Live event stream (server-push) | §7 event channel: `Subscribe { On | Off }`, events ride `ResponseV1::Event`; the `Log` kind rides the per-session `tracing` tap | M12 (logs M14) |
 | Component testing | embedded mode = widget-level (Simulator/RenderRoot/harness) | MVP |
-| Other-language clients | GWP over TCP/UDS/WS; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust) |
+| Other-language clients | GWP over TCP/UDS/WS + the in-process embedded door; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust); M16 (embedded door + public `Transport` seam) |
 
 ---
 
