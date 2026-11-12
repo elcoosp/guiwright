@@ -2,20 +2,14 @@
 //! (default; also TCP for CI containers, WS for the viewer)").
 //!
 //! The connection state machine (handshake gate, dispatch, event flush)
-//! lives in [`crate::conn`] and is shared byte-for-byte with the TCP
-//! transport; this module owns the accept loop and the client socket.
-
-use std::collections::VecDeque;
+//! lives in [`crate::conn`] and is shared byte-for-byte with the TCP and
+//! WS transports; this module owns the accept loop and the client socket.
 
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::GwpError;
-use crate::conn::{read_next_event, read_response_demuxing};
-use crate::framing::{read_frame, write_frame};
-use crate::schema::{
-    EventKindV1, GwpEvent, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1, ResponseV1,
-    SubscribeV1,
-};
+use crate::conn::ClientCore;
+use crate::schema::{EventKindV1, RequestV1, ResponseV1};
 
 pub use crate::conn::{EVENT_QUEUE_CAPACITY, Handler, run_connection};
 
@@ -41,21 +35,19 @@ pub async fn serve<H: Handler>(listener: UnixListener, mut make_handler: impl Fn
     }
 }
 
-/// Client half of a UDS session.
+/// Client half of a UDS session. The conversation (handshake, requests,
+/// event buffering) is the shared [`crate::conn::ClientCore`]; this type
+/// only owns the socket.
 #[derive(Debug)]
 pub struct Client {
-    stream: UnixStream,
-    /// Events that interleaved earlier responses (§7, M12): pushed frames
-    /// read while waiting for a request reply are buffered here, not lost.
-    events: VecDeque<GwpEvent>,
+    core: ClientCore<UnixStream>,
 }
 
 impl Client {
     pub async fn connect(path: &std::path::Path) -> Result<Client, GwpError> {
         let stream = UnixStream::connect(path).await?;
         Ok(Client {
-            stream,
-            events: VecDeque::new(),
+            core: ClientCore::new(stream),
         })
     }
 
@@ -64,93 +56,43 @@ impl Client {
         &mut self,
         agent: &str,
     ) -> Result<crate::schema::AdapterInfoV1, GwpError> {
-        write_frame(
-            &mut self.stream,
-            &GwpRequest::V1(RequestV1::Hello {
-                proto_version: PROTO_VERSION,
-                agent: agent.to_string(),
-            }),
-        )
-        .await?;
-        let resp: GwpResponse = read_frame(&mut self.stream).await?;
-        let GwpResponse::V1(ResponseV1::Welcome {
-            proto_version,
-            adapter,
-            ..
-        }) = resp
-        else {
-            return match resp {
-                GwpResponse::V1(ResponseV1::Error { code, message }) => {
-                    Err(GwpError::Rejected { code, message })
-                }
-                GwpResponse::V1(_) => Err(GwpError::Handshake("expected Welcome")),
-            };
-        };
-        if proto_version != PROTO_VERSION {
-            return Err(GwpError::Handshake("driver protocol mismatch"));
-        }
-        Ok(adapter)
+        self.core.handshake(agent).await
     }
 
     pub async fn request(&mut self, request: RequestV1) -> Result<ResponseV1, GwpError> {
-        write_frame(&mut self.stream, &GwpRequest::V1(request)).await?;
-        // One response, with pushed events buffered for `next_event` (§7,
-        // M12): a subscribed connection receives `Event` frames between
-        // responses; a connection that never subscribes never sees one.
-        let inner = read_response_demuxing(&mut self.stream, &mut self.events).await?;
-        match inner {
-            ResponseV1::Error { code, message } => Err(GwpError::Rejected { code, message }),
-            other => Ok(other),
-        }
+        self.core.request(request).await
     }
 
     /// The next pushed event (§7, M12): from the buffer of events that
     /// interleaved earlier responses, or straight off the wire. Blocks
     /// until the driver publishes one — pair it with the subscriber's
     /// own pacing, never on a hot path.
-    pub async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
-        read_next_event(&mut self.stream, &mut self.events).await
+    pub async fn next_event(&mut self) -> Result<crate::schema::GwpEvent, GwpError> {
+        self.core.next_event().await
     }
 
     /// Subscribe this connection to the named event kinds (§7, M12).
     /// Re-subscribing replaces the filter; the ack echoes the kinds the
     /// driver honored.
     pub async fn subscribe(&mut self, kinds: &[EventKindV1]) -> Result<(), GwpError> {
-        let resp = self
-            .request(RequestV1::Subscribe(SubscribeV1::On {
-                kinds: kinds.to_vec(),
-            }))
-            .await?;
-        match resp {
-            ResponseV1::Subscribed { .. } => Ok(()),
-            other => Err(GwpError::Protocol(format!(
-                "expected Subscribed, got {other:?}"
-            ))),
-        }
+        self.core.subscribe(kinds).await
     }
 
     /// Drop this connection's event subscription (§7, M12).
     pub async fn unsubscribe(&mut self) -> Result<(), GwpError> {
-        match self.request(RequestV1::Subscribe(SubscribeV1::Off)).await? {
-            ResponseV1::Subscribed { kinds } if kinds.is_empty() => Ok(()),
-            other => Err(GwpError::Protocol(format!(
-                "expected an empty Subscribed ack, got {other:?}"
-            ))),
-        }
+        self.core.unsubscribe().await
     }
 
     pub async fn ping(&mut self) -> Result<(), GwpError> {
-        match self.request(RequestV1::Ping).await? {
-            ResponseV1::Pong => Ok(()),
-            other => Err(GwpError::Protocol(format!("expected Pong, got {other:?}"))),
-        }
+        self.core.ping().await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{AdapterInfoV1, CapsV1, ErrorCode};
+    use crate::framing::{read_frame, write_frame};
+    use crate::schema::{AdapterInfoV1, CapsV1, ErrorCode, GwpRequest, GwpResponse, PROTO_VERSION};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
