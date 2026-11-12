@@ -1,23 +1,26 @@
-//! Transport-agnostic GWP client (§7): one connection type over the UDS
-//! and TCP transports of `guiwright-proto`. The REPL is transport-blind —
-//! `--uds /tmp/app.gwp` and `--tcp 127.0.0.1:41234` drive byte-identical
-//! conversations.
+//! Transport-agnostic GWP client (§7): one connection type over the UDS,
+//! TCP and WebSocket transports of `guiwright-proto`. The REPL is
+//! transport-blind — `--uds /tmp/app.gwp`, `--tcp 127.0.0.1:41234` and
+//! `--ws ws://127.0.0.1:41234` drive byte-identical conversations.
 
 use std::path::PathBuf;
 
 use guiwright_proto::schema::{AdapterInfoV1, GwpEvent, RequestV1, ResponseV1};
-use guiwright_proto::{GwpError, tcp, uds};
+use guiwright_proto::{GwpError, tcp, uds, ws};
 
-/// Where to attach: a Unix domain socket path or a TCP `host:port`.
+/// Where to attach: a Unix domain socket path, a TCP `host:port`, or a
+/// WebSocket `ws://host:port` (the viewer live-mode door, M15).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectTarget {
     Uds(PathBuf),
     Tcp(String),
+    Ws(String),
 }
 
 impl ConnectTarget {
-    /// Parse a `uds:///path` / `tcp://host:port` URL (the
-    /// `GUIWRIGHT_DRIVER` launch-mode form, §5.3) or a bare path/address.
+    /// Parse a `uds:///path` / `tcp://host:port` / `ws://host:port` URL
+    /// (the `GUIWRIGHT_DRIVER` launch-mode form, §5.3) or a bare
+    /// path/address.
     pub fn parse(value: &str) -> Result<Self, String> {
         if let Some(rest) = value.strip_prefix("uds://") {
             if rest.is_empty() {
@@ -31,6 +34,12 @@ impl ConnectTarget {
             }
             return Ok(ConnectTarget::Tcp(rest.to_string()));
         }
+        if let Some(rest) = value.strip_prefix("ws://") {
+            if rest.is_empty() {
+                return Err("ws:// URL needs a host:port".into());
+            }
+            return Ok(ConnectTarget::Ws(rest.to_string()));
+        }
         // Bare forms: a path containing `/` is a socket, else an address.
         if value.contains('/') {
             Ok(ConnectTarget::Uds(PathBuf::from(value)))
@@ -40,10 +49,13 @@ impl ConnectTarget {
     }
 }
 
-/// One live GWP session over either transport.
+/// One live GWP session over any transport.
 pub enum Connection {
     Uds(uds::Client),
     Tcp(tcp::Client),
+    /// Boxed: the WS client carries the frame codec's buffers and would
+    /// otherwise dominate the enum's size (`clippy::large_enum_variant`).
+    Ws(Box<ws::Client>),
 }
 
 impl std::fmt::Debug for Connection {
@@ -51,6 +63,7 @@ impl std::fmt::Debug for Connection {
         match self {
             Connection::Uds(_) => f.write_str("Connection(Uds)"),
             Connection::Tcp(_) => f.write_str("Connection(Tcp)"),
+            Connection::Ws(_) => f.write_str("Connection(Ws)"),
         }
     }
 }
@@ -60,6 +73,7 @@ impl Connection {
         Ok(match target {
             ConnectTarget::Uds(path) => Connection::Uds(uds::Client::connect(path).await?),
             ConnectTarget::Tcp(addr) => Connection::Tcp(tcp::Client::connect(addr).await?),
+            ConnectTarget::Ws(addr) => Connection::Ws(Box::new(ws::Client::connect(addr).await?)),
         })
     }
 
@@ -68,6 +82,7 @@ impl Connection {
         match self {
             Connection::Uds(c) => c.handshake(agent).await,
             Connection::Tcp(c) => c.handshake(agent).await,
+            Connection::Ws(c) => c.handshake(agent).await,
         }
     }
 
@@ -77,6 +92,7 @@ impl Connection {
         match self {
             Connection::Uds(c) => c.request(request).await,
             Connection::Tcp(c) => c.request(request).await,
+            Connection::Ws(c) => c.request(request).await,
         }
     }
 
@@ -85,6 +101,7 @@ impl Connection {
         match self {
             Connection::Uds(c) => c.next_event().await,
             Connection::Tcp(c) => c.next_event().await,
+            Connection::Ws(c) => c.next_event().await,
         }
     }
 
@@ -115,6 +132,10 @@ mod tests {
             Ok(ConnectTarget::Tcp("127.0.0.1:41234".into()))
         );
         assert_eq!(
+            ConnectTarget::parse("ws://127.0.0.1:41235"),
+            Ok(ConnectTarget::Ws("127.0.0.1:41235".into()))
+        );
+        assert_eq!(
             ConnectTarget::parse("/tmp/app.gwp"),
             Ok(ConnectTarget::Uds(PathBuf::from("/tmp/app.gwp")))
         );
@@ -124,5 +145,6 @@ mod tests {
         );
         assert!(ConnectTarget::parse("uds://").is_err());
         assert!(ConnectTarget::parse("tcp://").is_err());
+        assert!(ConnectTarget::parse("ws://").is_err());
     }
 }
