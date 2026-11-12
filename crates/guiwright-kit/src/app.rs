@@ -125,6 +125,79 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         Ok(outcome)
     }
 
+    /// `locator.press(key)` — the §9 keyboard vocabulary aimed at the
+    /// resolved node (§16 actions row): the same actionability gate and
+    /// auto-wait as every locator action, the plain (no-modifier) chord.
+    pub fn press(self, key: &str) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let outcome = self.app.session.perform_action(
+            &self.selector,
+            SemAction::Press {
+                key: key.to_string(),
+                modifiers: Vec::new(),
+            },
+            &ActionOpts::default(),
+        )?;
+        self.app.record_action("press", &self.selector, Some(key));
+        Ok(outcome)
+    }
+
+    /// `locator.check()` — the wire's `Check` semantic action.
+    pub fn check(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let outcome = self.app.session.perform_action(
+            &self.selector,
+            SemAction::Check,
+            &ActionOpts::default(),
+        )?;
+        self.app.record_action("check", &self.selector, None);
+        Ok(outcome)
+    }
+
+    /// `locator.uncheck()`.
+    pub fn uncheck(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let outcome = self.app.session.perform_action(
+            &self.selector,
+            SemAction::Uncheck,
+            &ActionOpts::default(),
+        )?;
+        self.app.record_action("uncheck", &self.selector, None);
+        Ok(outcome)
+    }
+
+    /// `locator.set_checked(checked)` — routes through the same
+    /// `Check`/`Uncheck` vocabulary (Playwright parity: `true` checks).
+    pub fn set_checked(
+        self,
+        checked: bool,
+    ) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        if checked {
+            self.check()
+        } else {
+            self.uncheck()
+        }
+    }
+
+    /// `locator.focus()`.
+    pub fn focus(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let outcome = self.app.session.perform_action(
+            &self.selector,
+            SemAction::Focus,
+            &ActionOpts::default(),
+        )?;
+        self.app.record_action("focus", &self.selector, None);
+        Ok(outcome)
+    }
+
+    /// `locator.blur()`.
+    pub fn blur(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let outcome = self.app.session.perform_action(
+            &self.selector,
+            SemAction::Blur,
+            &ActionOpts::default(),
+        )?;
+        self.app.record_action("blur", &self.selector, None);
+        Ok(outcome)
+    }
+
     /// Raw resolution (no action) — for custom flows.
     pub fn resolve(self) -> Result<Resolved, KitError> {
         Ok(self.app.session.resolve(&self.selector)?)
