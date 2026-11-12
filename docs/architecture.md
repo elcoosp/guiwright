@@ -1,6 +1,6 @@
 # Guiwright — Technical Architecture
 
-**Status:** living design doc — the original v0.1 draft, amended through milestone 17 (records: `docs/m2-*.md` … `docs/m17-*.md`); the §16 parity map and §7 transport list track what shipped
+**Status:** living design doc — the original v0.1 draft, amended through milestone 19 (records: `docs/m2-*.md` … `docs/m19-*.md`); the §16 parity map and §7 transport list track what shipped
 **Date:** 2026-11-06 (drafted), 2026-11-12 (last amended)
 **Scope:** a Playwright-grade test & automation driver for Rust GUI frameworks — GPUI, Xilem/Masonry, Floem, Iced, egui, Slint, Freya
 **Evidence base:** shallow clones of `zed`, `linebender/xilem`, `lapce/floem`, `iced-rs/iced`, `emilk/egui`, `slint-ui/slint`, `marc2332/freya`, `AccessKit/accesskit`, `rerun-io/kittest` (HEADs of 2026-11-03..06; versions and file paths cited inline). Paths are relative to each repo root.
@@ -471,7 +471,7 @@ index.bin          frame_seq → offsets (O(1) random access)
 ```
 
 - **Recorder:** lock-free SPSC ring on the UI thread → writer thread (LZ4, ring buffer with sliding-window eviction; cap default 256 MB, oldest-first eviction). Frames captured at a configurable rate (default: every frame up to 60 fps, hash-deduped).
-- **Viewer:** self-contained `trace.html` (WASM): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16): the transport is served — `connectWs` (M3) and `spawn_ws`/`spawn_inprocess` (M15/M16) are its doors — but the viewer's live-mode client itself remains the unstarted milestone; today the viewer replays `gwtrace/v1` archives.
+- **Viewer:** self-contained `trace.html` (WASM): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16) shipped with M18: the transport-side client seam (`ClientConn`, the client half of `Handler`) plus the viewer's `LiveFeed`/`LiveTimeline` — a running session over any door (UDS/TCP/WS/embedded) feeds the same scrubber model the archive path builds, dump-per-change, event-fed frame axis. The `trace.html` emitter for live captures stays a follow-on (the §12 archive is still the file format); the kit's trace flow still archives first.
 
 ---
 
@@ -571,11 +571,11 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 |---|---|---|
 | Locators (`getByRole/Label/Text/TestId/Value`, filters, strict mode) | §8 selector model over accesskit consumer + L2 logical trees | MVP |
 | Auto-waiting / actionability | §8.3 event-driven checks | MVP |
-| Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths); the wire `Action` honors `force`/`timeout_ms` (M17's pre-resolved gate) | MVP |
+| Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths); the wire `Action` honors `force`/`timeout_ms` (M17's pre-resolved gate); the kit locator surface carries `press`/`check`/`uncheck`/`set_checked`/`focus`/`blur` too (M19) | MVP |
 | Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines | MVP |
 | Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); locator-level element shots (M9), the §7 render domain over GWP (M10) | MVP (embedded), M9 (locator), M10 (wire) |
 | Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML; the §16 v0.5 own runner is `guiwright test` over `gwtest/v1` specs (M5) | MVP (nextest-native), M5 (own runner) |
-| Trace viewer (time travel, live) | §12 | v0.3 |
+| Trace viewer (time travel, live) | §12 | v0.3 (archive), M18 (live feed over the `ClientConn` seam) |
 | Codegen + inspector overlay | §13 | M2/M4 (codegen), M8 (live overlay) |
 | Video recording | §10 (ffmpeg pipe) | M3 (recorder + wire domain) |
 | Virtual clock (`clock.install/fastForward`) | §14 | v0.3 (egui/slint/masonry/freya), v0.5 (gpui/iced live) |
