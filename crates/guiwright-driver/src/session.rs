@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use accesskit::NodeId;
-use guiwright_core::actionability::{Check, action_checks};
+use guiwright_core::actionability::{Check, CheckStatus, action_checks};
 use guiwright_core::expect::DEFAULT_TIMEOUT;
 use guiwright_core::tree::{Resolved, TreeService};
-use guiwright_core::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
+use guiwright_core::wait::{ChecksWaiter, StabilityTracker, WaitOutcome, Waiter, WaiterEvent};
 use guiwright_core::{CoreError, NodeKey, Selector};
 
 use crate::adapter::{
@@ -41,6 +41,13 @@ impl Default for ActionOpts {
             force: false,
         }
     }
+}
+
+/// One evaluation of the pre-resolved actionability gate (M17): all
+/// checks hold, or the node is still stuck on one of them.
+enum GateEval {
+    Pass,
+    Pending { check: String, reason: String },
 }
 
 /// `AdapterError` → `CoreError` with the structure kept (M8): an
@@ -1119,7 +1126,10 @@ impl<A: FrameworkAdapter> Session<A> {
 
     /// Apply a pre-resolved action (the GWP `Action` path, §7): the caller
     /// already holds the node handle + generation from a `Resolve`; the
-    /// session validates the generation and applies inside the next frame.
+    /// session validates the generation (at the wire boundary), re-checks
+    /// actionability at act time — the tree may have moved on since the
+    /// Resolve (§8.3 over the wire, M17) — and applies inside the next
+    /// frame. `force` skips the gate; `timeout_ms` bounds it.
     pub fn apply_action(
         &mut self,
         key: NodeKey,
@@ -1127,7 +1137,10 @@ impl<A: FrameworkAdapter> Session<A> {
         force: bool,
         timeout_ms: u64,
     ) -> Result<ActionOutcome, CoreError> {
-        let _ = (force, timeout_ms);
+        let checks = action_checks(force);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        self.wait_key_actionable(&key, &checks, deadline)?;
+
         // Remote codegen (§13, M4): facts come from the *pre-action* tree —
         // the node is exactly what the client targeted before the action's
         // own side effects land. The embedded path (`perform_action`)
@@ -1145,6 +1158,88 @@ impl<A: FrameworkAdapter> Session<A> {
             self.codegen_record(kind, argument, &facts);
         }
         Ok(outcome)
+    }
+
+    /// The pre-resolved actionability gate (§8.3 for the wire `Action`
+    /// path, M17): evaluate the ordered checks against a fixed [`NodeKey`]
+    /// until they pass or the deadline lands. Mirrors `wait_for`'s
+    /// event-shaped cadence — the initial evaluation is free, then one
+    /// evaluation per pump (a pump is a frame boundary, §15.4; the mock
+    /// presents per pump, real adapters at their frame step) — and the
+    /// `Timeout` names the check the node was stuck on, Playwright-report
+    /// style. The node identity is already pinned, so there is nothing to
+    /// re-resolve, only a world to re-read.
+    fn wait_key_actionable(
+        &mut self,
+        key: &NodeKey,
+        checks: &[Check],
+        deadline: Instant,
+    ) -> Result<(), CoreError> {
+        let configured = deadline.saturating_duration_since(Instant::now());
+        let mut stability = StabilityTracker::default();
+        let mut last_pending: Option<String>;
+        match self.eval_key_checks(key, checks, &mut stability)? {
+            GateEval::Pass => return Ok(()),
+            GateEval::Pending { check, reason } => {
+                last_pending = Some(format!("{check} ({reason})"));
+            }
+        }
+        loop {
+            if Instant::now() >= deadline {
+                let stuck = last_pending.unwrap_or_else(|| "its checks".to_string());
+                return Err(CoreError::Timeout {
+                    operation: format!(
+                        "actionable action on {} — stuck on {stuck}",
+                        key.describe()
+                    ),
+                    timeout: configured,
+                    last: Box::new(self.tree.summary()),
+                });
+            }
+            self.pump();
+            match self.eval_key_checks(key, checks, &mut stability)? {
+                GateEval::Pass => return Ok(()),
+                GateEval::Pending { check, reason } => {
+                    last_pending = Some(format!("{check} ({reason})"));
+                }
+            }
+        }
+    }
+
+    /// One evaluation of the ordered checks against `key`, carrying the
+    /// stability tracker across frame boundaries. `Pass` = every check
+    /// holds right now; `Pending` names the check the node is stuck on;
+    /// a definitively failed check is an immediate `Err`.
+    fn eval_key_checks(
+        &self,
+        key: &NodeKey,
+        checks: &[Check],
+        stability: &mut StabilityTracker,
+    ) -> Result<GateEval, CoreError> {
+        for check in checks {
+            let status = if matches!(check, Check::Stable) {
+                stability.on_frame(&self.tree, key)
+            } else {
+                guiwright_core::actionability::evaluate(&self.tree, key, check)
+            };
+            match status {
+                CheckStatus::Pass => {}
+                CheckStatus::Pending { reason } => {
+                    return Ok(GateEval::Pending {
+                        check: check.describe(),
+                        reason,
+                    });
+                }
+                CheckStatus::Failed { reason } => {
+                    return Err(CoreError::Other(format!(
+                        "action on {} failed `{}`: {reason}",
+                        key.describe(),
+                        check.describe(),
+                    )));
+                }
+            }
+        }
+        Ok(GateEval::Pass)
     }
 
     /// `locator.click()`.
