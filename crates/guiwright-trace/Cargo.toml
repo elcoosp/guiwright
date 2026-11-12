@@ -16,7 +16,6 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 zip = { version = "9.4.1", default-features = false, features = ["time"] }
-twox-hash.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
