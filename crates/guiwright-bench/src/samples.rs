@@ -409,7 +409,8 @@ pub fn resolve_remote_tcp() -> Duration {
         let addr = match handle.endpoint() {
             guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
             guiwright_driver::server::Endpoint::Uds(_)
-            | guiwright_driver::server::Endpoint::Ws(_) => {
+            | guiwright_driver::server::Endpoint::Ws(_)
+            | guiwright_driver::server::Endpoint::InProcess => {
                 unreachable!("spawn_tcp reports a TCP endpoint")
             }
         };
@@ -495,6 +496,136 @@ pub fn ws_ping_roundtrip() -> Duration {
         let started = Instant::now();
         for _ in 0..ITERATIONS {
             client.ping().await.expect("bench ping");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- M16 sample (in-process ping round-trip, §7's embedded door) ------------
+
+/// §15.1 `inprocess_ping_roundtrip`: one Ping round-trip over the
+/// in-process door (M16) — the embedded mode's steady-state latency, the
+/// floor every socket door adds its transport cost on top of.
+/// Byte-identical to the WS row's conversation; the duplex pipe is paid
+/// once at connect, outside the measured window.
+pub fn inprocess_ping_roundtrip() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        for _ in 0..4 {
+            client.ping().await.expect("warm ping");
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            client.ping().await.expect("bench ping");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- M17 sample (wire action round-trip, §8.3's actionability gate) ---------
+
+/// §15.1 `wire_action_click`: one Action round-trip over the in-process
+/// door (M17) — resolve once outside the window, then measure the
+/// force-less action path: the pre-resolved actionability gate (initial
+/// evaluation + stability-confirmed frames), the generation-checked `act`
+/// and the frame-boundary rendezvous pump. The ride-along cost of M17's
+/// gate on top of the M16 transport floor.
+pub fn wire_action_click() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::schema::{RequestV1, ResponseV1, SelectorV1, SemActionV1, TextMatchV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let selector = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: false,
+                ignore_case: true,
+            }),
+        };
+        let resolved = client
+            .request(RequestV1::Resolve {
+                selector: selector.clone(),
+                timeout_ms: 2000,
+            })
+            .await
+            .expect("bench resolve");
+        let (node, generation) = match resolved {
+            ResponseV1::Resolved {
+                node, generation, ..
+            } => (node, generation),
+            other => unreachable!("expected Resolved, got {other:?}"),
+        };
+
+        for _ in 0..4 {
+            let done = client
+                .request(RequestV1::Action {
+                    node: node.clone(),
+                    generation,
+                    action: SemActionV1::Click,
+                    force: false,
+                    timeout_ms: 2000,
+                })
+                .await
+                .expect("warm action");
+            assert!(matches!(done, ResponseV1::ActionDone { .. }));
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .request(RequestV1::Action {
+                    node: node.clone(),
+                    generation,
+                    action: SemActionV1::Click,
+                    force: false,
+                    timeout_ms: 2000,
+                })
+                .await
+                .expect("bench action");
+            assert!(matches!(done, ResponseV1::ActionDone { .. }));
         }
         (started.elapsed() / ITERATIONS, handle)
     });
