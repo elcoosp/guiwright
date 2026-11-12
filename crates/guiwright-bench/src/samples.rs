@@ -1077,3 +1077,34 @@ pub fn viewer_live_sync() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+// --- Checked-state assertion sample (§8 check vocabulary, M20) ---------------
+
+/// §16 assertions row, M20: one `to_be_checked()` kit assertion on the
+/// checkbox-trio fixture — strict resolve plus the checked evaluation
+/// through the session's event-driven wait. The assertion completes on the
+/// initial evaluation (the state already holds, no pump), so this is the
+/// floor every `expect(locator).to_*` adds on top of a resolve.
+pub fn checked_assert() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::with_checkboxes();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("checked_assert", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        guiwright_kit::expect(app.get_by_role(Role::CheckBox, "Notifications"))
+            .to_be_checked()
+            .expect("bench assertion holds");
+    }
+    start.elapsed() / ITERATIONS
+}
