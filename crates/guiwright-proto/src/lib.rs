@@ -5,7 +5,8 @@
 //! * [`blob`] — LZ4 side-channel for large payloads (frames/trees/traces)
 //! * [`uds`] — default transport: server loop + client
 //! * [`tcp`] — loopback/container transport for other-language clients
-//! * [`conn`] — the transport-agnostic connection state machine both share
+//! * [`ws`] — the viewer live-mode door: RFC 6455 server + client (M15)
+//! * [`conn`] — the transport-agnostic connection state machine all three share
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -21,6 +22,7 @@ pub mod schema;
 pub mod schemadoc;
 pub mod tcp;
 pub mod uds;
+pub mod ws;
 
 pub use schema::{
     AdapterInfoV1, CapsV1, ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, InputEventV1,
@@ -30,6 +32,7 @@ pub use schema::{
 pub use tcp::Client as TcpClient;
 pub use uds::Client;
 pub use uds::Client as UdsClient;
+pub use ws::WsClient;
 
 use thiserror::Error;
 
