@@ -9,8 +9,9 @@
 //!   pause/resume semantics, the `clock.bin` ledger.
 //! * [`seams`] — state seams (§14 mock domain): app-registered hooks
 //!   executed inside the adapter's runner context via `run_in`.
-//! * [`server`] — serves GWP over UDS by marshalling commands to the session
-//!   thread (commands are queued and applied inside the next frame, §5.1).
+//! * [`server`] — serves GWP over UDS, TCP and WebSocket (M15) by
+//!   marshalling commands to the session thread (commands are queued and
+//!   applied inside the next frame, §5.1).
 //! * [`events`] — the §7 server-push event channel (M12): the session
 //!   thread's subscriber registry + fan-out, flushed between responses.
 //! * [`log_tail`] — the event channel's log half (the log-tail milestone):
