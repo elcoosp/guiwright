@@ -169,7 +169,7 @@ async fn repl_conversation_over_tcp() {
     .expect("tcp server binds");
     let addr = match handle.endpoint() {
         guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
-        guiwright_driver::server::Endpoint::Uds(_) => {
+        guiwright_driver::server::Endpoint::Uds(_) | guiwright_driver::server::Endpoint::Ws(_) => {
             panic!("expected TCP endpoint")
         }
     };
@@ -177,6 +177,44 @@ async fn repl_conversation_over_tcp() {
     let mut repl = Repl::connect(&ConnectTarget::Tcp(addr.to_string()))
         .await
         .expect("repl attaches over tcp");
+    assert_eq!(repl.adapter().name, "mock");
+
+    assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
+    assert!(ok_line(&repl.step("snapshot").await).ends_with("8 nodes"));
+    assert_eq!(
+        ok_line(&repl.step("get role button Save").await),
+        "resolved Button \"Save\" (generation 0) rect=[16,16 → 136,48]"
+    );
+    let click = repl.step("click").await;
+    assert!(
+        ok_line(&click).starts_with(r#"Button "Save": clicked (frame "#),
+        "{:?}",
+        rendered(&click)
+    );
+    let bye = repl.step("exit").await;
+    assert!(bye.exit);
+
+    handle.shutdown();
+}
+
+/// Transport parity (§7, M15): the same conversation over WebSocket — the
+/// RFC 6455 door the REPL reaches with `--ws ws://host:port`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_conversation_over_ws() {
+    let handle = GwpServerHandle::spawn_ws(
+        std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("ws server binds");
+    let addr = match handle.endpoint() {
+        guiwright_driver::server::Endpoint::Ws(addr) => *addr,
+        other => panic!("expected WS endpoint, got {other:?}"),
+    };
+
+    let mut repl = Repl::connect(&ConnectTarget::Ws(addr.to_string()))
+        .await
+        .expect("repl attaches over ws");
     assert_eq!(repl.adapter().name, "mock");
 
     assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
