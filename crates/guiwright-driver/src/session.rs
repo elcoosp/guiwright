@@ -1454,8 +1454,12 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
             .wait_for(&self.selector, checks, deadline)
             .map(|_| ())
             .map_err(|e| match e {
+                // Keep the Playwright-shaped failure header: the assertion
+                // name plus the locator (the waiter's own description
+                // carries the same context — errors must name what was
+                // being waited for, §8.3).
                 CoreError::Timeout { last, .. } => CoreError::Timeout {
-                    operation: name.to_string(),
+                    operation: format!("{name} — {}", self.selector.render()),
                     timeout: self.timeout,
                     last,
                 },
@@ -1481,6 +1485,21 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
 
     pub fn to_be_focused(self) -> Result<(), CoreError> {
         self.run(vec![Check::Focused], "focused")
+    }
+
+    pub fn to_be_checked(self) -> Result<(), CoreError> {
+        self.run(vec![Check::Checked(accesskit::Toggled::True)], "checked")
+    }
+
+    pub fn to_be_unchecked(self) -> Result<(), CoreError> {
+        self.run(vec![Check::Checked(accesskit::Toggled::False)], "unchecked")
+    }
+
+    pub fn to_be_checked_mixed(self) -> Result<(), CoreError> {
+        self.run(
+            vec![Check::Checked(accesskit::Toggled::Mixed)],
+            "mixed-checked",
+        )
     }
 
     pub fn to_have_text(self, text: impl Into<guiwright_core::TextMatch>) -> Result<(), CoreError> {
@@ -1605,6 +1624,92 @@ mod tests {
             .expect(Selector::role_named(accesskit::Role::Button, "Ghost"))
             .to_be_hidden()
             .expect("ghost hidden");
+    }
+
+    #[test]
+    fn checked_assertions_run_on_session() {
+        let fixture = Fixture::with_checkboxes();
+        let mut session = settled_session(&fixture);
+        session
+            .expect(Selector::role_named(
+                accesskit::Role::CheckBox,
+                "Notifications",
+            ))
+            .to_be_checked()
+            .expect("notifications checked");
+        session
+            .expect(Selector::role_named(accesskit::Role::CheckBox, "Dark mode"))
+            .to_be_unchecked()
+            .expect("dark mode unchecked");
+        session
+            .expect(Selector::role_named(
+                accesskit::Role::CheckBox,
+                "Partially installed",
+            ))
+            .to_be_checked_mixed()
+            .expect("partially installed mixed");
+    }
+
+    #[test]
+    fn a_wrong_checked_state_times_out_naming_the_state() {
+        let fixture = Fixture::with_checkboxes();
+        let mut session = settled_session(&fixture);
+        let err = session
+            .expect(Selector::role_named(accesskit::Role::CheckBox, "Dark mode"))
+            .with_timeout(Duration::from_millis(200))
+            .to_be_checked()
+            .expect_err("dark mode is not checked");
+        let msg = err.to_string();
+        assert!(msg.contains("checked"), "{msg}");
+        assert!(msg.contains("Dark mode"), "{msg}");
+    }
+
+    #[test]
+    fn to_be_checked_completes_when_the_state_flips() {
+        let fixture = Fixture::with_checkboxes();
+        let scripts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let adapter = MockAdapter::with_fixture(&fixture).with_shared_scripts(scripts.clone());
+        let mut session = settled_session_from(adapter);
+        // The app flips the checkbox 100 ms in — the waiter completes on
+        // the tree-diff event, never by polling (§15.3).
+        let flip = fixture
+            .checkbox_toggle_update(
+                fixture.unchecked_checkbox.expect("fixture"),
+                accesskit::Toggled::True,
+            )
+            .expect("fixture checkbox");
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            scripts.lock().expect("script channel").push(flip);
+        });
+        session
+            .expect(Selector::role_named(accesskit::Role::CheckBox, "Dark mode"))
+            .to_be_checked()
+            .expect("the flip arrives and the assertion completes");
+    }
+
+    #[test]
+    fn a_node_without_a_checked_state_fails_fast() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        // A plain button never exposes a checked state: the wait refuses
+        // immediately (fail-fast `Failed`, not a five-second `Timeout`).
+        let err = session
+            .expect(save_selector())
+            .to_be_checked()
+            .expect_err("a button is not checkable");
+        assert!(err.to_string().contains("no checked state"), "{err}");
+    }
+
+    /// `settled_session` for an adapter the test built itself (scripted
+    /// channels, personas): same two-frame stability baseline.
+    fn settled_session_from(adapter: MockAdapter) -> Session<MockAdapter> {
+        let mut adapter = adapter;
+        adapter.push_frame(1);
+        adapter.push_frame(1);
+        let mut session = Session::new(adapter);
+        session.settle(Instant::now() + Duration::from_secs(1));
+        session
     }
 
     #[test]
