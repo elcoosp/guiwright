@@ -111,6 +111,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ),
     ("wire_action_click", crate::samples::wire_action_click),
     ("viewer_live_sync", crate::samples::viewer_live_sync),
+    ("checked_assert", crate::samples::checked_assert),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
