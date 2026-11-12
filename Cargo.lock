@@ -1972,6 +1972,10 @@ dependencies = [
 name = "guiwright-viewer"
 version = "0.4.0"
 dependencies = [
+ "accesskit 0.25.2",
+ "guiwright-core",
+ "guiwright-driver",
+ "guiwright-proto",
  "guiwright-trace",
  "lz4_flex",
  "postcard",
@@ -1979,6 +1983,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "zip",
 ]
 
