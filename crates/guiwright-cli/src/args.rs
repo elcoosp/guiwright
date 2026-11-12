@@ -71,7 +71,8 @@ USAGE:
 COMMANDS:
     repl <target>         Attach to a live remote-mode session (§13).
                           <target>: uds:///path/to.sock | tcp://host:port
-                                  (bare paths and host:port also work)
+                                  | ws://host:port (bare paths and
+                                  host:port also work)
     show-trace <archive>  Render a gwtrace/v1 zip into trace.html (§12).
         [--out <path>]    Output path (default: next to the archive).
         [--open]          Open the rendered file with the platform opener.
@@ -82,7 +83,7 @@ COMMANDS:
     test [PATHS…]         Run gwtest/v1 scenario specs against a live app
                           (the §16 v0.5 own runner; default PATH:
                           tests/guiwright, scanned for *.spec.toml).
-        [--uds <path> | --tcp <addr>]   Target override (beats spec files).
+        [--uds <path> | --tcp <addr> | --ws <addr>]   Target override (beats spec files).
         [--workers N]     Parallel scenario workers (default 1).
         [--retries N]     Re-run failed scenarios (default: spec value).
         [--timeout <ms>]  Step deadline override for the whole run.
@@ -142,15 +143,22 @@ fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
                     target = Some(ConnectTarget::Tcp(value.clone()));
                     rest = &rest[2..];
                 }
+                "--ws" => {
+                    let value = rest
+                        .get(1)
+                        .ok_or(CliError::Usage("--ws needs a ws://host:port address"))?;
+                    target = Some(ConnectTarget::Ws(value.clone()));
+                    rest = &rest[2..];
+                }
                 other => {
-                    // Bare target: uds:///…, tcp://…, /path or host:port.
+                    // Bare target: uds:///…, tcp://…, ws://…, /path or host:port.
                     target = Some(ConnectTarget::parse(other).map_err(CliError::BadValue)?);
                     rest = &rest[1..];
                 }
             }
         }
         let target = target.ok_or(CliError::Usage(
-            "repl needs a target: --uds <path> | --tcp <addr> | <target>",
+            "repl needs a target: --uds <path> | --tcp <addr> | --ws <addr> | <target>",
         ))?;
         Ok(Command::Repl { target })
     }
@@ -228,8 +236,8 @@ fn flag_value<'a>(rest: &'a [String], usage: &'static str) -> Result<&'a String,
     rest.get(1).ok_or(CliError::Usage(usage))
 }
 
-/// `--uds <path>` / `--tcp <addr>`: the parsed target + how many argv
-/// slots it consumed (2 — flag + value).
+/// `--uds <path>` / `--tcp <addr>` / `--ws <addr>`: the parsed target +
+/// how many argv slots it consumed (2 — flag + value).
 fn parse_target_flag(flag: &str, rest: &[String]) -> Result<(ConnectTarget, usize), CliError> {
     match flag {
         "--uds" => {
@@ -240,16 +248,22 @@ fn parse_target_flag(flag: &str, rest: &[String]) -> Result<(ConnectTarget, usiz
             let value = flag_value(rest, "--tcp needs a host:port address")?;
             Ok((ConnectTarget::Tcp(value.clone()), 2))
         }
+        "--ws" => {
+            let value = flag_value(rest, "--ws needs a ws://host:port address")?;
+            Ok((ConnectTarget::Ws(value.clone()), 2))
+        }
         other => unreachable!("validated flag {other:?}"),
     }
 }
 
-/// Parse a numeric flag value with the shared "not a {what}" error shape.
+/// Parse a numeric flag value with the shared "needs a {usage}" /
+/// "not a {what}" error shape.
 fn parse_numeric_flag<T: std::str::FromStr>(
     rest: &[String],
+    usage: &'static str,
     what: &'static str,
 ) -> Result<T, CliError> {
-    let value = flag_value(rest, "…")?;
+    let value = flag_value(rest, usage)?;
     value
         .parse::<T>()
         .map_err(|_| CliError::BadValue(format!("`{value}` is not {what}")))
@@ -271,16 +285,19 @@ fn parse_test_args(rest: &[String]) -> Result<Command, CliError> {
 
         while let Some(flag) = rest.first() {
             match flag.as_str() {
-                "--uds" | "--tcp" => {
+                "--uds" | "--tcp" | "--ws" => {
                     if target.is_some() {
-                        return Err(CliError::Usage("--uds and --tcp are mutually exclusive"));
+                        return Err(CliError::Usage(
+                            "--uds, --tcp and --ws are mutually exclusive",
+                        ));
                     }
                     let (parsed, consumed) = parse_target_flag(flag, rest)?;
                     target = Some(parsed);
                     rest = &rest[consumed..];
                 }
                 "--workers" => {
-                    let value: usize = parse_numeric_flag(rest, "a worker count")?;
+                    let value: usize =
+                        parse_numeric_flag(rest, "--workers needs a count", "a worker count")?;
                     if value == 0 {
                         return Err(CliError::BadValue("--workers must be at least 1".into()));
                     }
@@ -288,25 +305,19 @@ fn parse_test_args(rest: &[String]) -> Result<Command, CliError> {
                     rest = &rest[2..];
                 }
                 "--retries" => {
-                    let value = rest
-                        .get(1)
-                        .ok_or(CliError::Usage("--retries needs a count"))?
-                        .parse::<u32>()
-                        .map_err(|_| {
-                            CliError::BadValue(format!("`{}` is not a retry count", rest[1]))
-                        })?;
-                    retries = Some(value);
+                    retries = Some(parse_numeric_flag(
+                        rest,
+                        "--retries needs a count",
+                        "a retry count",
+                    )?);
                     rest = &rest[2..];
                 }
                 "--timeout" => {
-                    let value = rest
-                        .get(1)
-                        .ok_or(CliError::Usage("--timeout needs milliseconds"))?
-                        .parse::<u64>()
-                        .map_err(|_| {
-                            CliError::BadValue(format!("`{}` is not a deadline", rest[1]))
-                        })?;
-                    timeout_ms = Some(value);
+                    timeout_ms = Some(parse_numeric_flag(
+                        rest,
+                        "--timeout needs milliseconds",
+                        "a deadline",
+                    )?);
                     rest = &rest[2..];
                 }
                 "--shard" => {
@@ -406,6 +417,13 @@ mod tests {
             cmd,
             Command::Repl {
                 target: ConnectTarget::Uds(PathBuf::from("/x.sock"))
+            }
+        );
+        let cmd = parse_args(&args(&["repl", "--ws", "ws://127.0.0.1:9"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Repl {
+                target: ConnectTarget::Ws("ws://127.0.0.1:9".into())
             }
         );
         assert!(parse_args(&args(&["repl"])).is_err());
