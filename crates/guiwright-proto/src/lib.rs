@@ -9,6 +9,8 @@
 //! * [`duplex`] — the embedded door: in-process pipes + client (M16), the
 //!   reference shape for downstream [`Handler`]-based transports
 //! * [`conn`] — the transport-agnostic connection state machine all doors share
+//! * [`client`] — the client-side connection seam: one [`ClientConn`]
+//!   trait every shipped client implements (M18), the mirror of [`Handler`]
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -17,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blob;
+pub mod client;
 pub mod conn;
 pub mod convert;
 pub mod duplex;
@@ -27,6 +30,7 @@ pub mod tcp;
 pub mod uds;
 pub mod ws;
 
+pub use client::ClientConn;
 pub use conn::Handler;
 pub use duplex::Client as DuplexClient;
 pub use schema::{
@@ -36,7 +40,6 @@ pub use schema::{
 };
 pub use tcp::Client as TcpClient;
 pub use uds::Client;
-pub use uds::Client as UdsClient;
 pub use ws::WsClient;
 
 use thiserror::Error;
