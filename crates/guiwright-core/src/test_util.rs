@@ -5,7 +5,7 @@
 //! adapter, adapter tests and the benchmark suites so every layer exercises
 //! the same reality.
 
-use accesskit::{Node, NodeId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
 
 use crate::key::NodeKey;
 
@@ -21,6 +21,13 @@ pub struct Fixture {
     pub email_input: NodeId,
     pub hidden_button: NodeId,
     pub disabled_button: NodeId,
+    /// The checked-state trio (checked / unchecked / mixed, §8 check
+    /// vocabulary) — `Some` only for [`Fixture::with_checkboxes`]; the
+    /// `buttons()` base stays byte-stable for the tests that pin its
+    /// 8-node summary.
+    pub checked_checkbox: Option<NodeId>,
+    pub unchecked_checkbox: Option<NodeId>,
+    pub mixed_checkbox: Option<NodeId>,
     pub screen_size: (f64, f64),
 }
 
@@ -52,7 +59,33 @@ impl Fixture {
             email_input: NodeId(5),
             hidden_button: NodeId(6),
             disabled_button: NodeId(7),
+            checked_checkbox: None,
+            unchecked_checkbox: None,
+            mixed_checkbox: None,
             screen_size: (480.0, 240.0),
+        }
+    }
+
+    /// The checked-state fixture (§8 check vocabulary): the `buttons()`
+    /// base plus a checkbox trio under the group —
+    ///
+    /// ```text
+    /// group (1)
+    /// ├── … the six buttons()/label/input nodes …
+    /// ├── checkbox "Notifications"       (9,  toggled True)
+    /// ├── checkbox "Dark mode"           (10, toggled False)
+    /// └── checkbox "Partially installed" (11, toggled Mixed)
+    /// ```
+    ///
+    /// `NodeId(8)` stays reserved for [`Fixture::add_button_update`]; the
+    /// trio lands above it so both updates compose on one fixture.
+    pub fn with_checkboxes() -> Self {
+        Self {
+            expected_nodes: 11,
+            checked_checkbox: Some(NodeId(9)),
+            unchecked_checkbox: Some(NodeId(10)),
+            mixed_checkbox: Some(NodeId(11)),
+            ..Self::buttons()
         }
     }
 
@@ -65,20 +98,49 @@ impl Fixture {
         n
     }
 
+    /// One checkbox row of the trio: bounded, labeled, tri-state stamped.
+    fn checkbox(id: NodeId, name: &str, toggled: Toggled) -> Node {
+        let mut n = Self::node(id, Role::CheckBox, Some(name));
+        n.set_toggled(toggled);
+        n
+    }
+
     /// Full initial update carrying the root `TreeInfo` (what egui emits on
     /// its first pass and what masonry emits per redraw).
     pub fn initial_update(&self) -> TreeUpdate {
         let mut window = Self::node(NodeId(0), Role::Window, Some("Test App"));
         window.set_children([NodeId(1)]);
         let mut group = Self::node(NodeId(1), Role::Group, None);
-        group.set_children([
+        let mut children = vec![
             self.save_button,
             self.cancel_button,
             self.welcome_label,
             self.email_input,
             self.hidden_button,
             self.disabled_button,
-        ]);
+        ];
+        // The checked-state trio rides the same group when present
+        // (`with_checkboxes`); `buttons()` keeps its 8-node shape.
+        let mut checkboxes: Vec<(NodeId, Node)> = Vec::new();
+        for (slot, name, toggled) in [
+            (self.checked_checkbox, "Notifications", Toggled::True),
+            (self.unchecked_checkbox, "Dark mode", Toggled::False),
+            (self.mixed_checkbox, "Partially installed", Toggled::Mixed),
+        ] {
+            if let Some(id) = slot {
+                let mut node = Self::checkbox(id, name, toggled);
+                let y0 = 204.0 + 40.0 * checkboxes.len() as f64;
+                node.set_bounds(Rect {
+                    x0: 16.0,
+                    y0,
+                    x1: 136.0,
+                    y1: y0 + 32.0,
+                });
+                children.push(id);
+                checkboxes.push((id, node));
+            }
+        }
+        group.set_children(children);
 
         let mut save = Self::node(self.save_button, Role::Button, Some("Save"));
         save.set_bounds(Rect {
@@ -125,17 +187,19 @@ impl Fixture {
             y1: 196.0,
         });
 
+        let mut nodes = vec![
+            (NodeId(0), window),
+            (NodeId(1), group),
+            (self.save_button, save),
+            (self.cancel_button, cancel),
+            (self.welcome_label, label),
+            (self.email_input, input),
+            (self.hidden_button, hidden),
+            (self.disabled_button, disabled),
+        ];
+        nodes.extend(checkboxes);
         TreeUpdate {
-            nodes: vec![
-                (NodeId(0), window),
-                (NodeId(1), group),
-                (self.save_button, save),
-                (self.cancel_button, cancel),
-                (self.welcome_label, label),
-                (self.email_input, input),
-                (self.hidden_button, hidden),
-                (self.disabled_button, disabled),
-            ],
+            nodes,
             tree: Some(TreeInfo {
                 root: NodeId(0),
                 toolkit_name: Some("guiwright-fixture".to_string()),
@@ -144,6 +208,33 @@ impl Fixture {
             tree_id: TreeId::ROOT,
             focus: NodeId(0),
         }
+    }
+
+    /// Incremental update: re-state one checkbox of the trio with a new
+    /// toggled state (the checked-check flip mid-wait). Fixture-scoped:
+    /// `None` for ids outside the trio, so callers decide how to fail.
+    pub fn checkbox_toggle_update(&self, node: NodeId, toggled: Toggled) -> Option<TreeUpdate> {
+        let (name, y0) = [
+            (self.checked_checkbox, "Notifications", 204.0),
+            (self.unchecked_checkbox, "Dark mode", 244.0),
+            (self.mixed_checkbox, "Partially installed", 284.0),
+        ]
+        .into_iter()
+        .find(|(slot, _, _)| *slot == Some(node))
+        .map(|(_, name, y0)| (name, y0))?;
+        let mut box_node = Self::checkbox(node, name, toggled);
+        box_node.set_bounds(Rect {
+            x0: 16.0,
+            y0,
+            x1: 136.0,
+            y1: y0 + 32.0,
+        });
+        Some(TreeUpdate {
+            nodes: vec![(node, box_node)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        })
     }
 
     /// Incremental update: add `button "Export"` under the group (§15.2
