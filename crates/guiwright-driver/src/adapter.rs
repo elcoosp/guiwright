@@ -130,7 +130,15 @@ impl SemAction {
             SemAction::Focus => "focus".into(),
             SemAction::Blur => "blur".into(),
             SemAction::Hover => "hover".into(),
-            SemAction::Press { key, modifiers } => format!("press({}+{key})", modifiers.join("+")),
+            // A no-modifier chord reads `press(Enter)`, not `press(+Enter)`
+            // — the detail strings exist to be read (traces, codegen,
+            // test failures).
+            SemAction::Press { key, modifiers } if modifiers.is_empty() => {
+                format!("press({key})")
+            }
+            SemAction::Press { key, modifiers } => {
+                format!("press({}+{key})", modifiers.join("+"))
+            }
             SemAction::Scroll { dx, dy } => format!("scroll({dx},{dy})"),
             SemAction::Check => "check".into(),
             SemAction::Uncheck => "uncheck".into(),
