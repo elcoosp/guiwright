@@ -1,7 +1,7 @@
 //! Transport-agnostic GWP connection state machine (architecture §7),
-//! shared by the UDS and TCP transports: handshake gate, request
-//! dispatch, and the pushed-event channel (M12). The transports own
-//! only their accept loop + client socket types.
+//! shared by the UDS, TCP and WS transports: the server-side handshake
+//! gate + request dispatch, and the client-side conversation core. The
+//! transports own only their accept loops and socket types.
 //!
 //! The server multiplexes one connection per client; each request is a
 //! round-trip. Pushed events land on the handler's queue and are
@@ -18,9 +18,10 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::GwpError;
-use crate::framing::{FrameReader, write_frame};
+use crate::framing::{FrameReader, read_frame, write_frame};
 use crate::schema::{
-    ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1, ResponseV1,
+    ErrorCode, EventKindV1, EventV1, GwpEvent, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1,
+    ResponseV1, SubscribeV1,
 };
 
 /// A request handler: application logic behind the transport.
@@ -206,6 +207,129 @@ fn handshake_response(resp: &ResponseV1) -> GwpResponse {
             code: ErrorCode::Internal,
             message: format!("driver handler did not answer Hello with Welcome: {other:?}"),
         }),
+    }
+}
+
+/// Client half of a GWP conversation, generic over the byte stream
+/// (architecture §7): the handshake, request round-trip, pushed-event
+/// buffering and typed convenience wrappers the UDS, TCP and WS clients
+/// all share. A session is byte-identical on every door — the transport
+/// owns only its `connect`, and this struct owns the conversation, so a
+/// bug fixed here is fixed on all three transports at once (the M15
+/// extraction that retired the UDS/TCP copy-paste).
+#[derive(Debug)]
+pub(crate) struct ClientCore<S> {
+    stream: S,
+    /// Events that interleaved earlier responses (§7, M12): pushed frames
+    /// read while waiting for a request reply are buffered here, not lost.
+    events: VecDeque<GwpEvent>,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> ClientCore<S> {
+    pub(crate) fn new(stream: S) -> Self {
+        Self {
+            stream,
+            events: VecDeque::new(),
+        }
+    }
+
+    /// The underlying byte stream (socket-level queries like the TCP
+    /// client's `peer_addr` stay transport-side).
+    pub(crate) fn stream(&self) -> &S {
+        &self.stream
+    }
+
+    /// Mutable access for tests and transport-level plumbing.
+    #[cfg(test)]
+    pub(crate) fn stream_mut(&mut self) -> &mut S {
+        &mut self.stream
+    }
+
+    /// Send `Hello` and validate the driver's `Welcome`.
+    pub(crate) async fn handshake(
+        &mut self,
+        agent: &str,
+    ) -> Result<crate::schema::AdapterInfoV1, GwpError> {
+        write_frame(
+            &mut self.stream,
+            &GwpRequest::V1(RequestV1::Hello {
+                proto_version: PROTO_VERSION,
+                agent: agent.to_string(),
+            }),
+        )
+        .await?;
+        let resp: GwpResponse = read_frame(&mut self.stream).await?;
+        let GwpResponse::V1(ResponseV1::Welcome {
+            proto_version,
+            adapter,
+            ..
+        }) = resp
+        else {
+            return match resp {
+                GwpResponse::V1(ResponseV1::Error { code, message }) => {
+                    Err(GwpError::Rejected { code, message })
+                }
+                GwpResponse::V1(_) => Err(GwpError::Handshake("expected Welcome")),
+            };
+        };
+        if proto_version != PROTO_VERSION {
+            return Err(GwpError::Handshake("driver protocol mismatch"));
+        }
+        Ok(adapter)
+    }
+
+    pub(crate) async fn request(&mut self, request: RequestV1) -> Result<ResponseV1, GwpError> {
+        write_frame(&mut self.stream, &GwpRequest::V1(request)).await?;
+        // One response, with pushed events buffered for `next_event` (§7,
+        // M12): a subscribed connection receives `Event` frames between
+        // responses; a connection that never subscribes never sees one.
+        let inner = read_response_demuxing(&mut self.stream, &mut self.events).await?;
+        match inner {
+            ResponseV1::Error { code, message } => Err(GwpError::Rejected { code, message }),
+            other => Ok(other),
+        }
+    }
+
+    /// The next pushed event (§7, M12): from the buffer of events that
+    /// interleaved earlier responses, or straight off the wire. Blocks
+    /// until the driver publishes one — pair it with the subscriber's
+    /// own pacing, never on a hot path.
+    pub(crate) async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
+        read_next_event(&mut self.stream, &mut self.events).await
+    }
+
+    /// Subscribe this connection to the named event kinds (§7, M12).
+    /// Re-subscribing replaces the filter; the ack echoes the kinds the
+    /// driver honored.
+    pub(crate) async fn subscribe(&mut self, kinds: &[EventKindV1]) -> Result<(), GwpError> {
+        let resp = self
+            .request(RequestV1::Subscribe(SubscribeV1::On {
+                kinds: kinds.to_vec(),
+            }))
+            .await?;
+        match resp {
+            ResponseV1::Subscribed { .. } => Ok(()),
+            other => Err(GwpError::Protocol(format!(
+                "expected Subscribed, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Drop this connection's event subscription (§7, M12).
+    pub(crate) async fn unsubscribe(&mut self) -> Result<(), GwpError> {
+        match self.request(RequestV1::Subscribe(SubscribeV1::Off)).await? {
+            ResponseV1::Subscribed { kinds } if kinds.is_empty() => Ok(()),
+            other => Err(GwpError::Protocol(format!(
+                "expected an empty Subscribed ack, got {other:?}"
+            ))),
+        }
+    }
+
+    pub(crate) async fn ping(&mut self) -> Result<(), GwpError> {
+        match self.request(RequestV1::Ping).await? {
+            ResponseV1::Pong => Ok(()),
+            other => Err(GwpError::Protocol(format!("expected Pong, got {other:?}"))),
+        }
     }
 }
 
