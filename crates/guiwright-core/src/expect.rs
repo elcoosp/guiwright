@@ -67,6 +67,27 @@ impl ExpectBuilder {
         self.checks(vec![Check::Focused], "focused")
     }
 
+    /// `expect(locator).toBeChecked()` — the node's AccessKit tri-state is
+    /// `true` (M20: the §8 check vocabulary row).
+    pub fn to_be_checked(self) -> Expectation {
+        self.checks(vec![Check::Checked(accesskit::Toggled::True)], "checked")
+    }
+
+    /// `expect(locator).toBeChecked({ checked: false })` — the negated
+    /// pair (`to_be_checked`'s complement, Playwright parity).
+    pub fn to_be_unchecked(self) -> Expectation {
+        self.checks(vec![Check::Checked(accesskit::Toggled::False)], "unchecked")
+    }
+
+    /// `expect(locator).toBeChecked({ checked: 'mixed' })` — the tri-state
+    /// middle (indeterminate checkboxes, `Toggled::Mixed`).
+    pub fn to_be_checked_mixed(self) -> Expectation {
+        self.checks(
+            vec![Check::Checked(accesskit::Toggled::Mixed)],
+            "mixed-checked",
+        )
+    }
+
     /// `expect(locator).toHaveText(text)`
     pub fn to_have_text(self, text: impl Into<TextMatch>) -> Expectation {
         self.checks(vec![Check::HasText(text.into())], "text")
@@ -80,9 +101,9 @@ impl ExpectBuilder {
 
     fn checks(self, checks: Vec<Check>, name: &str) -> Expectation {
         Expectation {
-            waiter: ChecksWaiter::new(self.locator, checks),
+            waiter: ChecksWaiter::new(self.locator.clone(), checks),
             timeout: self.timeout,
-            name: name.to_string(),
+            operation: format!("{name} — {}", self.locator.render()),
         }
     }
 }
@@ -93,7 +114,11 @@ impl ExpectBuilder {
 pub struct Expectation {
     waiter: ChecksWaiter,
     timeout: Duration,
-    name: String,
+    /// Playwright-shaped failure header: the assertion name plus the
+    /// locator it was built from ("checked — button \"Dark mode\"").
+    /// Timeout errors embed it (§8.3 "the error embeds the last tree
+    /// snapshot" — and names what was being waited for).
+    operation: String,
 }
 
 impl Expectation {
@@ -117,12 +142,12 @@ impl Expectation {
         match self.waiter.on_event(WaiterEvent::Initial, tree) {
             WaitOutcome::Satisfied(_) => Ok(()),
             WaitOutcome::Pending => Err(CoreError::Timeout {
-                operation: self.name.clone(),
+                operation: self.operation.clone(),
                 timeout: self.timeout,
                 last: Box::new(tree.summary()),
             }),
             WaitOutcome::Failed(failure) => Err(CoreError::Timeout {
-                operation: format!("{} ({})", self.name, failure.reason),
+                operation: format!("{} ({})", self.operation, failure.reason),
                 timeout: self.timeout,
                 last: Box::new(tree.summary()),
             }),
@@ -192,6 +217,52 @@ mod tests {
             .to_have_text("ada@example.dev")
             .check_now(&tree)
             .expect("value matches");
+    }
+
+    #[test]
+    fn checked_assertions_reflect_the_tri_state() {
+        let fixture = Fixture::with_checkboxes();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        expect(Selector::role_named(Role::CheckBox, "Notifications"))
+            .to_be_checked()
+            .check_now(&tree)
+            .expect("notifications is checked");
+        expect(Selector::role_named(Role::CheckBox, "Dark mode"))
+            .to_be_unchecked()
+            .check_now(&tree)
+            .expect("dark mode is unchecked");
+        expect(Selector::role_named(Role::CheckBox, "Partially installed"))
+            .to_be_checked_mixed()
+            .check_now(&tree)
+            .expect("partially installed is mixed");
+    }
+
+    #[test]
+    fn a_wrong_checked_state_times_out_with_the_state_in_the_error() {
+        let fixture = Fixture::with_checkboxes();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        let err = expect(Selector::role_named(Role::CheckBox, "Dark mode"))
+            .to_be_checked()
+            .check_now(&tree)
+            .expect_err("dark mode is not checked");
+        let msg = err.to_string();
+        assert!(msg.contains("checked"), "{msg}");
+        assert!(msg.contains("Dark mode"), "{msg}");
+    }
+
+    #[test]
+    fn a_node_without_a_checked_state_fails_the_assertion() {
+        let tree = tree_with_fixture();
+        // A plain button never exposes a checked state: fail fast, no
+        // five-second wait (the M20 fail-fast rule).
+        let err = expect(Selector::role_named(Role::Button, "Save"))
+            .to_be_checked()
+            .check_now(&tree)
+            .expect_err("a button is not checkable");
+        let msg = err.to_string();
+        assert!(msg.contains("no checked state"), "{msg}");
     }
 
     #[test]
