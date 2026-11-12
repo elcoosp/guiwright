@@ -169,9 +169,9 @@ async fn repl_conversation_over_tcp() {
     .expect("tcp server binds");
     let addr = match handle.endpoint() {
         guiwright_driver::server::Endpoint::Tcp(addr) => *addr,
-        guiwright_driver::server::Endpoint::Uds(_) | guiwright_driver::server::Endpoint::Ws(_) => {
-            panic!("expected TCP endpoint")
-        }
+        guiwright_driver::server::Endpoint::Uds(_)
+        | guiwright_driver::server::Endpoint::Ws(_)
+        | guiwright_driver::server::Endpoint::InProcess => panic!("expected TCP endpoint"),
     };
 
     let mut repl = Repl::connect(&ConnectTarget::Tcp(addr.to_string()))
