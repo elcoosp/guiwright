@@ -269,3 +269,12 @@ p95_us = 4000
 notes = "the M17 action path over the embedded door: pre-resolved actionability gate (initial eval + stability-confirmed frames), generation-checked act, frame-boundary rendezvous pump — resolve is paid once, outside the window; rides the same session-thread rendezvous as resolve_remote_uds minus the socket"
 m0_measurable = true
 sample = "wire_action_click"
+
+[[budget]]
+id = "viewer_live_sync"
+name = "In-process: one live-feed tree sync (dump + convert + rebuild)"
+p50_us = 100
+p95_us = 500
+notes = "the M18 viewer live mode's steady-state update step over the embedded door: one Snapshot::Full request, the DFS-row → TreeNode conversion with the parent-link rebuild, and the scrubber rebuild tree_at reads — attach is paid once, outside the window; rides the inprocess_ping_roundtrip transport floor"
+m0_measurable = true
+sample = "viewer_live_sync"
