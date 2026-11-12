@@ -57,14 +57,18 @@ pub trait Waiter {
 /// events (§8.3 "Stable"). Lives inside the waiter so it survives across
 /// events. When the bounds change, the changed frame becomes the new
 /// baseline.
+///
+/// Public since M17: the wire `Action` path's pre-resolved actionability
+/// gate re-uses the exact `Stable` semantics without going through a
+/// selector waiter — feed it once per frame boundary.
 #[derive(Clone, Debug, Default)]
-struct StabilityTracker {
+pub struct StabilityTracker {
     last_rect: Option<accesskit::Rect>,
     confirmed: bool,
 }
 
 impl StabilityTracker {
-    fn on_frame(&mut self, tree: &TreeService, key: &NodeKey) -> CheckStatus {
+    pub fn on_frame(&mut self, tree: &TreeService, key: &NodeKey) -> CheckStatus {
         let Some(rect) = tree.node(key).and_then(|n| n.bounding_box()) else {
             *self = StabilityTracker::default();
             return CheckStatus::Pending {
