@@ -4,6 +4,7 @@
 //! they can be evaluated exactly when the world changes (event-driven
 //! waiting, §15.3) instead of on a poll loop.
 
+use accesskit::Toggled;
 use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 
 use crate::key::NodeKey;
@@ -33,6 +34,10 @@ pub enum Check {
     HasText(TextMatch),
     /// Focused node identity matches.
     Focused,
+    /// The node's AccessKit tri-state equals the wanted state (`True` /
+    /// `False` / `Mixed`, §8 check vocabulary — M20's `to_be_checked`
+    /// assertions ride this row).
+    Checked(Toggled),
 }
 
 impl Check {
@@ -48,6 +53,11 @@ impl Check {
             Check::ReceivesEvents => "receives events".to_string(),
             Check::HasText(m) => format!("has text {}", render(m)),
             Check::Focused => "focused".to_string(),
+            Check::Checked(state) => match state {
+                Toggled::True => "checked".to_string(),
+                Toggled::False => "unchecked".to_string(),
+                Toggled::Mixed => "mixed-checked".to_string(),
+            },
         }
     }
 }
@@ -102,6 +112,7 @@ pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus
         }
         Check::ReceivesEvents => receives_events_status(tree, key, &node),
         Check::HasText(m) => has_text_status(&node, m),
+        Check::Checked(want) => checked_status(&node, *want),
         Check::Focused => {
             if tree.focus() == Some(*key) {
                 CheckStatus::Pass
@@ -225,6 +236,35 @@ fn has_text_status(node: &NodeRef<'_>, m: &TextMatch) -> CheckStatus {
     }
 }
 
+/// §8.3 `Checked`: the node's AccessKit tri-state matches the wanted state
+/// (the M20 `to_be_checked` / `to_be_unchecked` / `to_be_checked_mixed`
+/// assertions). Playwright parity: the state is waitable — a checkbox that
+/// has not flipped yet stays Pending — while a node that never exposes a
+/// checked state cannot pass, so it fails fast.
+fn checked_status(node: &NodeRef<'_>, want: Toggled) -> CheckStatus {
+    match node.toggled() {
+        Some(state) if state == want => CheckStatus::Pass,
+        Some(state) => CheckStatus::Pending {
+            reason: format!(
+                "checked state is {}, expected {}",
+                describe_toggled(state),
+                describe_toggled(want)
+            ),
+        },
+        None => CheckStatus::Failed {
+            reason: "node exposes no checked state (not a checkable role)".to_string(),
+        },
+    }
+}
+
+fn describe_toggled(state: Toggled) -> &'static str {
+    match state {
+        Toggled::True => "true",
+        Toggled::False => "false",
+        Toggled::Mixed => "mixed",
+    }
+}
+
 /// The ordered checks Playwright runs before an action (§8.3), minus
 /// `Stable` when `force` is set (§8.3 "Force mode").
 pub fn action_checks(force: bool) -> Vec<Check> {
@@ -244,6 +284,7 @@ pub fn action_checks(force: bool) -> Vec<Check> {
 #[cfg(test)]
 mod tests {
     use accesskit::Role;
+    use accesskit::Toggled;
     use accesskit_consumer::common_filter;
 
     use crate::selector::TextMatch;
@@ -399,5 +440,82 @@ mod tests {
         let checks = action_checks(false);
         assert!(checks.contains(&Check::Stable));
         assert!(checks.contains(&Check::ReceivesEvents));
+    }
+
+    #[test]
+    fn checked_reflects_the_tri_state() {
+        let fixture = Fixture::with_checkboxes();
+        let mut svc = TreeService::new();
+        svc.apply_update(fixture.initial_update());
+        let key_of = |id| NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: id,
+        };
+        assert_eq!(
+            evaluate(
+                &svc,
+                &key_of(fixture.checked_checkbox.expect("checked fixture")),
+                &Check::Checked(Toggled::True)
+            ),
+            CheckStatus::Pass
+        );
+        assert_eq!(
+            evaluate(
+                &svc,
+                &key_of(fixture.unchecked_checkbox.expect("unchecked fixture")),
+                &Check::Checked(Toggled::False)
+            ),
+            CheckStatus::Pass
+        );
+        assert_eq!(
+            evaluate(
+                &svc,
+                &key_of(fixture.mixed_checkbox.expect("mixed fixture")),
+                &Check::Checked(Toggled::Mixed)
+            ),
+            CheckStatus::Pass
+        );
+    }
+
+    #[test]
+    fn a_state_that_has_not_flipped_yet_pends() {
+        let fixture = Fixture::with_checkboxes();
+        let mut svc = TreeService::new();
+        svc.apply_update(fixture.initial_update());
+        let unchecked = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.unchecked_checkbox.expect("unchecked fixture"),
+        };
+        let status = evaluate(&svc, &unchecked, &Check::Checked(Toggled::True));
+        // Playwright parity: wait for the flip, never fail fast.
+        assert!(
+            matches!(status, CheckStatus::Pending { ref reason }
+                if reason == "checked state is false, expected true"),
+            "{status:?}"
+        );
+    }
+
+    #[test]
+    fn a_node_without_a_checked_state_fails_fast() {
+        let fixture = Fixture::buttons();
+        let mut svc = TreeService::new();
+        svc.apply_update(fixture.initial_update());
+        let save = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.save_button,
+        };
+        // A plain button never becomes checkable: the world cannot change
+        // this, so the check refuses immediately instead of timing out.
+        assert!(matches!(
+            evaluate(&svc, &save, &Check::Checked(Toggled::True)),
+            CheckStatus::Failed { .. }
+        ));
+    }
+
+    #[test]
+    fn checked_describes_the_wanted_state() {
+        assert_eq!(Check::Checked(Toggled::True).describe(), "checked");
+        assert_eq!(Check::Checked(Toggled::False).describe(), "unchecked");
+        assert_eq!(Check::Checked(Toggled::Mixed).describe(), "mixed-checked");
     }
 }
