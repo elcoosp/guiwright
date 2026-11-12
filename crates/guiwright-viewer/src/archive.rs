@@ -29,14 +29,19 @@ pub struct ArchiveEvent {
 }
 
 /// The record collections of an archive (bundled so constructors stay
-/// below the argument-count lint).
-pub(crate) struct ArchiveParts {
+/// below the argument-count lint). The zip reader fills it from disk;
+/// the M18 live feed fills it from the wire — the in-memory assembly
+/// path behind [`crate::timeline::Timeline::from_parts`].
+#[derive(Debug)]
+pub struct ArchiveParts {
     pub events: Vec<ArchiveEvent>,
     pub logs: Vec<String>,
     pub snapshots: BTreeMap<u64, TreeSnapshot>,
     pub diffs: Vec<TreeDiffRecord>,
     pub frame_index: Vec<FrameIndexEntry>,
     pub clock: Vec<ClockJump>,
+    /// Stored PNG payloads by frame seq (the live path records none —
+    /// the frame axis still lists them through the frame index).
     pub frames: BTreeMap<u64, Vec<u8>>,
 }
 
@@ -70,6 +75,10 @@ pub enum ViewerError {
     Schema(String),
     #[error("corrupt archive: {0}")]
     Corrupt(String),
+    /// The M18 live feed's wire half: every GWP conversation error
+    /// (handshake, request, event read) rides through here unchanged.
+    #[error("live wire: {0}")]
+    Wire(#[from] guiwright_proto::GwpError),
 }
 
 impl TraceArchive {
