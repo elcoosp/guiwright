@@ -21,6 +21,7 @@ pub mod app;
 pub mod context;
 pub mod input;
 pub mod run;
+pub mod wait_for;
 
 pub use app::{App, ClockHandle, InspectHandle, KitError, Locator, MockHandle, expect};
 pub use context::TestContext;
@@ -29,3 +30,4 @@ pub use guiwright_macros::{register_seams, seam, test};
 pub use guiwright_shot::baseline::{BlessMode, SnapshotOutcome};
 pub use input::{KeyboardHandle, MouseHandle};
 pub use run::TestOutcome;
+pub use wait_for::WaitState;
