@@ -251,3 +251,21 @@ p95_us = 200
 notes = "the M15 viewer live-mode door's steady-state latency: Ping request frame over the RFC 6455 upgrade, session-thread round-trip, Pong frame back (the upgrade handshake itself is paid once at connect, outside the window; byte-identical to resolve_remote_tcp's transport work)"
 m0_measurable = true
 sample = "ws_ping_roundtrip"
+
+[[budget]]
+id = "inprocess_ping_roundtrip"
+name = "In-process: one Ping round-trip over the embedded door"
+p50_us = 25
+p95_us = 120
+notes = "the M16 embedded door's steady-state latency: Ping request frame through an in-process duplex pipe, session-thread round-trip, Pong frame back — the transport floor every socket door adds its wire cost on top of (connect is paid once, outside the window)"
+m0_measurable = true
+sample = "inprocess_ping_roundtrip"
+
+[[budget]]
+id = "wire_action_click"
+name = "In-process: one force-less Action round-trip (gate + act + pump)"
+p50_us = 800
+p95_us = 4000
+notes = "the M17 action path over the embedded door: pre-resolved actionability gate (initial eval + stability-confirmed frames), generation-checked act, frame-boundary rendezvous pump — resolve is paid once, outside the window; rides the same session-thread rendezvous as resolve_remote_uds minus the socket"
+m0_measurable = true
+sample = "wire_action_click"
