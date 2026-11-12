@@ -12,6 +12,10 @@
 //! * [`html`] — the self-contained `trace.html` emitter: timeline
 //!   scrubber, tree inspector, event/log views and the virtual-clock
 //!   ledger in one file (no server, no external assets, §12).
+//! * [`live`] — the M18 live mode: [`live::LiveFeed`] attaches to a
+//!   running GWP session over any [`guiwright_proto::ClientConn`] door
+//!   and [`live::LiveTimeline`] accumulates the same scrubber model the
+//!   archive path builds (§12 "live", the §16 v0.6 row).
 //!
 //! ```ignore
 //! let archive = TraceArchive::open("guiwright-login_flow-1.zip")?;
@@ -24,8 +28,10 @@
 
 pub mod archive;
 pub mod html;
+pub mod live;
 pub mod timeline;
 
 pub use archive::{TraceArchive, ViewerError};
 pub use html::render_html;
+pub use live::{LiveChange, LiveFeed, LiveInfo, LiveTimeline};
 pub use timeline::{Timeline, TimelineTick, TreeView, TreeViewNode};
