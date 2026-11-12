@@ -35,7 +35,9 @@ await client.close();
   variants = varint discriminant). The variant tables live in
   `src/schema.ts` and are pinned by tests against `gwp-schema.json`.
 - **Transports** — TCP (`connectTcp`, the §7 CI-container door) and
-  WebSocket (`connectWs`, the viewer live-mode door).
+  WebSocket (`connectWs`, the viewer live-mode door — the Rust side
+  serves it since M15 via `GwpServerHandle::spawn_ws` / the demo app's
+  `--ws` flag).
 - **Conversation** — `handshake()` first; one request → one response;
   `ResponseV1::Error` rejects as a typed `GwpRejected` (code names in
   `ERROR_NAMES`); `bye` closes cleanly.
