@@ -22,6 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing_subscriber::layer::SubscriberExt;
 
 use guiwright_proto::GwpError;
+use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1,
     NodeKeyV1, PROTO_VERSION, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1,
@@ -195,6 +196,11 @@ pub enum Endpoint {
     /// WebSocket host:port — the viewer live-mode door (M15), RFC 6455
     /// upgrade on plain TCP, then the byte-identical GWP conversation.
     Ws(std::net::SocketAddr),
+    /// The embedded door (M16): duplex pipes inside the driver's process
+    /// — and the endpoint reported for a custom [`Transport`] spawned via
+    /// [`GwpServerHandle::spawn_transport_with`], which exposes no socket
+    /// address for the handle to know.
+    InProcess,
 }
 
 /// Handle keeping the server + session thread alive.
@@ -218,9 +224,10 @@ impl GwpServerHandle {
         GwpBridge::new(self.cmd_tx.clone(), next_conn_id())
     }
 
-    /// The bound endpoint (UDS path or TCP socket address). For an
-    /// ephemeral `spawn_tcp("127.0.0.1:0")` this is how clients learn the
-    /// port.
+    /// The bound endpoint (UDS path, TCP socket address, or
+    /// [`Endpoint::InProcess`] for the embedded door and custom
+    /// transports). For an ephemeral `spawn_tcp("127.0.0.1:0")` this is
+    /// how clients learn the port.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
@@ -395,9 +402,65 @@ impl GwpServerHandle {
         )
     }
 
+    /// Spawn the remote-mode stack over the **in-process door** (§7's
+    /// embedded transport, M16): no socket, no filesystem — connections
+    /// are `tokio::io::duplex` pipes queued to an in-process listener,
+    /// and the conversation is byte-identical to the UDS, TCP and WS
+    /// doors. Returns the server handle **plus** the connect handle to
+    /// give clients (`guiwright_proto::DuplexClient::connect(&connect)`).
+    pub fn spawn_inprocess<A, F>(
+        make_adapter: F,
+        seams: crate::seams::SeamRegistry,
+    ) -> Result<(GwpServerHandle, DuplexConnect), GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        GwpServerHandle::spawn_inprocess_with(
+            make_adapter,
+            ServerOptions {
+                seams,
+                ..ServerOptions::default()
+            },
+        )
+    }
+
+    /// Like [`spawn_inprocess`], with the full [`ServerOptions`] knobs.
+    pub fn spawn_inprocess_with<A, F>(
+        make_adapter: F,
+        options: ServerOptions,
+    ) -> Result<(GwpServerHandle, DuplexConnect), GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        let (listener, connect) = guiwright_proto::duplex::channel();
+        let handle = GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options)?;
+        Ok((handle, connect))
+    }
+
+    /// Spawn the remote-mode stack on any [`Transport`] (M16's public
+    /// seam): bring the same session thread + bridge up behind a
+    /// downstream listener — TLS, a named-pipe bridge, an in-memory mesh
+    /// — with the byte-identical GWP conversation. The handle reports
+    /// [`Endpoint::InProcess`]; a custom transport that does know its
+    /// address should surface it to its clients itself.
+    pub fn spawn_transport_with<A, F, L>(
+        listener: L,
+        make_adapter: F,
+        options: ServerOptions,
+    ) -> Result<GwpServerHandle, GwpError>
+    where
+        A: FrameworkAdapter,
+        F: FnOnce() -> A + Send + 'static,
+        L: Transport,
+    {
+        GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options)
+    }
+
     /// Shared stack bring-up: session thread + accept loop bridged over
     /// one command queue (§5.1).
-    fn start<A, F, L, S>(
+    fn start<A, F, L>(
         listener: L,
         endpoint: Endpoint,
         make_adapter: F,
@@ -406,9 +469,7 @@ impl GwpServerHandle {
     where
         A: FrameworkAdapter,
         F: FnOnce() -> A + Send + 'static,
-        L: Send + 'static,
-        S: Future<Output = ()> + Send + 'static,
-        L: IntoServe<S>,
+        L: Transport,
     {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(64);
         let session_thread = std::thread::Builder::new()
@@ -432,30 +493,57 @@ impl GwpServerHandle {
     }
 }
 
-/// Bridges a transport listener into its `serve` future, so the shared
-/// stack bring-up above is transport-blind.
-trait IntoServe<S> {
-    fn into_serve<H: Handler>(self, make_handler: impl FnMut() -> H + Send + 'static) -> S;
-}
+/// The boxed serve future a [`Transport`] hands back: one accept loop
+/// running GWP conversations until the listener ends.
+pub type BoxServeFuture = std::pin::Pin<Box<dyn Future<Output = ()> + Send>>;
 
-impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for UnixListener {
+/// The transport seam (architecture §7, M16): anything that can accept
+/// GWP connections and run them through the shared connection loop. The
+/// UDS, TCP, WS and in-process doors are the shipped implementations;
+/// downstream code implements this trait once per custom listener (TLS,
+/// named pipes, an in-memory mesh) and brings the whole remote stack up
+/// with [`GwpServerHandle::spawn_transport_with`] — the conversation is
+/// transport-blind, so a fourth door needs no driver changes.
+pub trait Transport: Send + 'static {
+    /// Bridge the listener into its serve future: call `make_handler`
+    /// once per accepted connection and run the conversation. End the
+    /// future when the listener is done (socket closed, connect half
+    /// dropped).
     fn into_serve<H: Handler>(
         self,
         make_handler: impl FnMut() -> H + Send + 'static,
-    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    ) -> BoxServeFuture;
+}
+
+impl Transport for UnixListener {
+    fn into_serve<H: Handler>(
+        self,
+        make_handler: impl FnMut() -> H + Send + 'static,
+    ) -> BoxServeFuture {
         Box::pin(async move {
             uds::serve(self, make_handler).await;
         })
     }
 }
 
-impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for TcpListener {
+impl Transport for TcpListener {
     fn into_serve<H: Handler>(
         self,
         make_handler: impl FnMut() -> H + Send + 'static,
-    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    ) -> BoxServeFuture {
         Box::pin(async move {
             tcp::serve(self, make_handler).await;
+        })
+    }
+}
+
+impl Transport for DuplexListener {
+    fn into_serve<H: Handler>(
+        self,
+        make_handler: impl FnMut() -> H + Send + 'static,
+    ) -> BoxServeFuture {
+        Box::pin(async move {
+            guiwright_proto::duplex::serve(self, make_handler).await;
         })
     }
 }
@@ -466,11 +554,11 @@ impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for TcpListen
 /// shared connection loop the UDS and TCP doors run.
 struct WsListener(TcpListener);
 
-impl IntoServe<std::pin::Pin<Box<dyn Future<Output = ()> + Send>>> for WsListener {
+impl Transport for WsListener {
     fn into_serve<H: Handler>(
         self,
         make_handler: impl FnMut() -> H + Send + 'static,
-    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    ) -> BoxServeFuture {
         Box::pin(async move {
             let mut make_handler = make_handler;
             loop {
@@ -588,7 +676,9 @@ async fn session_loop<A: FrameworkAdapter>(
                             events,
                             tail.is_some(),
                         );
-                        let _ = reply.send(response);
+                        if reply.send(response).is_err() {
+                            tracing::debug!("reply channel closed — client vanished mid-request");
+                        }
                         // One pump per batch: queued commands apply at the next
                         // frame boundary (§15.4).
                         session.pump();
