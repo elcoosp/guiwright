@@ -1034,3 +1034,46 @@ pub fn tree_dump_filtered() -> Duration {
     assert_eq!(dump.node_count, 999, "the group + its 998 buttons");
     elapsed
 }
+
+/// §12 `viewer_live_sync`: one live-feed tree sync over the embedded
+/// door (M18) — attach and the warm-ups outside the window, then
+/// measure `sync_tree`: the `Snapshot::Full` request, the DFS-row →
+/// `TreeNode` conversion with the parent-link rebuild and the scrubber
+/// rebuild the resolved view reads. The M18 live viewer's steady-state
+/// update step, on top of the M16 transport floor.
+pub fn viewer_live_sync() -> Duration {
+    const ITERATIONS: u32 = 32;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_viewer::live::LiveFeed;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        let mut feed = LiveFeed::new(client);
+        feed.attach("gw-bench/0.1").await.expect("bench attach");
+
+        for _ in 0..4 {
+            feed.sync_tree().await.expect("warm sync");
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            feed.sync_tree().await.expect("bench sync");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
