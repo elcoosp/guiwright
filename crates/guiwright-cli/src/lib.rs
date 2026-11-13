@@ -42,7 +42,7 @@ pub use bless::{BlessReport, bless_dir};
 pub use deps::{install_deps_command, platform_deps};
 pub use repl::{Line, Repl, StepOutcome};
 pub use runner::{RunOutcome, RunnerError, TestOptions};
-pub use session::{ConnectTarget, Connection};
+pub use session::{ConnectTarget, Connection, TargetParseError};
 pub use show_trace::show_trace;
 
 /// The agent string sent in the GWP handshake (§7 `Hello.agent`).
