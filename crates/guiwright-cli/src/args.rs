@@ -152,7 +152,10 @@ fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
                 }
                 other => {
                     // Bare target: uds:///…, tcp://…, ws://…, /path or host:port.
-                    target = Some(ConnectTarget::parse(other).map_err(CliError::BadValue)?);
+                    target = Some(
+                        ConnectTarget::parse(other)
+                            .map_err(|e| CliError::BadValue(e.to_string()))?,
+                    );
                     rest = &rest[1..];
                 }
             }
