@@ -72,23 +72,30 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         state: WaitState,
         timeout: Duration,
     ) -> Result<(), CoreError> {
-        let selector = self.selector.clone();
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
         let deadline = Instant::now() + timeout;
-        self.app
-            .session()
-            .wait_for(&selector, state.checks(), deadline)
-            .map(|_| ())
-            .map_err(|e| match e {
-                // Keep the failure header Playwright-shaped: the state and
-                // the locator (§8.3 — errors name what was waited for).
-                CoreError::Timeout { last, .. } => CoreError::Timeout {
-                    operation: format!("{} — {}", state.describe(), selector.render()),
-                    timeout,
-                    last,
-                },
-                other => other,
-            })?;
-        self.app.record_action("wait_for", &selector, None);
+        // A window-pinned locator (§16 v0.4) scopes the wait loop to its
+        // subtree — the same act-time validation every scoped path uses.
+        app.run_scoped(window.as_deref(), move |session| {
+            session.wait_for(&selector, state.checks(), deadline)
+        })
+        .map(|_| ())
+        .map_err(|e| match e {
+            // Keep the failure header Playwright-shaped: the state and
+            // the locator (§8.3 — errors name what was waited for).
+            CoreError::Timeout { last, .. } => CoreError::Timeout {
+                operation: format!("{} — {}", state.describe(), recorded.render()),
+                timeout,
+                last,
+            },
+            other => other,
+        })?;
+        app.record_scoped_action("wait_for", &recorded, None, window.as_deref());
         Ok(())
     }
 }
