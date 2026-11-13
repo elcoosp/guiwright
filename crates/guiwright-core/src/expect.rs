@@ -6,13 +6,14 @@
 //! they complete exactly when the asserted condition becomes true, or time
 //! out with the last tree summary embedded in the error.
 
+use std::fmt::Write;
 use std::time::Duration;
 
 use crate::CoreError;
 use crate::actionability::Check;
 use crate::selector::{Selector, TextMatch};
 use crate::tree::TreeService;
-use crate::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
+use crate::wait::{ChecksWaiter, CountWaiter, WaitOutcome, Waiter, WaiterEvent};
 
 /// Default assertion timeout (Playwright default: 5 s).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -99,9 +100,22 @@ impl ExpectBuilder {
         self.checks(vec![Check::HasText(value.into())], "value")
     }
 
+    /// `expect(locator).toHaveCount(count)` — the selector-level assertion
+    /// (M22): how many nodes match, strict mode never consulted. The
+    /// mismatch is waitable (nodes stream in and out, Playwright parity);
+    /// the timeout error names the expected count, the locator and the
+    /// count the last evaluation found.
+    pub fn to_have_count(self, expected: usize) -> Expectation {
+        Expectation {
+            waiter: Box::new(CountWaiter::new(self.locator.clone(), expected)),
+            timeout: self.timeout,
+            operation: format!("count {expected} — {}", self.locator.render()),
+        }
+    }
+
     fn checks(self, checks: Vec<Check>, name: &str) -> Expectation {
         Expectation {
-            waiter: ChecksWaiter::new(self.locator.clone(), checks),
+            waiter: Box::new(ChecksWaiter::new(self.locator.clone(), checks)),
             timeout: self.timeout,
             operation: format!("{name} — {}", self.locator.render()),
         }
@@ -110,9 +124,11 @@ impl ExpectBuilder {
 
 /// A ready-to-run assertion. Drive it through [`Expectation::check`]
 /// (single-shot) or feed events manually via [`Expectation::waiter`].
-#[derive(Debug)]
 pub struct Expectation {
-    waiter: ChecksWaiter,
+    /// Any waiter state machine (the M22 seam: the count assertion made
+    /// this a dispatcher over `Waiter` instead of a hard-wired
+    /// [`ChecksWaiter`] — selector-level assertions ride the same loop).
+    waiter: Box<dyn Waiter>,
     timeout: Duration,
     /// Playwright-shaped failure header: the assertion name plus the
     /// locator it was built from ("checked — button \"Dark mode\"").
@@ -121,11 +137,20 @@ pub struct Expectation {
     operation: String,
 }
 
-impl Expectation {
-    pub fn waiter(&self) -> &ChecksWaiter {
-        &self.waiter
+impl std::fmt::Debug for Expectation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Expectation")
+            .field("waiter", &self.waiter.describe())
+            .field("timeout", &self.timeout)
+            .field("operation", &self.operation)
+            .finish()
     }
+}
 
+impl Expectation {
+    pub fn waiter(&self) -> &dyn Waiter {
+        &*self.waiter
+    }
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
@@ -141,11 +166,22 @@ impl Expectation {
     pub fn check_now(&mut self, tree: &TreeService) -> Result<(), CoreError> {
         match self.waiter.on_event(WaiterEvent::Initial, tree) {
             WaitOutcome::Satisfied(_) => Ok(()),
-            WaitOutcome::Pending => Err(CoreError::Timeout {
-                operation: self.operation.clone(),
-                timeout: self.timeout,
-                last: Box::new(tree.summary()),
-            }),
+            WaitOutcome::Pending => {
+                // A waiter that can name its mismatch does (the M17
+                // `stuck on …` convention): the count assertion reports the
+                // count its last evaluation found.
+                let mut operation = self.operation.clone();
+                if let Some(stuck) = self.waiter.stuck_on() {
+                    // Writing to a String cannot fail (the `render()`
+                    // convention — the ignored result is the documented one).
+                    let _ = write!(operation, " ({stuck})");
+                }
+                Err(CoreError::Timeout {
+                    operation,
+                    timeout: self.timeout,
+                    last: Box::new(tree.summary()),
+                })
+            }
             WaitOutcome::Failed(failure) => Err(CoreError::Timeout {
                 operation: format!("{} ({})", self.operation, failure.reason),
                 timeout: self.timeout,
@@ -286,5 +322,36 @@ mod tests {
             .expect_err("4 buttons is ambiguous");
         let msg = err.to_string();
         assert!(msg.contains("resolved to 4 nodes"), "{msg}");
+    }
+
+    // --- The count assertion (§16 assertions row, M22) --------------------
+
+    #[test]
+    fn to_have_count_passes_on_the_whole_match_set() {
+        let tree = tree_with_fixture();
+        // 4 buttons would trip strict mode for every node-level assertion;
+        // count talks about the set, so this is a valid answer (the
+        // non-strict seam, Playwright's toHaveCount).
+        expect(Selector::role(Role::Button))
+            .to_have_count(4)
+            .check_now(&tree)
+            .expect("the fixture ships 4 buttons");
+        expect(Selector::role_named(Role::Button, "Ghost"))
+            .to_have_count(0)
+            .check_now(&tree)
+            .expect("zero matches is a count too");
+    }
+
+    #[test]
+    fn a_count_mismatch_times_out_naming_expected_and_found() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count(99)
+            .check_now(&tree)
+            .expect_err("4 buttons is not 99");
+        let msg = err.to_string();
+        assert!(msg.contains("count 99"), "{msg}");
+        assert!(msg.contains("getByRole"), "{msg}");
+        assert!(msg.contains("found 4"), "{msg}");
     }
 }
