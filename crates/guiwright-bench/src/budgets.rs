@@ -112,6 +112,11 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("wire_action_click", crate::samples::wire_action_click),
     ("viewer_live_sync", crate::samples::viewer_live_sync),
     ("checked_assert", crate::samples::checked_assert),
+    (
+        "kit_window_scoped_resolve",
+        crate::samples::kit_window_scoped_resolve,
+    ),
+    ("wire_window_targets", crate::samples::wire_window_targets),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
