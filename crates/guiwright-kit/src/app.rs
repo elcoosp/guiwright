@@ -267,6 +267,23 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         Ok(app.run_scoped(window.as_deref(), move |session| session.resolve(&selector))?)
     }
 
+    /// `locator.count()` — how many nodes match right now (§16
+    /// assertions row, M22): the non-strict read beside
+    /// `to_have_count`'s waitable assertion (Playwright parity). A read,
+    /// not an action: like [`Self::resolve`], nothing is recorded —
+    /// resolution without an action is not a replayable step. A
+    /// window-pinned locator counts only inside its subtree.
+    pub fn count(self) -> Result<usize, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), move |session| {
+            session.resolve_all(&selector).map(|all| all.len())
+        })?)
+    }
+
     /// `locator.screenshot(name, bless)` — the §10 element screenshot
     /// (M9): resolve (auto-wait), render the window frame once, **crop it
     /// by the resolved node's physical bounds** (§10 "crop from the window
@@ -1253,6 +1270,14 @@ pub(crate) mod core_expect {
         }
         pub fn to_have_value(self, value: impl Into<TextMatch>) -> Result<(), CoreError> {
             self.builder.to_have_value(value)
+        }
+        /// `expect(locator).toHaveCount(count)` (§16 assertions row, M22) —
+        /// the selector-level assertion: how many nodes match, strict mode
+        /// never consulted. The mismatch is waitable (nodes stream in and
+        /// out, Playwright parity); the timeout error names the expected
+        /// count, the locator and the count the last evaluation found.
+        pub fn to_have_count(self, expected: usize) -> Result<(), CoreError> {
+            self.builder.to_have_count(expected)
         }
     }
 }
