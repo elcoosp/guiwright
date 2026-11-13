@@ -244,12 +244,16 @@ impl Expectation {
             WaitOutcome::Pending => {
                 // A waiter that can name its mismatch does (the M17
                 // `stuck on …` convention): the count assertion reports the
-                // count its last evaluation found.
+                // count its last evaluation found. A waiter whose condition
+                // currently holds (the negated forms — the m24
+                // satisfied-state accessor) names what still holds instead.
                 let mut operation = self.operation.clone();
                 if let Some(stuck) = self.waiter.stuck_on() {
                     // Writing to a String cannot fail (the `render()`
                     // convention — the ignored result is the documented one).
                     let _ = write!(operation, " ({stuck})");
+                } else if let Some(held) = self.waiter.held_on() {
+                    let _ = write!(operation, " (still {held})");
                 }
                 Err(CoreError::Timeout {
                     operation,
@@ -519,6 +523,51 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("not (count 4"), "{msg}");
         assert!(msg.contains("getByRole"), "{msg}");
+    }
+
+    // --- The satisfied-state accessor (§16 assertions row, the m24 gap) ---
+
+    #[test]
+    fn a_negated_timeout_names_what_still_holds() {
+        let tree = tree_with_fixture();
+        // Save stays visible, so not(visible) pends with the positive form
+        // holding: the timeout names the inversion AND the still-holding
+        // condition (the m24 record's satisfied-state accessor).
+        let err = expect(Selector::role_named(Role::Button, "Save"))
+            .not()
+            .to_be_visible()
+            .check_now(&tree)
+            .expect_err("save stays visible");
+        let msg = err.to_string();
+        assert!(msg.contains("not (visible"), "{msg}");
+        assert!(msg.contains("(still visible)"), "{msg}");
+    }
+
+    #[test]
+    fn a_negated_count_timeout_names_the_still_holding_count() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .not()
+            .to_have_count(4)
+            .check_now(&tree)
+            .expect_err("the count stays 4");
+        let msg = err.to_string();
+        assert!(msg.contains("(still count 4)"), "{msg}");
+    }
+
+    #[test]
+    fn a_positive_timeout_carries_no_still_clause() {
+        let tree = tree_with_fixture();
+        // The positive form pends because the condition does NOT hold —
+        // there is nothing "still" holding to name (the stuck count rides
+        // instead, the M22 shape).
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count(99)
+            .check_now(&tree)
+            .expect_err("4 buttons is not 99");
+        let msg = err.to_string();
+        assert!(!msg.contains("still"), "{msg}");
+        assert!(msg.contains("(found 4)"), "{msg}");
     }
 
     // --- The count comparators (§16 assertions row, M25) ------------------
