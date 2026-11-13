@@ -13,11 +13,18 @@
 //! request, `next_event`, subscribe/unsubscribe, ping. `connect` stays
 //! transport-owned (a socket path, an address, a duplex handle) — the §7
 //! "the transport owns only its `connect`" rule, mirrored client-side.
+//! Domain sugar rides the trait as default methods in terms of
+//! [`Self::request`]: the `Window` targets (§16 v0.4) so a Rust consumer
+//! gets the same typed surface the REPL (`window list` / `window use`)
+//! and the TypeScript client (`windowList()` / `windowUse()`) speak —
+//! every impl, shipped or downstream, inherits them for free.
 
 use std::future::Future;
 
 use crate::GwpError;
-use crate::schema::{AdapterInfoV1, EventKindV1, GwpEvent, RequestV1, ResponseV1};
+use crate::schema::{
+    AdapterInfoV1, EventKindV1, GwpEvent, RequestV1, ResponseV1, WindowInfoV1, WindowV1,
+};
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
 ///
@@ -57,6 +64,46 @@ pub trait ClientConn: Send + 'static {
 
     /// One `Ping` round-trip — the liveness probe (§7).
     fn ping(&mut self) -> impl Future<Output = Result<(), GwpError>> + Send;
+
+    /// The session's window targets (§16 v0.4, M6): adapter-reported
+    /// metadata (handle / title / focus), one entry per window — the
+    /// same list `window list` prints and `windowList()` returns.
+    /// Single-window adapters report exactly one `main` target.
+    fn window_list(&mut self) -> impl Future<Output = Result<Vec<WindowInfoV1>, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Window(WindowV1::List)).await? {
+                ResponseV1::Windows { windows } => Ok(windows),
+                other => Err(GwpError::Protocol(format!(
+                    "Window::List answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// Aim this connection at a window target (§16 v0.4, M6): subsequent
+    /// resolves on this connection see only that window's subtree — the
+    /// per-connection state the M6 row records. The ack echoes the aimed
+    /// handle; an unknown handle (never existed or closed) is the typed
+    /// `Rejected { code: ErrorCode::UnknownWindow }`.
+    fn window_use(
+        &mut self,
+        handle: impl Into<String> + Send,
+    ) -> impl Future<Output = Result<String, GwpError>> + Send {
+        async move {
+            let handle = handle.into();
+            match self
+                .request(RequestV1::Window(WindowV1::Use {
+                    handle: handle.clone(),
+                }))
+                .await?
+            {
+                ResponseV1::WindowUsed { handle: aimed } => Ok(aimed),
+                other => Err(GwpError::Protocol(format!(
+                    "Window::Use answered by {other:?}"
+                ))),
+            }
+        }
+    }
 }
 
 impl ClientConn for crate::uds::Client {
