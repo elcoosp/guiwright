@@ -89,18 +89,17 @@ impl Fixture {
         }
     }
 
-    fn node(id: NodeId, role: Role, name: Option<&str>) -> Node {
+    fn node(role: Role, name: Option<&str>) -> Node {
         let mut n = Node::new(role);
         if let Some(name) = name {
             n.set_label(name);
         }
-        let _ = id;
         n
     }
 
     /// One checkbox row of the trio: bounded, labeled, tri-state stamped.
-    fn checkbox(id: NodeId, name: &str, toggled: Toggled) -> Node {
-        let mut n = Self::node(id, Role::CheckBox, Some(name));
+    fn checkbox(name: &str, toggled: Toggled) -> Node {
+        let mut n = Self::node(Role::CheckBox, Some(name));
         n.set_toggled(toggled);
         n
     }
@@ -108,9 +107,9 @@ impl Fixture {
     /// Full initial update carrying the root `TreeInfo` (what egui emits on
     /// its first pass and what masonry emits per redraw).
     pub fn initial_update(&self) -> TreeUpdate {
-        let mut window = Self::node(NodeId(0), Role::Window, Some("Test App"));
+        let mut window = Self::node(Role::Window, Some("Test App"));
         window.set_children([NodeId(1)]);
-        let mut group = Self::node(NodeId(1), Role::Group, None);
+        let mut group = Self::node(Role::Group, None);
         let mut children = vec![
             self.save_button,
             self.cancel_button,
@@ -128,7 +127,7 @@ impl Fixture {
             (self.mixed_checkbox, "Partially installed", Toggled::Mixed),
         ] {
             if let Some(id) = slot {
-                let mut node = Self::checkbox(id, name, toggled);
+                let mut node = Self::checkbox(name, toggled);
                 let y0 = 204.0 + 40.0 * checkboxes.len() as f64;
                 node.set_bounds(Rect {
                     x0: 16.0,
@@ -142,7 +141,7 @@ impl Fixture {
         }
         group.set_children(children);
 
-        let mut save = Self::node(self.save_button, Role::Button, Some("Save"));
+        let mut save = Self::node(Role::Button, Some("Save"));
         save.set_bounds(Rect {
             x0: 16.0,
             y0: 16.0,
@@ -150,7 +149,7 @@ impl Fixture {
             y1: 48.0,
         });
 
-        let mut cancel = Self::node(self.cancel_button, Role::Button, Some("Cancel"));
+        let mut cancel = Self::node(Role::Button, Some("Cancel"));
         cancel.set_bounds(Rect {
             x0: 16.0,
             y0: 56.0,
@@ -158,7 +157,7 @@ impl Fixture {
             y1: 88.0,
         });
 
-        let mut label = Self::node(self.welcome_label, Role::Label, Some("Welcome, Ada"));
+        let mut label = Self::node(Role::Label, Some("Welcome, Ada"));
         label.set_bounds(Rect {
             x0: 16.0,
             y0: 96.0,
@@ -166,7 +165,7 @@ impl Fixture {
             y1: 120.0,
         });
 
-        let mut input = Self::node(self.email_input, Role::TextInput, Some("Email"));
+        let mut input = Self::node(Role::TextInput, Some("Email"));
         input.set_value("ada@example.dev");
         input.set_bounds(Rect {
             x0: 16.0,
@@ -175,10 +174,10 @@ impl Fixture {
             y1: 156.0,
         });
 
-        let mut hidden = Self::node(self.hidden_button, Role::Button, Some("Invisible"));
+        let mut hidden = Self::node(Role::Button, Some("Invisible"));
         hidden.set_hidden();
 
-        let mut disabled = Self::node(self.disabled_button, Role::Button, Some("Confirm"));
+        let mut disabled = Self::node(Role::Button, Some("Confirm"));
         disabled.set_disabled();
         disabled.set_bounds(Rect {
             x0: 16.0,
@@ -222,7 +221,7 @@ impl Fixture {
         .into_iter()
         .find(|(slot, _, _)| *slot == Some(node))
         .map(|(_, name, y0)| (name, y0))?;
-        let mut box_node = Self::checkbox(node, name, toggled);
+        let mut box_node = Self::checkbox(name, toggled);
         box_node.set_bounds(Rect {
             x0: 16.0,
             y0,
