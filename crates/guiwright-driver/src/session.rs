@@ -15,7 +15,9 @@ use accesskit::NodeId;
 use guiwright_core::actionability::{Check, CheckStatus, action_checks};
 use guiwright_core::expect::DEFAULT_TIMEOUT;
 use guiwright_core::tree::{Resolved, TreeService};
-use guiwright_core::wait::{ChecksWaiter, StabilityTracker, WaitOutcome, Waiter, WaiterEvent};
+use guiwright_core::wait::{
+    ChecksWaiter, CountWaiter, StabilityTracker, WaitOutcome, Waiter, WaiterEvent,
+};
 use guiwright_core::{CoreError, NodeKey, Selector};
 
 use crate::adapter::{
@@ -1008,22 +1010,25 @@ impl<A: FrameworkAdapter> Session<A> {
     /// (the newest world change). Nothing is fed twice, and when the pump
     /// produced nothing new the waiter is not consulted at all — that is
     /// the zero-polling contract in practice.
-    pub fn wait_for(
+    ///
+    /// Generalized in M22 (§16 assertions row) to drive **any** waiter
+    /// state machine: the check-list waiter (`wait_for`) and the
+    /// selector-level count waiter (`wait_count`) ride the same cadence.
+    /// The timeout error names the waiter's own description plus, when the
+    /// waiter can name one, what it was stuck on (`stuck_on` — the M17
+    /// convention).
+    fn wait_with(
         &mut self,
+        waiter: &mut dyn Waiter,
         selector: &Selector,
-        checks: Vec<Check>,
         deadline: Instant,
-    ) -> Result<WaitResolved, CoreError> {
-        let started = Instant::now();
-        let configured = deadline.saturating_duration_since(started);
-        let mut waiter = ChecksWaiter::new(selector.clone(), checks);
+    ) -> Result<Option<Resolved>, CoreError> {
+        let configured = deadline.saturating_duration_since(Instant::now());
 
         // Initial evaluation against the current tree — many waits finish
         // without pumping at all.
         match waiter.on_event(WaiterEvent::Initial, &self.tree) {
-            WaitOutcome::Satisfied(resolved) => {
-                return Ok(resolved.map_or(WaitResolved::Absent, WaitResolved::Node));
-            }
+            WaitOutcome::Satisfied(resolved) => return Ok(resolved),
             WaitOutcome::Failed(failure) => {
                 return Err(wait_failure(selector, &failure, &self.tree));
             }
@@ -1032,8 +1037,12 @@ impl<A: FrameworkAdapter> Session<A> {
 
         loop {
             if Instant::now() >= deadline {
+                let mut operation = waiter.describe();
+                if let Some(stuck) = waiter.stuck_on() {
+                    operation.push_str(&format!(" ({stuck})"));
+                }
                 return Err(CoreError::Timeout {
-                    operation: waiter.describe(),
+                    operation,
                     timeout: configured,
                     last: Box::new(self.tree.summary()),
                 });
@@ -1058,9 +1067,7 @@ impl<A: FrameworkAdapter> Session<A> {
 
             if let Some(ev) = event {
                 match waiter.on_event(ev, &self.tree) {
-                    WaitOutcome::Satisfied(resolved) => {
-                        return Ok(resolved.map_or(WaitResolved::Absent, WaitResolved::Node));
-                    }
+                    WaitOutcome::Satisfied(resolved) => return Ok(resolved),
                     WaitOutcome::Failed(failure) => {
                         return Err(wait_failure(selector, &failure, &self.tree));
                     }
@@ -1068,6 +1075,36 @@ impl<A: FrameworkAdapter> Session<A> {
                 }
             }
         }
+    }
+
+    /// The check-list wait (§8.3): re-resolve `selector` on every world
+    /// change and advance the ordered checks — the loop every locator
+    /// action and node-level assertion drives.
+    pub fn wait_for(
+        &mut self,
+        selector: &Selector,
+        checks: Vec<Check>,
+        deadline: Instant,
+    ) -> Result<WaitResolved, CoreError> {
+        let mut waiter = ChecksWaiter::new(selector.clone(), checks);
+        self.wait_with(&mut waiter, selector, deadline)
+            .map(|resolved| resolved.map_or(WaitResolved::Absent, WaitResolved::Node))
+    }
+
+    /// The count wait (§16 assertions row, M22): drive a
+    /// [`CountWaiter`] — the selector-level waiter — through the same
+    /// zero-polling loop. Never strict: the point is the size of the match
+    /// set, not one node, and the mismatch is waitable (nodes stream in
+    /// and out). The timeout error reads
+    /// `count N — {selector} (found M)`.
+    pub fn wait_count(
+        &mut self,
+        selector: &Selector,
+        expected: usize,
+        deadline: Instant,
+    ) -> Result<(), CoreError> {
+        let mut waiter = CountWaiter::new(selector.clone(), expected);
+        self.wait_with(&mut waiter, selector, deadline).map(|_| ())
     }
 
     /// expect()-style assertion with retry-until-timeout semantics (§16).
@@ -1560,6 +1597,27 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
     ) -> Result<(), CoreError> {
         self.run(vec![Check::HasText(value.into())], "value")
     }
+
+    /// `expect(locator).toHaveCount(count)` — the selector-level assertion
+    /// (M22): the match-set size, strict mode never consulted. The
+    /// mismatch is waitable (nodes stream in and out, Playwright parity);
+    /// the timeout error keeps the count waiter's own
+    /// `count N — {selector} (found M)` header (the `run` rewrite is for
+    /// the check-list waiter, whose description is selector-first).
+    pub fn to_have_count(self, expected: usize) -> Result<(), CoreError> {
+        let deadline = Instant::now() + self.timeout;
+        // The scope resolves at act time (the M17 discipline), exactly as
+        // the check-list path does: a window closed between aim and assert
+        // fails with `UnknownWindow`, not with a cross-window count.
+        let scope = match &self.window {
+            None => None,
+            Some(handle) => self.session.window_scope(handle)?,
+        };
+        self.session.set_resolve_scope(scope);
+        let result = self.session.wait_count(&self.selector, expected, deadline);
+        self.session.clear_resolve_scope();
+        result
+    }
 }
 
 #[cfg(test)]
@@ -1696,6 +1754,53 @@ mod tests {
             ))
             .to_be_checked_mixed()
             .expect("partially installed mixed");
+    }
+
+    // --- The count surface (§16 assertions row, M22) ----------------------
+
+    #[test]
+    fn wait_count_completes_on_the_match_set() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let selector = Selector::role(accesskit::Role::Button);
+        session
+            .wait_count(&selector, 4, Instant::now() + Duration::from_secs(1))
+            .expect("4 buttons is the fixture's count");
+        // Zero is a count too (the non-strict seam — strict mode is never
+        // consulted for the set-size assertion).
+        session
+            .wait_count(
+                &Selector::role_named(accesskit::Role::Button, "Ghost"),
+                0,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .expect("zero ghosts is a satisfied count");
+    }
+
+    #[test]
+    fn wait_count_times_out_naming_expected_and_found() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let err = session
+            .wait_count(
+                &Selector::role(accesskit::Role::Button),
+                99,
+                Instant::now() + Duration::from_millis(200),
+            )
+            .expect_err("99 buttons never arrive");
+        let msg = err.to_string();
+        assert!(msg.contains("count 99"), "{msg}");
+        assert!(msg.contains("found 4"), "{msg}");
+    }
+
+    #[test]
+    fn expect_builder_carries_the_count_assertion() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .to_have_count(4)
+            .expect("the builder surface rides the same loop");
     }
 
     #[test]
