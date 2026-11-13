@@ -8,6 +8,19 @@ use std::path::PathBuf;
 use guiwright_proto::schema::{AdapterInfoV1, GwpEvent, RequestV1, ResponseV1};
 use guiwright_proto::{GwpError, tcp, uds, ws};
 
+/// A connect target that failed to parse (§5.3 launch-mode URLs): one
+/// typed variant per malformed form, so the caller names the scheme that
+/// was wrong instead of matching on strings.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TargetParseError {
+    #[error("uds:// URL needs a socket path")]
+    EmptyUdsPath,
+    #[error("tcp:// URL needs a host:port")]
+    EmptyTcpAddr,
+    #[error("ws:// URL needs a host:port")]
+    EmptyWsAddr,
+}
+
 /// Where to attach: a Unix domain socket path, a TCP `host:port`, or a
 /// WebSocket `ws://host:port` (the viewer live-mode door, M15).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,22 +34,22 @@ impl ConnectTarget {
     /// Parse a `uds:///path` / `tcp://host:port` / `ws://host:port` URL
     /// (the `GUIWRIGHT_DRIVER` launch-mode form, §5.3) or a bare
     /// path/address.
-    pub fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, TargetParseError> {
         if let Some(rest) = value.strip_prefix("uds://") {
             if rest.is_empty() {
-                return Err("uds:// URL needs a socket path".into());
+                return Err(TargetParseError::EmptyUdsPath);
             }
             return Ok(ConnectTarget::Uds(PathBuf::from(rest)));
         }
         if let Some(rest) = value.strip_prefix("tcp://") {
             if rest.is_empty() {
-                return Err("tcp:// URL needs a host:port".into());
+                return Err(TargetParseError::EmptyTcpAddr);
             }
             return Ok(ConnectTarget::Tcp(rest.to_string()));
         }
         if let Some(rest) = value.strip_prefix("ws://") {
             if rest.is_empty() {
-                return Err("ws:// URL needs a host:port".into());
+                return Err(TargetParseError::EmptyWsAddr);
             }
             return Ok(ConnectTarget::Ws(rest.to_string()));
         }
