@@ -231,8 +231,22 @@ where
         for (key, value) in visitor.fields {
             fields.insert(key, serde_json::json!(value));
         }
-        self.tap
-            .send(serde_json::to_string(&fields).unwrap_or_default());
+        // A serialization failure must not pass silently (the record would
+        // reach the subscriber as an empty line): say so at warn level and
+        // drop the record — the tail is a bounded live tap, replay is not
+        // a thing it promises (§7 event channel, M14).
+        let line = match serde_json::to_string(&fields) {
+            Ok(line) => line,
+            Err(e) => {
+                tracing::warn!(
+                    target = event.metadata().target(),
+                    error = %e,
+                    "log-tail record dropped: serialization failed"
+                );
+                return;
+            }
+        };
+        self.tap.send(line);
     }
 }
 
