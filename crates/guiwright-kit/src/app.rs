@@ -25,6 +25,7 @@ use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::session::Session;
 
 use crate::input::{KeyboardHandle, MouseHandle};
+use crate::window::WindowHandle;
 use guiwright_inspect::codegen::{CodegenRecorder, NodeFacts};
 use guiwright_shot::Image;
 use guiwright_shot::baseline::{BlessMode, SnapshotOutcome};
@@ -61,6 +62,12 @@ pub struct Locator<'a, A: FrameworkAdapter> {
     /// borrow-and-act handle, not a data record.
     pub(crate) app: &'a mut App<A>,
     pub(crate) selector: Selector,
+    /// The optional window pin (§16 v0.4, the kit half of M6): when set,
+    /// every resolution path this locator drives is scoped to that
+    /// window's subtree — the same semantics the wire's `Window::Use`
+    /// gives a remote connection. `None` resolves the whole tree (the
+    /// historical single-window surface).
+    pub(crate) window: Option<String>,
 }
 
 impl<A: FrameworkAdapter> std::fmt::Debug for Locator<'_, A> {
@@ -98,33 +105,57 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
 
     /// `locator.click()` — actionability-checked, auto-waits (§8.3–§8.4).
     pub fn click(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.click(&self.selector)?;
-        self.app.record_action("click", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| session.click(&selector))?;
+        app.record_scoped_action("click", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
     /// `locator.dblclick()`.
     pub fn dblclick(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.perform_action(
-            &self.selector,
-            SemAction::DoubleClick,
-            &ActionOpts::default(),
-        )?;
-        self.app.record_action("dblclick", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(&selector, SemAction::DoubleClick, &ActionOpts::default())
+        })?;
+        app.record_scoped_action("dblclick", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
     /// `locator.fill(text)`.
     pub fn fill(self, text: &str) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.fill(&self.selector, text)?;
-        self.app.record_action("fill", &self.selector, Some(text));
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.fill(&selector, text)
+        })?;
+        app.record_scoped_action("fill", &recorded, Some(text), window.as_deref());
         Ok(outcome)
     }
 
     /// `locator.hover()`.
     pub fn hover(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.hover(&self.selector)?;
-        self.app.record_action("hover", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| session.hover(&selector))?;
+        app.record_scoped_action("hover", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
@@ -132,37 +163,53 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
     /// resolved node (§16 actions row): the same actionability gate and
     /// auto-wait as every locator action, the plain (no-modifier) chord.
     pub fn press(self, key: &str) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.perform_action(
-            &self.selector,
-            SemAction::Press {
-                key: key.to_string(),
-                modifiers: Vec::new(),
-            },
-            &ActionOpts::default(),
-        )?;
-        self.app.record_action("press", &self.selector, Some(key));
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(
+                &selector,
+                SemAction::Press {
+                    key: key.to_string(),
+                    modifiers: Vec::new(),
+                },
+                &ActionOpts::default(),
+            )
+        })?;
+        app.record_scoped_action("press", &recorded, Some(key), window.as_deref());
         Ok(outcome)
     }
 
     /// `locator.check()` — the wire's `Check` semantic action.
     pub fn check(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.perform_action(
-            &self.selector,
-            SemAction::Check,
-            &ActionOpts::default(),
-        )?;
-        self.app.record_action("check", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(&selector, SemAction::Check, &ActionOpts::default())
+        })?;
+        app.record_scoped_action("check", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
     /// `locator.uncheck()`.
     pub fn uncheck(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.perform_action(
-            &self.selector,
-            SemAction::Uncheck,
-            &ActionOpts::default(),
-        )?;
-        self.app.record_action("uncheck", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(&selector, SemAction::Uncheck, &ActionOpts::default())
+        })?;
+        app.record_scoped_action("uncheck", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
@@ -181,29 +228,43 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
 
     /// `locator.focus()`.
     pub fn focus(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.perform_action(
-            &self.selector,
-            SemAction::Focus,
-            &ActionOpts::default(),
-        )?;
-        self.app.record_action("focus", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(&selector, SemAction::Focus, &ActionOpts::default())
+        })?;
+        app.record_scoped_action("focus", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
     /// `locator.blur()`.
     pub fn blur(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
-        let outcome = self.app.session.perform_action(
-            &self.selector,
-            SemAction::Blur,
-            &ActionOpts::default(),
-        )?;
-        self.app.record_action("blur", &self.selector, None);
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(&selector, SemAction::Blur, &ActionOpts::default())
+        })?;
+        app.record_scoped_action("blur", &recorded, None, window.as_deref());
         Ok(outcome)
     }
 
-    /// Raw resolution (no action) — for custom flows.
+    /// Raw resolution (no action) — for custom flows. Nothing is
+    /// recorded: resolution without an action is not a replayable step.
     pub fn resolve(self) -> Result<Resolved, KitError> {
-        Ok(self.app.session.resolve(&self.selector)?)
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), move |session| session.resolve(&selector))?)
     }
 
     /// `locator.screenshot(name, bless)` — the §10 element screenshot
@@ -216,17 +277,27 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
     /// `BlessMode::Failing` to write the baseline; a mismatch fails the
     /// test and leaves `.new.png` + `.diff.png` artifacts next to it.
     pub fn screenshot(self, name: &str, bless: BlessMode) -> Result<SnapshotOutcome, KitError> {
-        let resolved = self.app.session.resolve(&self.selector)?;
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        // Resolution is window-scoped when the locator is pinned (§16
+        // v0.4); the frame itself is the adapter's single render surface,
+        // so the crop path is unchanged.
+        let rendered = selector.clone();
+        let resolved =
+            app.run_scoped(window.as_deref(), move |session| session.resolve(&selector))?;
         let rect = resolved.bounds.ok_or_else(|| {
             CoreError::other(format!(
                 "{} has no bounds — nothing to crop (§10)",
-                self.selector.render()
+                rendered.render()
             ))
         })?;
-        let frame = self.app.session.adapter_mut().render_frame(None)?;
-        let pixels = frame.pixels.ok_or_else(|| {
-            KitError::NoPixels(self.app.session.adapter().meta().name.to_string())
-        })?;
+        let frame = app.session.adapter_mut().render_frame(None)?;
+        let pixels = frame
+            .pixels
+            .ok_or_else(|| KitError::NoPixels(app.session.adapter().meta().name.to_string()))?;
         // Physical px → the crop window, clamped into the frame (§9: the
         // bounds are already physical; the frame is the window's buffer).
         // The clamp pins the value into `[0, max]` before the conversion
@@ -246,23 +317,26 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         };
         let element = guiwright_shot::crop(&image, x0, y0, x1, y1)?;
 
-        let root = self
-            .app
+        let root = app
             .baseline_root
             .clone()
-            .unwrap_or_else(|| self.app.context.baseline_dir());
+            .unwrap_or_else(|| app.context.baseline_dir());
         let store = guiwright_shot::baseline::BaselineStore::new(root);
-        let tolerance = self.app.config.screenshots.effective();
+        let tolerance = app.config.screenshots.effective();
         let outcome = store.assert_snapshot(
             name,
-            self.app.session.adapter().meta().framework,
+            app.session.adapter().meta().framework,
             &element,
             tolerance,
             bless,
         )?;
-        self.app
-            .record_action("screenshot_element", &self.selector, Some(name));
-        self.app.record_event(
+        app.record_scoped_action(
+            "screenshot_element",
+            &rendered,
+            Some(name),
+            window.as_deref(),
+        );
+        app.record_event(
             "screenshot_element",
             format!("{name} [({x0},{y0}) → ({x1},{y1})] → {outcome:?}"),
         );
@@ -289,8 +363,10 @@ pub struct App<A: FrameworkAdapter = MockAdapter> {
     /// Codegen recorder (§13) — off unless `enable_codegen` ran.
     codegen: Option<CodegenRecorder>,
     /// Recorded actions awaiting fact resolution (deferred so the locator
-    /// action path stays borrow-free; drained at read time).
-    codegen_pending: Vec<(String, Selector, Option<String>)>,
+    /// action path stays borrow-free; drained at read time). The fourth
+    /// slot is the window pin (§16 v0.4) — `None` for the whole-tree
+    /// surface.
+    codegen_pending: Vec<(String, Selector, Option<String>, Option<String>)>,
 }
 
 impl<A: FrameworkAdapter> std::fmt::Debug for App<A> {
@@ -448,6 +524,7 @@ impl<A: FrameworkAdapter> App<A> {
         Locator {
             app: self,
             selector: Selector::role_named(role, name),
+            window: None,
         }
     }
 
@@ -456,6 +533,7 @@ impl<A: FrameworkAdapter> App<A> {
         Locator {
             app: self,
             selector: Selector::label(name),
+            window: None,
         }
     }
 
@@ -464,6 +542,7 @@ impl<A: FrameworkAdapter> App<A> {
         Locator {
             app: self,
             selector: Selector::text(text),
+            window: None,
         }
     }
 
@@ -472,6 +551,7 @@ impl<A: FrameworkAdapter> App<A> {
         Locator {
             app: self,
             selector: Selector::test_id(id),
+            window: None,
         }
     }
 
@@ -481,6 +561,7 @@ impl<A: FrameworkAdapter> App<A> {
         Locator {
             app: self,
             selector: Selector::role(role),
+            window: None,
         }
     }
 
@@ -489,6 +570,60 @@ impl<A: FrameworkAdapter> App<A> {
         Locator {
             app: self,
             selector: Selector::value(value),
+            window: None,
+        }
+    }
+
+    /// The session's window targets (§16 v0.4, M6): adapter-reported
+    /// metadata (handle / title / focus). Single-window adapters report
+    /// exactly one `main` target; multi-window adapters report one entry
+    /// per grafted window. The same list `window list` prints in the REPL
+    /// and `windowList()` returns in the TypeScript client.
+    pub fn windows(&mut self) -> Vec<guiwright_driver::WindowInfo> {
+        self.session.windows()
+    }
+
+    /// Aim a borrow-and-act handle at one window target (§16 v0.4, the kit
+    /// half of M6): locators born from the handle resolve **only inside
+    /// that window's subtree**, the same semantics the wire's
+    /// `Window::Use` gives a remote connection. The handle is validated
+    /// against the tree at aim time (the source of truth, §16 v0.4 — an
+    /// adapter metadata entry without tree content is not a usable
+    /// target), so a dead handle fails here with the typed
+    /// `UnknownWindow` error instead of mid-flow.
+    pub fn window(&mut self, handle: impl Into<String>) -> Result<WindowHandle<'_, A>, KitError> {
+        let handle = handle.into();
+        self.session.window_scope(&handle)?;
+        // Metadata is the adapter's display word for the target; a tree
+        // entry without a metadata row (possible for a grafted window the
+        // adapter did not script) still aims, with the handle as the
+        // title and focus unset.
+        let (title, focused) = self
+            .session
+            .windows()
+            .into_iter()
+            .find(|w| w.handle == handle)
+            .map_or_else(|| (handle.clone(), false), |w| (w.title, w.focused));
+        Ok(WindowHandle {
+            app: self,
+            handle,
+            title,
+            focused,
+        })
+    }
+
+    /// Run `op` under the locator's window pin (§16 v0.4): `None` is the
+    /// historical whole-tree surface, `Some(handle)` validates + scopes +
+    /// clears in one rendezvous (the session's `scoped`, the server's
+    /// set/act/clear pattern published for embedded consumers).
+    pub(crate) fn run_scoped<R>(
+        &mut self,
+        window: Option<&str>,
+        op: impl FnOnce(&mut Session<A>) -> Result<R, CoreError>,
+    ) -> Result<R, CoreError> {
+        match window {
+            None => op(&mut self.session),
+            Some(handle) => self.session.scoped(handle, op),
         }
     }
 
@@ -651,18 +786,28 @@ impl<A: FrameworkAdapter> App<A> {
         self.trace_path.as_ref()
     }
 
-    pub(crate) fn record_action(
+    /// The action tap (§13): the trace event names the selector — plus the
+    /// window pin when one is set (§16 v0.4) — and the codegen line
+    /// records the `app.window(…).…` shape when a handle is set.
+    pub(crate) fn record_scoped_action(
         &mut self,
         kind: &'static str,
         selector: &Selector,
         argument: Option<&str>,
+        window: Option<&str>,
     ) {
-        self.record_event(kind, selector.render());
+        match window {
+            None => self.record_event(kind, selector.render()),
+            Some(handle) => {
+                self.record_event(kind, format!("{} @ window {handle}", selector.render()));
+            }
+        }
         if self.codegen.is_some() {
             self.codegen_pending.push((
                 kind.to_string(),
                 selector.clone(),
                 argument.map(str::to_string),
+                window.map(str::to_string),
             ));
         }
     }
@@ -717,6 +862,8 @@ impl<A: FrameworkAdapter> App<A> {
 
     /// Drain pending actions into the codegen recorder (§13): resolve the
     /// node, collect its facts, let the cost model pick the selector.
+    /// Window-pinned actions resolve inside their subtree (§16 v0.4) and
+    /// record the `app.window(…).…` shape.
     fn record_codegen_pending(&mut self) {
         if self.codegen_pending.is_empty() {
             return;
@@ -726,16 +873,40 @@ impl<A: FrameworkAdapter> App<A> {
         let Some(mut recorder) = self.codegen.take() else {
             return;
         };
-        for (kind, selector, argument) in &pending {
-            let Ok(resolved) = self.session.resolve(selector) else {
+        for (kind, selector, argument, window) in &pending {
+            // The recorded facts must be the scoped resolution's: a pinned
+            // action that no longer resolves inside its window is a
+            // warning, not a cross-window hit.
+            let resolved = match window {
+                None => self.session.resolve(selector),
+                Some(handle) => self
+                    .session
+                    .scoped(handle, |session| session.resolve(selector)),
+            };
+            let Ok(resolved) = resolved else {
                 recorder.warn(format!(
                     "action `{kind}` target no longer resolves: {}",
                     selector.render()
                 ));
                 continue;
             };
+            // The cost model judges uniqueness where the action resolved:
+            // the pinned subtree root rides along so a window-scoped
+            // "Save" records without the cross-window `.first()` hedge
+            // (§16 v0.4 + §13).
+            let scope = match window {
+                None => None,
+                Some(handle) => self.session.window_scope(handle).ok().flatten(),
+            };
+            let pinned = window.as_deref().zip(scope.as_ref());
             let facts = self.collect_facts(&resolved.key, resolved.bounds);
-            let _ = recorder.record(kind, argument.as_deref(), &facts, self.session.tree());
+            let _ = recorder.record(
+                kind,
+                argument.as_deref(),
+                &facts,
+                self.session.tree(),
+                pinned,
+            );
         }
         self.codegen = Some(recorder);
     }
@@ -1010,11 +1181,17 @@ impl<A: FrameworkAdapter> VideoHandle<'_, A> {
 
 /// `expect(app.get_by_text("Welcome, Ada")).to_be_visible()` (§16
 /// retry-until-timeout assertions). Free function, architecture shape:
-/// it consumes the locator and returns the pending assertion.
+/// it consumes the locator and returns the pending assertion. A
+/// window-pinned locator (§16 v0.4) scopes the assertion's wait loop to
+/// that window's subtree — the handle is re-validated at act time.
 pub fn expect<A: FrameworkAdapter>(locator: Locator<'_, A>) -> core_expect::Pending<'_, A> {
-    let Locator { app, selector } = locator;
+    let Locator {
+        app,
+        selector,
+        window,
+    } = locator;
     core_expect::Pending {
-        builder: app.session.expect(selector),
+        builder: app.session.expect(selector).with_window(window),
     }
 }
 
