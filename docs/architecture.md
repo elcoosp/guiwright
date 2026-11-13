@@ -60,9 +60,9 @@ Two more refinements:
 
 | Repo | Version / HEAD | Windowing | Input vocabulary | Semantic tree | Layout | Renderer | Existing test stack |
 |---|---|---|---|---|---|---|---|
-| egui | 0.37.0 | winit 0.30.13 (via eframe) | `egui::Event` (synthesizable via `RawInput`) | AccessKit 0.25.1, **always compiled, runtime-toggled** | immediate-mode `WidgetRects` | wgpu 30 / glow; epaint tessellation | `egui_kittest` (harness) + `egui_inspection` (TCP protocol) |
-| Xilem/Masonry | 0.4.0 (`dc49687`) | winit 0.30.13 | `ui-events` `PointerEvent`/`KeyboardEvent`, `WindowEvent`/`TextEvent` | AccessKit 0.24 + consumer 0.35; `WidgetId == NodeId` | custom (LenReq/measure) | vello (wgpu 28) / vello_cpu / skia via `masonry_imaging` | `masonry_testing::TestHarness` (headless, snapshot diffs) |
-| Freya | 0.5.0-rc.13 (`c4c27f1`) | winit 0.30.13 | `PlatformEvent` → ragnarok pipeline | AccessKit 0.25.1 (`AccessibilityId = NodeId`) | torin (custom) | Skia (GL/Vulkan/Metal/softbuffer software) | `freya-testing::TestingRunner` (sync, headless, PNG) |
+| egui | 0.37.0 | winit 0.30.13 (via eframe) | `egui::Event` (synthesizable via `RawInput`) | AccessKit 0.25.2, **always compiled, runtime-toggled** | immediate-mode `WidgetRects` | wgpu 30 / glow; epaint tessellation | `egui_kittest` (harness) + `egui_inspection` (TCP protocol) |
+| Xilem/Masonry | 0.4.0 (`dc49687`) | winit 0.30.13 | `ui-events` `PointerEvent`/`KeyboardEvent`, `WindowEvent`/`TextEvent` | AccessKit 0.21 + consumer 0.31 (via masonry 0.4); `WidgetId == NodeId` | custom (LenReq/measure) | vello (wgpu 28) / vello_cpu / skia via `masonry_imaging` | `masonry_testing::TestHarness` (headless, snapshot diffs) |
+| Freya | 0.5.0-rc.13 (`c4c27f1`) | winit 0.30.13 | `PlatformEvent` → ragnarok pipeline | AccessKit 0.25.2 (`AccessibilityId = NodeId`) | torin (custom) | Skia (GL/Vulkan/Metal/softbuffer software) | `freya-testing::TestingRunner` (sync, headless, PNG) |
 | Iced | 0.15.0-dev (`8ff48c4`) | winit 0.30.13 (iced fork) | `core::Event` + `Action::Event` injection | **none** | custom (`widget::Tree`, `Layout`) | wgpu 30 / tiny-skia; `Headless::screenshot` | `iced_test` (`Simulator`/`Emulator`), `iced_selector`, `iced_tester`, `.ice` |
 | Slint | 1.19.0 (`34008e5`) | winit 0.30.2 | core `WindowEvent` via `Window::dispatch_event` | AccessKit 0.25 (winit backend, default-on) + `ElementHandle` (debug-info) | compiler-generated items | femtovg (default) / skia / software (`render(&mut [TargetPixel])`, `take_snapshot`) | `i-slint-backend-testing` + driver test suite + MCP/system-testing servers |
 | GPUI | 0.2.2 (zed HEAD) | **custom** per-OS loops (calloop/Wayland/x11rb; not winit) | `PlatformInput` → `Window::dispatch_event` | AccessKit 0.24, unconditional | taffy 0.15 | wgpu 30 (`gpui_wgpu`) / Metal | `test-support`: `TestPlatform`, `TestWindow`, `VisualTestContext`, `render_to_image` |
@@ -200,7 +200,7 @@ guiwright/
 │                         #   state machines, Expect/assertions, virtual clock semantics
 │                         #   (no framework deps; hot paths allocation-light)
 ├── guiwright-proto       # GWP codec: postcard schema, framing, versioning, transports
-│                         #   (UDS, TCP, optional WS), backpressure, binary frame side-channel
+│                         #   (UDS, TCP, WS, in-process duplex), backpressure, binary frame side-channel
 ├── guiwright-driver      # in-app host: session manager, tree service, action scheduler,
 │                         #   frame service, trace recorder, clock service
 ├── guiwright-adapter-*   # standalone per-framework adapter crates (egui, masonry,
@@ -220,7 +220,7 @@ guiwright/
 └── guiwright-bench       # criterion suites + CI perf guards (§15.7)
 ```
 
-Dependency rule: `core` depends only on `accesskit` + `accesskit_consumer` (the one universal substrate). Adapters depend on core + their framework. The app depends on `guiwright-driver` with one adapter feature — nothing else leaks into release builds.
+Dependency rule: `core` depends only on `accesskit` + `accesskit_consumer` (the one universal substrate). Adapters depend on core + their framework. The app depends on its adapter crate (the framework stack stays behind the adapter crate's own feature — `guiwright-driver` ships framework-free) — nothing else leaks into release builds.
 
 ### 5.3 Cargo integration (the `--features playwright-driver` idea, made precise)
 
@@ -304,21 +304,21 @@ pub enum NodeKey {
 ### 6.3 Client-side API (guiwright-kit, embedded & remote share it)
 
 ```rust
-let mut app = App::launch(MyApp::default())?;           // embedded: builds adapter + harness
-app.wait_for_settle().await?;                            // frames drained, timers idle
+use accesskit::Role;
+use guiwright_kit::App;
 
-let save = app.get_by_role(Role::Button, "Save");        // Locator = Selector + retry policy
-save.click().await?;                                     // actionability-checked, auto-waits
+// Embedded mode (§5.1): the kit calls the adapter in-process, fully
+// synchronous — every call pumps the session loop and auto-waits.
+let mut app = App::launch("my-test", my_adapter);
+app.wait_for_settle();
 
-let email = app.get_by_label("Email");
-email.fill("ada@example.dev").await?;
+app.get_by_role(Role::Button, "Save").click()?;           // actionability-gated
+expect(app.get_by_text("Welcome, Ada")).to_be_visible()?; // retry-until-timeout
 
-expect(app.get_by_text("Welcome, Ada")).to_be_visible().await?;
-expect(save).to_be_disabled().await?;
-expect(app.window(0)).to_have_screenshot("main-empty").await?;
-
-app.clock().fast_forward(Duration::from_secs(30)).await?; // animations & timers jump
-let trace = app.trace().stop().await?;                    // guiwright-<ts>.zip
+// Multi-window (§16 v0.4): aim one window target; the locators born
+// from the handle resolve only inside its subtree.
+let preview = app.window(&w2_handle)?;
+preview.get_by_role(Role::Button, "Save").click()?;
 ```
 
 ---
@@ -471,7 +471,7 @@ index.bin          frame_seq → offsets (O(1) random access)
 ```
 
 - **Recorder:** lock-free SPSC ring on the UI thread → writer thread (LZ4, ring buffer with sliding-window eviction; cap default 256 MB, oldest-first eviction). Frames captured at a configurable rate (default: every frame up to 60 fps, hash-deduped).
-- **Viewer:** self-contained `trace.html` (WASM): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16) shipped with M18: the transport-side client seam (`ClientConn`, the client half of `Handler`) plus the viewer's `LiveFeed`/`LiveTimeline` — a running session over any door (UDS/TCP/WS/embedded) feeds the same scrubber model the archive path builds, dump-per-change, event-fed frame axis. The `trace.html` emitter for live captures stays a follow-on (the §12 archive is still the file format); the kit's trace flow still archives first.
+- **Viewer:** self-contained `trace.html` (plain HTML + vanilla JS; the WASM viewer is §12's full vision): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16) shipped with M18: the transport-side client seam (`ClientConn`, the client half of `Handler`) plus the viewer's `LiveFeed`/`LiveTimeline` — a running session over any door (UDS/TCP/WS/embedded) feeds the same scrubber model the archive path builds, dump-per-change, event-fed frame axis. The `trace.html` emitter for live captures stays a follow-on (the §12 archive is still the file format); the kit's trace flow still archives first.
 
 ---
 
@@ -479,7 +479,7 @@ index.bin          frame_seq → offsets (O(1) random access)
 
 - **Overlay:** adapter-level composition on top of the app's scene at present time (egui: painter layer after the pass; masonry/freya: overlay layer — both have native overlay/layer stacks; GPUI: `debug_bounds`-style overlay element; slint: top-level overlay window; iced: overlay via `Operation`-returned rects drawn by a wrapper program). Overlay draws hover outlines + role/TestId badges from the current tree indexes.
 - **Recording:** interactions (semantic + input) are captured at the adapter tap, *not* by hooking app callbacks — so codegen works on unmodified apps. Each action is emitted as kit code against the **minimal stable selector** chosen by a cost model: `TestId` > role+accessible-name > label > text (with `.filter()` narrowing on ambiguity). The recorder runs the selector-uniqueness check live (strict-mode warnings as you click).
-- **Interactive session:** `guiwright codegen <cmd>` launches the app with the driver + overlay, and streams generated code to stdout/editor; a REPL (`guiwright repl`) attaches to a live session for ad-hoc locators/eval — the debugging loop that makes Playwright pleasant.
+- **Interactive session:** REPL `codegen start | stop` records while you drive the attached app (no standalone subcommand) with the driver + overlay, and streams generated code to stdout/editor; a REPL (`guiwright repl`) attaches to a live session for ad-hoc locators/eval — the debugging loop that makes Playwright pleasant.
 
 ---
 
