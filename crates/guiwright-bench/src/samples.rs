@@ -1109,6 +1109,39 @@ pub fn checked_assert() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- Count-assertion sample (§16 assertions row, M22) ------------------------
+
+/// §16 assertions row, M22: one `to_have_count(n)` kit assertion on the
+/// button fixture — the selector-level assertion's steady-state cost: one
+/// non-strict `resolve_all` walk (the filter/codegen index path) plus the
+/// set-size compare through the session's zero-polling wait. The
+/// assertion completes on the initial evaluation, so this is the floor
+/// every count assertion adds on top of the `resolve_cached_index` row —
+/// the first waiter that resolves the whole match set instead of one node.
+pub fn count_assert() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("count_assert", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        guiwright_kit::expect(app.role_locator(Role::Button))
+            .to_have_count(4)
+            .expect("bench assertion holds");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 // --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
 
 /// §16 v0.4 multi-window, kit side: one `app.window(handle).get_by_role(…)
