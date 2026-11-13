@@ -13,7 +13,9 @@ use crate::CoreError;
 use crate::actionability::Check;
 use crate::selector::{Selector, TextMatch};
 use crate::tree::TreeService;
-use crate::wait::{ChecksWaiter, CountWaiter, WaitOutcome, Waiter, WaiterEvent};
+use crate::wait::{
+    ChecksWaiter, CountMatch, CountWaiter, NotWaiter, WaitOutcome, Waiter, WaiterEvent,
+};
 
 /// Default assertion timeout (Playwright default: 5 s).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -25,6 +27,7 @@ pub fn expect(locator: Selector) -> ExpectBuilder {
     ExpectBuilder {
         locator,
         timeout: DEFAULT_TIMEOUT,
+        negated: false,
     }
 }
 
@@ -33,12 +36,30 @@ pub fn expect(locator: Selector) -> ExpectBuilder {
 pub struct ExpectBuilder {
     locator: Selector,
     timeout: Duration,
+    /// The negation modifier (§16 assertions row, M24): `not().to_*`
+    /// inverts the terminal assertion through the [`NotWaiter`]
+    /// decorator. Set-once (Playwright's modifier is a property; double
+    /// negation is not part of the surface).
+    negated: bool,
 }
 
 impl ExpectBuilder {
     /// Override the timeout for this assertion.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// The negation modifier (§16 assertions row, M24):
+    /// `expect(locator).not().to_be_visible()` — the terminal assertion
+    /// is inverted through the [`NotWaiter`] decorator: it is satisfied
+    /// exactly while the positive condition does not hold. Strict-mode
+    /// violations and fail-fast checks keep failing (Playwright parity),
+    /// and the timeout header names the inversion
+    /// (`not (visible — …)`). Set-once: calling it again changes
+    /// nothing.
+    pub fn not(mut self) -> Self {
+        self.negated = true;
         self
     }
 
@@ -104,20 +125,74 @@ impl ExpectBuilder {
     /// (M22): how many nodes match, strict mode never consulted. The
     /// mismatch is waitable (nodes stream in and out, Playwright parity);
     /// the timeout error names the expected count, the locator and the
-    /// count the last evaluation found.
+    /// count the last evaluation found. Under [`Self::not`] the
+    /// assertion is satisfied while the count *differs* (the decorator
+    /// inverts the waiter, M24).
     pub fn to_have_count(self, expected: usize) -> Expectation {
+        self.count_expectation(CountMatch::Exact(expected))
+    }
+
+    /// The one-sided count comparator (M25): satisfied while *more* than
+    /// `min` nodes match — the m22 record's reserved vocabulary widening
+    /// on the count waiter. Strict mode is never consulted, the mismatch
+    /// is waitable (nodes stream in and out), and the timeout error
+    /// names the comparator (`count > 99 — …`) plus the count the last
+    /// evaluation found (`found 4`). Under [`Self::not`] the decorator
+    /// inverts the comparison (satisfied while it does not hold).
+    pub fn to_have_count_greater_than(self, min: usize) -> Expectation {
+        self.count_expectation(CountMatch::GreaterThan(min))
+    }
+
+    /// The one-sided count comparator (M25): satisfied while *fewer*
+    /// than `max` nodes match — the mirror of
+    /// [`Self::to_have_count_greater_than`], same waiter, same
+    /// waitable-mismatch contract, same error shape (`count < 3 — …`).
+    pub fn to_have_count_less_than(self, max: usize) -> Expectation {
+        self.count_expectation(CountMatch::LessThan(max))
+    }
+
+    /// The shared count-assertion assembly (M25): the M22 exact form and
+    /// the comparators differ only in the [`CountMatch`] they hand the
+    /// waiter (and the [`NotWaiter`] wrapper under `not()`); the exact
+    /// header stays byte-identical through the path.
+    fn count_expectation(self, comparison: CountMatch) -> Expectation {
+        let inner: Box<dyn Waiter> =
+            Box::new(CountWaiter::with_match(self.locator.clone(), comparison));
+        let (waiter, operation) = if self.negated {
+            let waiter: Box<dyn Waiter> = Box::new(NotWaiter::new(inner));
+            (
+                waiter,
+                format!(
+                    "not ({} — {})",
+                    comparison.describe(),
+                    self.locator.render()
+                ),
+            )
+        } else {
+            (
+                inner,
+                format!("{} — {}", comparison.describe(), self.locator.render()),
+            )
+        };
         Expectation {
-            waiter: Box::new(CountWaiter::new(self.locator.clone(), expected)),
+            waiter,
             timeout: self.timeout,
-            operation: format!("count {expected} — {}", self.locator.render()),
+            operation,
         }
     }
 
     fn checks(self, checks: Vec<Check>, name: &str) -> Expectation {
+        let inner: Box<dyn Waiter> = Box::new(ChecksWaiter::new(self.locator.clone(), checks));
+        let (waiter, operation) = if self.negated {
+            let waiter: Box<dyn Waiter> = Box::new(NotWaiter::new(inner));
+            (waiter, format!("not ({name} — {})", self.locator.render()))
+        } else {
+            (inner, format!("{name} — {}", self.locator.render()))
+        };
         Expectation {
-            waiter: Box::new(ChecksWaiter::new(self.locator.clone(), checks)),
+            waiter,
             timeout: self.timeout,
-            operation: format!("{name} — {}", self.locator.render()),
+            operation,
         }
     }
 }
@@ -353,5 +428,175 @@ mod tests {
         assert!(msg.contains("count 99"), "{msg}");
         assert!(msg.contains("getByRole"), "{msg}");
         assert!(msg.contains("found 4"), "{msg}");
+    }
+
+    // --- The negation modifier (§16 assertions row, M24) ------------------
+
+    #[test]
+    fn not_to_be_visible_passes_for_hidden_and_absent() {
+        let fixture = Fixture::buttons();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        // The hidden button is not visible…
+        expect(Selector::role_named(Role::Button, "Invisible"))
+            .not()
+            .to_be_visible()
+            .check_now(&tree)
+            .expect("the hidden button is not visible");
+        // …and neither is the button that never attached.
+        expect(Selector::role_named(Role::Button, "Ghost"))
+            .not()
+            .to_be_visible()
+            .check_now(&tree)
+            .expect("the absent button is not visible");
+    }
+
+    #[test]
+    fn not_to_be_checked_fails_fast_on_a_non_checkable_role() {
+        let tree = tree_with_fixture();
+        // A plain button can never become checkable: the negation cannot
+        // wait its way to a pass (the M20 rule holds under not()).
+        let err = expect(Selector::role_named(Role::Button, "Save"))
+            .not()
+            .to_be_checked()
+            .check_now(&tree)
+            .expect_err("a button is not checkable either way");
+        assert!(
+            err.to_string().contains("no checked state"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn not_to_have_count_passes_while_the_count_differs() {
+        let tree = tree_with_fixture();
+        expect(Selector::role(Role::Button))
+            .not()
+            .to_have_count(5)
+            .check_now(&tree)
+            .expect("4 buttons is not 5");
+    }
+
+    #[test]
+    fn strict_mode_still_fails_under_negation() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .not()
+            .to_be_visible()
+            .check_now(&tree)
+            .expect_err("4 buttons is ambiguous either way");
+        assert!(
+            err.to_string().contains("resolved to 4 nodes"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn a_negated_timeout_names_the_inverted_assertion() {
+        let tree = tree_with_fixture();
+        // Save stays visible, so not(visible) never lands: the timeout
+        // header must name the inversion, not just the positive form.
+        let err = expect(Selector::role_named(Role::Button, "Save"))
+            .not()
+            .to_be_visible()
+            .check_now(&tree)
+            .expect_err("save stays visible");
+        let msg = err.to_string();
+        assert!(msg.contains("not (visible"), "{msg}");
+        assert!(msg.contains("getByRole"), "{msg}");
+    }
+
+    #[test]
+    fn a_negated_count_timeout_names_the_inverted_count() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .not()
+            .to_have_count(4)
+            .check_now(&tree)
+            .expect_err("the count stays 4");
+        let msg = err.to_string();
+        assert!(msg.contains("not (count 4"), "{msg}");
+        assert!(msg.contains("getByRole"), "{msg}");
+    }
+
+    // --- The count comparators (§16 assertions row, M25) ------------------
+
+    #[test]
+    fn to_have_count_greater_than_passes_above_the_bound() {
+        let tree = tree_with_fixture();
+        expect(Selector::role(Role::Button))
+            .to_have_count_greater_than(3)
+            .check_now(&tree)
+            .expect("4 buttons clear the > 3 bound");
+    }
+
+    #[test]
+    fn to_have_count_less_than_passes_below_the_bound() {
+        let tree = tree_with_fixture();
+        expect(Selector::role(Role::Button))
+            .to_have_count_less_than(5)
+            .check_now(&tree)
+            .expect("4 buttons sit below the < 5 bound");
+        expect(Selector::role_named(Role::Button, "Ghost"))
+            .to_have_count_less_than(1)
+            .check_now(&tree)
+            .expect("0 ghosts sit below the < 1 bound");
+    }
+
+    #[test]
+    fn a_comparator_timeout_names_the_comparator_and_the_found_count() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count_greater_than(99)
+            .check_now(&tree)
+            .expect_err("4 buttons never clear > 99");
+        let msg = err.to_string();
+        assert!(msg.contains("count > 99"), "{msg}");
+        assert!(msg.contains("getByRole"), "{msg}");
+        assert!(msg.contains("found 4"), "{msg}");
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count_less_than(3)
+            .check_now(&tree)
+            .expect_err("4 buttons never sit below < 3");
+        assert!(err.to_string().contains("count < 3"), "{}", err.to_string());
+    }
+
+    #[test]
+    fn the_exact_count_header_is_byte_identical_through_the_shared_path() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count(99)
+            .check_now(&tree)
+            .expect_err("4 buttons is not 99");
+        assert!(
+            err.to_string().contains("count 99 — getByRole(Button)"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    #[test]
+    fn negated_comparators_compose_through_the_decorator() {
+        let tree = tree_with_fixture();
+        // not(> 99): 4 > 99 does not hold, so the negation holds now.
+        expect(Selector::role(Role::Button))
+            .not()
+            .to_have_count_greater_than(99)
+            .check_now(&tree)
+            .expect("4 buttons do not clear > 99");
+        // not(< 3): 4 < 3 does not hold either.
+        expect(Selector::role(Role::Button))
+            .not()
+            .to_have_count_less_than(3)
+            .check_now(&tree)
+            .expect("4 buttons do not sit below < 3");
+        // not(< 99): 4 < 99 holds, so the negation keeps waiting.
+        expect(Selector::role(Role::Button))
+            .not()
+            .to_have_count_less_than(99)
+            .check_now(&tree)
+            .expect_err("4 buttons sit below < 99");
     }
 }
