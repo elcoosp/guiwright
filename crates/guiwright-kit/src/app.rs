@@ -913,17 +913,34 @@ impl<A: FrameworkAdapter> App<A> {
             // (§16 v0.4 + §13).
             let scope = match window {
                 None => None,
-                Some(handle) => self.session.window_scope(handle).ok().flatten(),
+                // A scope that no longer resolves must not silently drop
+                // the codegen line: the recorder warns (the same honesty
+                // rule the trace log-tail follows — failures surface, they
+                // are not swallowed), and the unscoped line still records.
+                Some(handle) => match self.session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => {
+                        recorder.warn(format!(
+                            "codegen scope `{handle}` no longer resolves ({err}); \
+                             recording the line unscoped"
+                        ));
+                        None
+                    }
+                },
             };
             let pinned = window.as_deref().zip(scope.as_ref());
             let facts = self.collect_facts(&resolved.key, resolved.bounds);
-            let _ = recorder.record(
+            // The same rule for the record itself: a rejected line is
+            // warned about, never dropped silently.
+            if let Err(err) = recorder.record(
                 kind,
                 argument.as_deref(),
                 &facts,
                 self.session.tree(),
                 pinned,
-            );
+            ) {
+                recorder.warn(format!("codegen line for `{kind}` was not recorded: {err}"));
+            }
         }
         self.codegen = Some(recorder);
     }
@@ -1241,6 +1258,21 @@ pub(crate) mod core_expect {
                 builder: self.builder.with_timeout(timeout),
             }
         }
+        /// The negation modifier (§16 assertions row, M24):
+        /// `expect(locator).not().to_be_visible()` — the terminal
+        /// assertion is inverted through the core `NotWaiter` decorator:
+        /// satisfied exactly while the positive condition does not hold
+        /// (absent, hidden, disabled, a count that differs), completing
+        /// event-driven when the world changes. Strict-mode violations
+        /// and fail-fast checks keep failing (Playwright parity), and
+        /// the timeout header names the inversion. A window-pinned
+        /// locator keeps aiming through the modifier. Set-once: calling
+        /// it again changes nothing.
+        pub fn not(self) -> Self {
+            Self {
+                builder: self.builder.not(),
+            }
+        }
         pub fn to_be_visible(self) -> Result<(), CoreError> {
             self.builder.to_be_visible()
         }
@@ -1278,6 +1310,22 @@ pub(crate) mod core_expect {
         /// count, the locator and the count the last evaluation found.
         pub fn to_have_count(self, expected: usize) -> Result<(), CoreError> {
             self.builder.to_have_count(expected)
+        }
+        /// `expect(locator).to_have_count_greater_than(min)` (§16
+        /// assertions row, M25) — the M22 record's reserved widening on
+        /// the count waiter: satisfied while *more* than `min` nodes
+        /// match, the mismatch waitable, the timeout error naming the
+        /// comparator (`count > 99 — …`) and the count the last
+        /// evaluation found (`found 4`). Composes with [`Self::not`].
+        pub fn to_have_count_greater_than(self, min: usize) -> Result<(), CoreError> {
+            self.builder.to_have_count_greater_than(min)
+        }
+        /// `expect(locator).to_have_count_less_than(max)` (§16
+        /// assertions row, M25) — the mirror comparator: satisfied while
+        /// *fewer* than `max` nodes match, same waiter, same waitable
+        /// mismatch, same error shape. Composes with [`Self::not`].
+        pub fn to_have_count_less_than(self, max: usize) -> Result<(), CoreError> {
+            self.builder.to_have_count_less_than(max)
         }
     }
 }
