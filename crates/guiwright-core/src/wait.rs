@@ -29,9 +29,10 @@ pub enum WaiterEvent<'a> {
 pub enum WaitOutcome {
     /// Keep waiting (nothing definitively failed).
     Pending,
-    /// All checks satisfied. `None` resolution is only possible for
-    /// negated-existence assertions (`to_be_hidden` on a never-attached
-    /// node — Playwright parity).
+    /// All checks satisfied. `None` resolution covers the assertions whose
+    /// outcome is not a node: negated-existence (`to_be_hidden` on a
+    /// never-attached node — Playwright parity) and the selector-level
+    /// count waiter (M22 — the count is the answer, no node to hand back).
     Satisfied(Option<Resolved>),
     /// Definitively failed (fail fast: strict-mode violations, disabled
     /// nodes for enabled-checks, …). The session loop aborts and reports.
@@ -51,6 +52,14 @@ pub trait Waiter {
     fn on_event(&mut self, event: WaiterEvent<'_>, tree: &TreeService) -> WaitOutcome;
     /// Human description for traces and error messages.
     fn describe(&self) -> String;
+    /// The last mismatch the waiter can name, for timeout reports — the
+    /// M17 gate's `stuck on {check} ({reason})` convention generalized
+    /// (M22): a waiter that knows what it is waiting on embeds it in the
+    /// timeout error instead of leaving the operation header alone.
+    /// Default: none — the header carries the whole context.
+    fn stuck_on(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Stability tracker: bounds identical across 2 consecutive `FramePresented`
@@ -208,6 +217,71 @@ impl Waiter for ChecksWaiter {
     fn describe(&self) -> String {
         let checks: Vec<String> = self.checks.iter().map(Check::describe).collect();
         format!("{}: {}", self.selector.render(), checks.join(", "))
+    }
+}
+
+/// The selector-level waiter (§16 assertions row, M22): counts
+/// [`TreeService::resolve_all`] matches instead of strict-resolving one
+/// node — the seam that lets the assertion engine talk about the *set* of
+/// matches (`expect(locator).to_have_count(n)`, Playwright parity) without
+/// tripping strict mode. A mismatched count is waitable, never fail-fast:
+/// nodes stream in and out, exactly what the assertion is for.
+#[derive(Debug)]
+pub struct CountWaiter {
+    selector: Selector,
+    expected: usize,
+    /// The match count the last evaluation saw (timeout reports name it).
+    found: Option<usize>,
+}
+
+impl CountWaiter {
+    pub fn new(selector: Selector, expected: usize) -> Self {
+        Self {
+            selector,
+            expected,
+            found: None,
+        }
+    }
+
+    /// The count the assertion demands.
+    pub fn expected(&self) -> usize {
+        self.expected
+    }
+
+    /// The count the last evaluation found (`None` before the first one).
+    pub fn found(&self) -> Option<usize> {
+        self.found
+    }
+}
+
+impl Waiter for CountWaiter {
+    fn on_event(&mut self, _event: WaiterEvent<'_>, tree: &TreeService) -> WaitOutcome {
+        // Re-resolve on every event (Playwright re-query semantics). A
+        // resolution error keeps waiting — transient by contract, and
+        // there is no strict mode to fail fast into. The event kind itself
+        // is irrelevant: any world change re-reads the set.
+        let Ok(matches) = tree.resolve_all(&self.selector) else {
+            return WaitOutcome::Pending;
+        };
+        self.found = Some(matches.len());
+        if matches.len() == self.expected {
+            // The count is the answer; no node rides back (the same
+            // `Satisfied(None)` shape the negated-existence assertions use).
+            WaitOutcome::Satisfied(None)
+        } else {
+            WaitOutcome::Pending
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("count {} — {}", self.expected, self.selector.render())
+    }
+
+    fn stuck_on(&self) -> Option<String> {
+        match self.found {
+            Some(found) if found != self.expected => Some(format!("found {found}")),
+            _ => None,
+        }
     }
 }
 
@@ -448,5 +522,55 @@ mod tests {
         // Remove + re-add the same identity → generation bumped.
         tree.apply_update(fixture.remove_save_update());
         assert!(tree.check_generation(&resolved).is_err());
+    }
+
+    // --- The count waiter (§16 assertions row, M22) -----------------------
+
+    #[test]
+    fn count_waiter_satisfied_on_the_exact_match_count() {
+        let (tree, _) = setup();
+        let mut waiter = CountWaiter::new(Selector::role(Role::Button), 4);
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("expected satisfied on 4 buttons, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn count_waiter_pends_until_the_count_moves() {
+        let (tree, f) = setup();
+        let mut waiter = CountWaiter::new(Selector::role(Role::Button), 5);
+        // 4 buttons: not the expected 5 yet — and never fail-fast; the
+        // count is waitable (nodes stream in and out, Playwright parity).
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        let mut tree = tree;
+        tree.apply_update(f.add_button_update("Export"));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("expected satisfied once the fifth lands, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn count_waiter_satisfied_on_zero_matches() {
+        let tree = TreeService::new();
+        let mut waiter = CountWaiter::new(Selector::role_named(Role::Button, "Ghost"), 0);
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("zero matches is a satisfied count, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn count_waiter_names_the_found_count_when_stuck() {
+        let (tree, _) = setup();
+        let mut waiter = CountWaiter::new(Selector::role(Role::Button), 5);
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.found(), Some(4));
+        assert_eq!(waiter.stuck_on().as_deref(), Some("found 4"));
     }
 }
