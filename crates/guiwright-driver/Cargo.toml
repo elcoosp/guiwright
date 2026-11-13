@@ -32,3 +32,13 @@ serde_json.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "time", "test-util"] }
 tempfile.workspace = true
+
+[lints.clippy]
+# The session builder's `not()` (§16 assertions row, M24) keeps
+# Playwright's `expect(locator).not.to*` modifier as a builder method
+# on the assertion DSL: `std::ops::Not` returns `!self`, not a pending
+# builder, so the trait is not implementable here. This crate does not
+# inherit the workspace lints (the recorded manifest posture — the
+# engine predates the pedantic table), so the carve-out lives here at
+# the same policy level: table with rationale, never in-code.
+should_implement_trait = "allow"
