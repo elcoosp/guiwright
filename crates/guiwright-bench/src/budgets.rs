@@ -113,6 +113,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("viewer_live_sync", crate::samples::viewer_live_sync),
     ("checked_assert", crate::samples::checked_assert),
     ("count_assert", crate::samples::count_assert),
+    ("not_assert", crate::samples::not_assert),
+    ("count_compare", crate::samples::count_compare),
     (
         "kit_window_scoped_resolve",
         crate::samples::kit_window_scoped_resolve,
