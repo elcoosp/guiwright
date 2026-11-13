@@ -9,6 +9,7 @@
 //! timeline model; the archive reader is the shared substrate.
 
 use crate::archive::TraceArchive;
+use crate::live::LiveTimeline;
 use crate::timeline::Timeline;
 
 /// One embedded snapshot payload row.
@@ -57,7 +58,33 @@ struct SnapshotRow<'a> {
 
 /// Render the self-contained viewer HTML for an archive + timeline.
 pub fn render_html(archive: &TraceArchive, timeline: &Timeline) -> String {
-    let payload = build_payload(archive, timeline);
+    let payload = build_payload(
+        &archive.meta.test,
+        &archive.meta.adapter.name,
+        &archive.meta.schema,
+        timeline,
+        &archive.logs,
+    );
+    let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{\"ticks\":[]}".into());
+    embed_payload(&json)
+}
+
+/// Render the self-contained viewer HTML for a **live capture** (§12's
+/// follow-on, M23): the same scrubber over everything a
+/// [`LiveTimeline`](crate::live::LiveTimeline) has accumulated — one
+/// payload builder, so live and archive emit the byte-identical template.
+/// The schema stamp reads `gwtrace/v1 (live)`: an honest marker that the
+/// payload is a capture point of a running session, not a finished
+/// archive.
+pub fn render_live_html(live: &LiveTimeline) -> String {
+    let timeline = live.timeline();
+    let payload = build_payload(
+        live.test(),
+        live.adapter().unwrap_or("(unknown)"),
+        "gwtrace/v1 (live)",
+        &timeline,
+        live.logs(),
+    );
     let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{\"ticks\":[]}".into());
     embed_payload(&json)
 }
@@ -69,7 +96,16 @@ fn embed_payload(json: &str) -> String {
     html_template(&json)
 }
 
-fn build_payload<'a>(archive: &'a TraceArchive, timeline: &'a Timeline) -> Payload<'a> {
+/// The emitter's single payload builder (§12): archive and live captures
+/// differ only in where the header strings and logs come from — the
+/// scrubber payload itself is the timeline's, verbatim.
+fn build_payload<'a>(
+    test: &'a str,
+    adapter: &'a str,
+    schema: &'a str,
+    timeline: &'a Timeline,
+    logs: &'a [String],
+) -> Payload<'a> {
     let ticks = timeline
         .ticks
         .iter()
@@ -109,12 +145,12 @@ fn build_payload<'a>(archive: &'a TraceArchive, timeline: &'a Timeline) -> Paylo
         })
         .collect();
 
-    let logs = archive.logs.iter().map(String::as_str).collect();
+    let logs = logs.iter().map(String::as_str).collect();
 
     Payload {
-        test: &archive.meta.test,
-        adapter: &archive.meta.adapter.name,
-        schema: &archive.meta.schema,
+        test,
+        adapter,
+        schema,
         ticks,
         snapshots,
         logs,
@@ -311,5 +347,62 @@ mod tests {
             "no raw < inside script data"
         );
         assert!(!html.contains("<b>"), "{html}");
+    }
+
+    // --- The live-capture emitter (§12 follow-on, M23) --------------------
+
+    #[test]
+    fn a_live_capture_renders_the_same_scrubber() {
+        use guiwright_proto::schema::NodeKeyV1;
+        use guiwright_proto::schema::SnapshotNodeV1;
+
+        let row = |id: u64, role: &str, name: &str, children: u32| SnapshotNodeV1 {
+            key: NodeKeyV1::AccessKit {
+                tree: [0u8; 16],
+                node: id,
+            },
+            role: role.into(),
+            name: Some(name.into()),
+            value: None,
+            bounds: Some([0.0, 0.0, 10.0, 10.0]),
+            children,
+        };
+
+        let mut live = crate::live::LiveTimeline::new("gwviewer-live/0.1");
+        live.set_adapter("mock");
+        live.record_frame(2, 0x2);
+        live.record_event("click", "at (1,1)");
+        live.record_log("{\"message\":\"a<b>\"}");
+        live.record_snapshot(
+            &[row(1, "Window", "W", 1), row(2, "Button", "Save", 0)],
+            None,
+        );
+
+        let html = render_live_html(&live);
+        assert!(html.starts_with("<!doctype html>"), "the same template");
+        // The header strings ride the payload JSON; the browser composes
+        // the header line (`${PAYLOAD.test} — adapter ${PAYLOAD.adapter}`).
+        assert!(
+            html.contains(r#""test":"gwviewer-live/0.1""#),
+            "the test label"
+        );
+        assert!(html.contains(r#""adapter":"mock""#), "the adapter name");
+        assert!(html.contains("(live)"), "the live schema stamp");
+        assert!(html.contains("Save"), "the dump rides the payload");
+        assert!(
+            html.contains("a\\u003cb\\u003e"),
+            "log lines are angle-escaped like the archive path"
+        );
+        assert!(!html.contains("src=\"http"), "still self-contained");
+    }
+
+    #[test]
+    fn a_capture_without_an_adapter_names_it_honestly() {
+        let live = crate::live::LiveTimeline::new("bare/0.1");
+        let html = render_live_html(&live);
+        assert!(
+            html.contains(r#""adapter":"(unknown)""#),
+            "the honest unknown: {html:.200}"
+        );
     }
 }
