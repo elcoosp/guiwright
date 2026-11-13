@@ -284,6 +284,68 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         })?)
     }
 
+    /// `locator.all(visit)` (§16 assertions row — the m22/m25 records'
+    /// open kit gap, closed here): enumerate the locator's current match
+    /// set in document order, handing each match to `visit` as an
+    /// nth-pinned [`Locator`] — Playwright's `Locator.all()`, adapted to
+    /// the kit's borrow-and-act shape.
+    ///
+    /// The borrow shape is the design decision: a Playwright-style
+    /// `Vec<Locator>` cannot exist here because every locator holds the
+    /// `&mut App` it acts through — two locators would be two mutable
+    /// borrows of one app. So the matches arrive **one at a time**: the
+    /// visitor receives each item, acts on it (or maps it to data), and
+    /// only then sees the next. The generic return collects per-item
+    /// data instead (`all(|item| Ok(item.resolve()?.key))` is the
+    /// whole-set read).
+    ///
+    /// Semantics (Playwright parity):
+    ///
+    /// * the set is a **snapshot read** like [`Self::count`] — the same
+    ///   `resolve_all` walk, no waiting: an empty set enumerates to zero
+    ///   visits, and a node that arrives later shows up on the next
+    ///   enumeration;
+    /// * each item is `locator.nth(i)` — the visited locator re-resolves
+    ///   at act time (auto-waits like any locator), so a match removed
+    ///   mid-iteration fails that item's action instead of visiting a
+    ///   stale node;
+    /// * a locator that already carries narrowing (`.first()`,
+    ///   `.nth(2)`, `.has_text(...)`) enumerates its own narrowed set —
+    ///   the same set [`Self::count`] reads;
+    /// * a window-pinned locator enumerates only inside its subtree (the
+    ///   pin rides every item).
+    ///
+    /// Enumeration itself is a read: nothing is recorded (the `count()`
+    /// rule — resolution without an action is not a replayable step).
+    /// Actions on the visited items record exactly like the equivalent
+    /// hand-written `.nth(i)` locator actions.
+    pub fn all<T>(
+        self,
+        mut visit: impl FnMut(Locator<'_, A>) -> Result<T, KitError>,
+    ) -> Result<Vec<T>, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        // The snapshot: one scoped resolve_all walk — the `count()` read
+        // generalized to identities.
+        let matches =
+            app.run_scoped(window.as_deref(), |session| session.resolve_all(&selector))?;
+        let mut collected = Vec::with_capacity(matches.len());
+        for index in 0..matches.len() {
+            // Each visit reborrows the app: the previous item's borrow
+            // ended with its call, so the next one re-aims cleanly.
+            let item = Locator {
+                app: &mut *app,
+                selector: selector.clone().nth(index),
+                window: window.clone(),
+            };
+            collected.push(visit(item)?);
+        }
+        Ok(collected)
+    }
+
     /// `locator.screenshot(name, bless)` — the §10 element screenshot
     /// (M9): resolve (auto-wait), render the window frame once, **crop it
     /// by the resolved node's physical bounds** (§10 "crop from the window
