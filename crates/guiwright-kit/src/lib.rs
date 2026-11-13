@@ -2,6 +2,8 @@
 //!
 //! * [`App`] — the embedded app: launch, locators, clock, mock seams,
 //!   screenshots, codegen.
+//! * [`WindowHandle`] — the multi-window surface (§16 v0.4): aim one
+//!   window target, resolve inside its subtree.
 //! * [`expect`] — retry-until-timeout assertions (§16).
 //! * [`test`] — the `#[guiwright_kit::test]` attribute: launches the
 //!   fixture app, wires per-test artifacts (§11 nextest naming), reports
@@ -22,6 +24,7 @@ pub mod context;
 pub mod input;
 pub mod run;
 pub mod wait_for;
+pub mod window;
 
 pub use app::{App, ClockHandle, InspectHandle, KitError, Locator, MockHandle, expect};
 pub use context::TestContext;
@@ -31,3 +34,4 @@ pub use guiwright_shot::baseline::{BlessMode, SnapshotOutcome};
 pub use input::{KeyboardHandle, MouseHandle};
 pub use run::TestOutcome;
 pub use wait_for::WaitState;
+pub use window::WindowHandle;
