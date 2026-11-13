@@ -54,6 +54,17 @@ await client.close();
 | Video | `videoStart(opts)`, `videoStop()` | §10 |
 | Inspector | `inspect` codec support | §13 |
 
+The full domain vocabulary on `GwpClient` (each maps 1:1 onto a GWP request):
+
+| Domain | Methods |
+|---|---|
+| Windows (M6) | `windowList()`, `windowUse(handle)` |
+| Gestures / raw input (M7) | `mouse`, `keyboard`, `input` |
+| Inspector overlay (M8) | `inspectOverlay`, `inspectHighlight` |
+| Screenshots (M10) | `screenshotWindow()`, `screenshotElement(...)` |
+| Tree dumps (M11/M13) | `treeDump()`, `treeDumpUnder(selector, timeoutMs?)` |
+| Event channel (M12/M14) | `subscribe(kinds)`, `nextEvent()`, `unsubscribe()` |
+
 ## Tests
 
 ```sh
