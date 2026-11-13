@@ -1,6 +1,6 @@
 # Guiwright — Technical Architecture
 
-**Status:** living design doc — the original v0.1 draft, amended through milestone 23 (records: `docs/m2-*.md` … `docs/m23-*.md`); the §16 parity map and §7 transport list track what shipped
+**Status:** living design doc — the original v0.1 draft, amended through milestone 25 (records: `docs/m2-*.md` … `docs/m25-*.md`); the §16 parity map and §7 transport list track what shipped
 **Date:** 2026-11-06 (drafted), 2026-11-13 (last amended)
 **Scope:** a Playwright-grade test & automation driver for Rust GUI frameworks — GPUI, Xilem/Masonry, Floem, Iced, egui, Slint, Freya
 **Evidence base:** shallow clones of `zed`, `linebender/xilem`, `lapce/floem`, `iced-rs/iced`, `emilk/egui`, `slint-ui/slint`, `marc2332/freya`, `AccessKit/accesskit`, `rerun-io/kittest` (HEADs of 2026-11-03..06; versions and file paths cited inline). Paths are relative to each repo root.
@@ -207,7 +207,7 @@ guiwright/
 │                         #   iced, freya, slint, floem, gpui) — not driver features;
 │                         #   iced/freya carry feature-gated harness glue, the rest ship
 │                         #   framework-free engines + recorded downstream contracts
-├── guiwright-kit         # user-facing: App, Locators, #[guiwright::test], fixtures,
+├── guiwright-kit         # user-facing: App, Locators, #[guiwright_kit::test], fixtures,
 │                         #   expect!, embedded Harness (mirrors Playwright's fixture system)
 ├── guiwright-shot        # framework-free screenshot stack: PNG codec, YIQ diff,
 │                         #   per-OS baselines + the GUIWRIGHT_BLESS flow
@@ -227,7 +227,7 @@ Dependency rule: `core` depends only on `accesskit` + `accesskit_consumer` (the 
 ```toml
 # app Cargo.toml
 [dependencies]
-guiwright-driver = { version = "0.1", optional = true }
+guiwright-driver = { version = "0.4", optional = true }
 
 [features]
 gw-egui   = ["dep:guiwright-driver", "dep:guiwright-adapter-egui"]
@@ -561,7 +561,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 
 - Micro (criterion): codec round-trips, diff apply, index build on synthetic 10 k-node trees, LZ4 blobs, hash throughput.
 - Macro: scripted 200-action session on the egui demo app and a synthetic masonry app (1 k nodes): end-to-end action latency histogram, suite wall-clock for 1 000 asserts, memory profile.
-- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor, the count-assert floor — 31 rows today), each bound to a sample in `check_budgets`.
+- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor, the count-assert floor, the kit and wire window rows, the negated-assertion floor, the count-comparator floor — 35 rows today), each bound to a sample in `check_budgets`.
 
 ---
 
@@ -572,7 +572,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Locators (`getByRole/Label/Text/TestId/Value`, filters, strict mode) | §8 selector model over accesskit consumer + L2 logical trees | MVP |
 | Auto-waiting / actionability | §8.3 event-driven checks; explicit `locator.wait_for(state)` on the kit surface (`attached`/`visible`/`hidden`/`stable`, M21) | MVP |
 | Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths); the wire `Action` honors `force`/`timeout_ms` (M17's pre-resolved gate); the kit locator surface carries `press`/`check`/`uncheck`/`set_checked`/`focus`/`blur` too (M19) | MVP |
-| Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines; the checked tri-state rides the §8 check row (`to_be_checked` / `to_be_unchecked` / `to_be_checked_mixed`, M20); the count surface (`to_have_count` + `locator.count()`) is the set-size escape hatch from strict mode over the first selector-level waiter (M22) | MVP |
+| Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines; the checked tri-state rides the §8 check row (`to_be_checked` / `to_be_unchecked` / `to_be_checked_mixed`, M20); the count surface (`to_have_count` + `locator.count()`) is the set-size escape hatch from strict mode over the first selector-level waiter (M22); the `not()` modifier is the first waiter *decorator* — every `to_*` inverts through `NotWaiter`, fail-fast and strict mode intact (M24); the count comparators (`to_have_count_greater_than` / `to_have_count_less_than`, M25) widen the count waiter's `CountMatch` | MVP |
 | Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); locator-level element shots (M9), the §7 render domain over GWP (M10) | MVP (embedded), M9 (locator), M10 (wire) |
 | Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML; the §16 v0.5 own runner is `guiwright test` over `gwtest/v1` specs (M5) | MVP (nextest-native), M5 (own runner) |
 | Trace viewer (time travel, live) | §12 | v0.3 (archive), M18 (live feed over the `ClientConn` seam), M23 (the live-capture HTML emitter) |
@@ -605,7 +605,7 @@ Ranked by (a) harness completeness today, (b) a11y substrate, (c) integration ri
 > Note: the original plan proposed GPUI + Floem + egui as the prototype trio. Recon supports **egui + Masonry + Iced** as the fastest MVP that still exercises all three levels (L1 native, L1 custom-harness, L2 logical-tree), with Freya/Slint in the first expansion wave and Floem/GPUI following their upstream contributions.
 
 - **M0 (weeks 0–6):** `guiwright-core` (tree service, selectors, actionability, expect), egui adapter (embedded + GWP over UDS), masonry adapter (embedded), CI matrix, budgets bench.
-- **M1 (weeks 6–12):** iced + freya adapters; trace recorder + zip; screenshot baselines + bless flow; `#[guiwright::test]` kit; nextest integration.
+- **M1 (weeks 6–12):** iced + freya adapters; trace recorder + zip; screenshot baselines + bless flow; `#[guiwright_kit::test]` kit; nextest integration.
 - **M2 (weeks 12–20):** trace viewer; codegen + overlay (egui, masonry); slint adapter (testing backend + build helper); clock service; remote-mode GPUI spike.
 - **M3:** floem contributions (test-id, tiny-skia headless) + adapter; GPUI adapter (test-support + a11y hybrid); video; other-language client.
 
