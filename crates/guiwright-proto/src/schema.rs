@@ -734,7 +734,6 @@ fn leak_adapter_name(name: String) -> &'static str {
 mod tests {
     use super::*;
     use guiwright_core::{NodeKey, Selector, TextMatch};
-    use std::collections::HashSet;
 
     #[test]
     fn node_key_roundtrip_accesskit() {
@@ -828,8 +827,6 @@ mod tests {
             GwpRequest::V1(RequestV1::Inspect(InspectV1::StartRecording)),
             GwpRequest::V1(RequestV1::Bye),
         ];
-        let seen: HashSet<String> = HashSet::new();
-        let _ = seen;
         for req in requests {
             let bytes = postcard::to_allocvec(&req).expect("encode");
             let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
