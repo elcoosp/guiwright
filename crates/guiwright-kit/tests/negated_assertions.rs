@@ -139,6 +139,42 @@ fn a_negated_timeout_names_the_inverted_assertion() {
 }
 
 #[test]
+fn a_negated_timeout_names_what_still_holds() {
+    // The m24 record's satisfied-state accessor, end-to-end: the session
+    // loop's timeout embeds the still-holding condition after the
+    // inversion (`not (visible — …) (still visible)`) — the decorator
+    // pends exactly while the positive form holds, and `held_on` names
+    // it through the whole driver path.
+    let mut app = App::launch_fixture("not_still_holds");
+    app.wait_for_settle();
+    let err = expect(app.get_by_role(Role::Button, "Save"))
+        .with_timeout(Duration::from_millis(250))
+        .not()
+        .to_be_visible()
+        .expect_err("save stays visible");
+    let msg = err.to_string();
+    assert!(msg.contains("(still visible)"), "{msg}");
+}
+
+#[test]
+fn a_negated_count_timeout_names_the_still_holding_count() {
+    let mut app = App::launch_fixture("not_still_count");
+    app.wait_for_settle();
+    // Four buttons and the assertion demands not(count 4): the positive
+    // form holds (4 == 4), so the negation pends until timeout and the
+    // header names the inversion plus the still-holding count (the m24
+    // record's "count still 4" shape, through the driver loop).
+    let err = expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_millis(250))
+        .not()
+        .to_have_count(4)
+        .expect_err("the count stays 4");
+    let msg = err.to_string();
+    assert!(msg.contains("not (count 4"), "{msg}");
+    assert!(msg.contains("(still count 4)"), "{msg}");
+}
+
+#[test]
 fn negated_count_scopes_through_the_window_handle() {
     // The two-window fixture carries a "Save" per window: scoped to one
     // window's subtree the set is 1, so not(count 2) holds inside the pin
