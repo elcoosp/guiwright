@@ -45,15 +45,6 @@ impl TextMatch {
         }
     }
 
-    /// Case-sensitive substring match.
-    pub fn contains_sensitive(pattern: impl Into<TextPattern>) -> Self {
-        Self {
-            pattern: pattern.into(),
-            exact: false,
-            ignore_case: false,
-        }
-    }
-
     /// Test a candidate string against this rule. Both sides are
     /// whitespace-normalized (Playwright normalizes both).
     pub fn matches(&self, candidate: &str) -> bool {
