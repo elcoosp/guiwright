@@ -92,15 +92,19 @@ impl CodegenRecorder {
     /// Record one interaction. `action` is the kit vocabulary
     /// (`click`/`fill`/`hover`/…); `argument` carries `fill` payloads.
     /// The candidate selector is validated against `tree` (uniqueness +
-    /// strict-mode warning, §13).
+    /// strict-mode warning, §13) — scoped to `pinned`'s subtree when the
+    /// action rode a window handle, so uniqueness is judged where the
+    /// action actually resolved (§16 v0.4). The handle also shapes the
+    /// emitted line: `app.window("…").get_by_…`.
     pub fn record(
         &mut self,
         action: &str,
         argument: Option<&str>,
         facts: &NodeFacts,
         tree: &TreeService,
+        pinned: Option<(&str, &NodeKey)>,
     ) -> Result<RecordedLine, CodegenError> {
-        let choice = choose_selector(tree, facts)?;
+        let choice = choose_selector(tree, facts, pinned.map(|(_, root)| root))?;
         let narrowed = choice.narrowed;
         let kind = choice.tier.kind();
         if narrowed {
@@ -109,7 +113,20 @@ impl CodegenRecorder {
                 choice.selector.render()
             ));
         }
-        let locator = locator_code(&choice, facts);
+        let locator = match pinned {
+            // The window-handle surface (§16 v0.4): aim through
+            // `app.window(handle)` — the DSL shape the recorded code
+            // replays. `locator_code` always emits an `app.`-rooted
+            // expression; the prefix swaps the root for the handle chain.
+            Some((handle, _)) => {
+                let body = locator_code(&choice, facts);
+                match body.strip_prefix("app.") {
+                    Some(rest) => format!("app.window({handle:?}).{rest}"),
+                    None => body,
+                }
+            }
+            None => locator_code(&choice, facts),
+        };
         // M4 (§13 remote codegen): `fill` and `press` carry their payload
         // as the recorder argument — the emitted call reads like the kit
         // API (`locator.fill("…")`, `locator.press("Enter")`).
@@ -200,7 +217,11 @@ impl CostTier {
 /// `.first()` narrowing on ambiguity. Every candidate is verified against
 /// the live tree — a candidate that does not resolve is skipped (the
 /// stable selector must survive re-runs, not just look good once).
-fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, CodegenError> {
+fn choose_selector(
+    tree: &TreeService,
+    facts: &NodeFacts,
+    scope: Option<&NodeKey>,
+) -> Result<Choice, CodegenError> {
     // Tier 0 — TestId (O(1) hash, survives UI copy changes, §13).
     if let Some(id) = &facts.test_id {
         let selector = Selector::test_id(id.clone());
@@ -214,7 +235,7 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
     if let (Some(role), Some(name)) = (facts.role.as_deref(), facts.name.as_deref()) {
         if let Some(role) = parse_role(role) {
             let selector = Selector::role_named(role, TextMatch::exact(name));
-            if let Some(choice) = checked(tree, selector, CostTier::RoleName) {
+            if let Some(choice) = checked(tree, selector, CostTier::RoleName, scope) {
                 return Ok(choice);
             }
         }
@@ -222,21 +243,21 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
     // Tier 2 — label.
     if let Some(label) = facts.label.as_deref() {
         let selector = Selector::label(TextMatch::exact(label));
-        if let Some(choice) = checked(tree, selector, CostTier::Label) {
+        if let Some(choice) = checked(tree, selector, CostTier::Label, scope) {
             return Ok(choice);
         }
     }
     // Tier 2.5 — value (inputs: the value often outlives labels).
     if let Some(value) = facts.value.as_deref() {
         let selector = Selector::value(TextMatch::exact(value));
-        if let Some(choice) = checked(tree, selector, CostTier::Value) {
+        if let Some(choice) = checked(tree, selector, CostTier::Value, scope) {
             return Ok(choice);
         }
     }
     // Tier 3 — text content.
     if let Some(name) = facts.name.as_deref() {
         let selector = Selector::text(TextMatch::exact(name));
-        if let Some(choice) = checked(tree, selector, CostTier::Text) {
+        if let Some(choice) = checked(tree, selector, CostTier::Text, scope) {
             return Ok(choice);
         }
     }
@@ -254,10 +275,17 @@ fn choose_selector(tree: &TreeService, facts: &NodeFacts) -> Result<Choice, Code
     ))
 }
 
-/// Validate a candidate: resolvable against the live tree, unique or
-/// narrowed explicitly (§13 strict-mode warnings while recording).
-fn checked(tree: &TreeService, selector: Selector, tier: CostTier) -> Option<Choice> {
-    match tree.resolve_all(&selector) {
+/// Validate a candidate: resolvable against the live tree — within the
+/// window scope when one is pinned (§16 v0.4, the same subtree the action
+/// resolved in) — unique or narrowed explicitly (§13 strict-mode warnings
+/// while recording).
+fn checked(
+    tree: &TreeService,
+    selector: Selector,
+    tier: CostTier,
+    scope: Option<&NodeKey>,
+) -> Option<Choice> {
+    match tree.resolve_all_scoped(&selector, scope) {
         Ok(matches) if !matches.is_empty() => {
             let narrowed = matches.len() > 1;
             let selector = if narrowed { selector.first() } else { selector };
@@ -419,7 +447,7 @@ mod tests {
         let tree = fixture_tree();
         let mut rec = CodegenRecorder::new();
         let line = rec
-            .record("click", None, &facts(2, Role::Button, "Save"), &tree)
+            .record("click", None, &facts(2, Role::Button, "Save"), &tree, None)
             .expect("recorded");
         assert_eq!(
             line.code,
@@ -436,7 +464,9 @@ mod tests {
         let mut fact = facts(2, Role::Button, "Save");
         fact.test_id = Some("save-btn".into());
         let mut rec = CodegenRecorder::new();
-        let line = rec.record("click", None, &fact, &tree).expect("recorded");
+        let line = rec
+            .record("click", None, &fact, &tree, None)
+            .expect("recorded");
         assert_eq!(line.code, "app.get_by_test_id(\"save-btn\").click();");
         assert_eq!(line.selector_kind, "testid");
     }
@@ -451,6 +481,7 @@ mod tests {
                 Some("ada@lovelace.dev"),
                 &facts(5, Role::TextInput, "Email"),
                 &tree,
+                None,
             )
             .expect("recorded");
         assert_eq!(
@@ -471,6 +502,7 @@ mod tests {
                 Some("Enter"),
                 &facts(5, Role::TextInput, "Email"),
                 &tree,
+                None,
             )
             .expect("recorded");
         assert_eq!(
@@ -488,7 +520,7 @@ mod tests {
         ]);
         let mut rec = CodegenRecorder::new();
         let line = rec
-            .record("click", None, &facts(2, Role::Button, "Save"), &tree)
+            .record("click", None, &facts(2, Role::Button, "Save"), &tree, None)
             .expect("recorded");
         assert!(line.narrowed, "ambiguous → narrowed");
         assert!(line.code.contains(".first()"), "{}", line.code);
@@ -513,6 +545,7 @@ mod tests {
                 None,
                 &facts(2, Role::TextRun, "Welcome, Ada"),
                 &tree,
+                None,
             )
             .expect("recorded");
         assert_eq!(line.selector_kind, "text");
@@ -527,7 +560,13 @@ mod tests {
         let tree = simple_tree(&[(2, named_node(Role::Label, "Welcome, Ada"))]);
         let mut rec = CodegenRecorder::new();
         let line = rec
-            .record("click", None, &facts(2, Role::Label, "Welcome, Ada"), &tree)
+            .record(
+                "click",
+                None,
+                &facts(2, Role::Label, "Welcome, Ada"),
+                &tree,
+                None,
+            )
             .expect("recorded");
         assert_eq!(line.selector_kind, "role_name", "{}", line.code);
     }
@@ -539,7 +578,7 @@ mod tests {
     fn record_raw_lands_the_line_verbatim() {
         let tree = fixture_tree();
         let mut rec = CodegenRecorder::new();
-        rec.record("click", None, &facts(2, Role::Button, "Save"), &tree)
+        rec.record("click", None, &facts(2, Role::Button, "Save"), &tree, None)
             .expect("locator line");
         let line = rec.record_raw("app.mouse().click(10, 20);");
         assert_eq!(line.code, "app.mouse().click(10, 20);");
@@ -557,10 +596,16 @@ mod tests {
     fn finish_returns_code_and_warnings() {
         let tree = fixture_tree();
         let mut rec = CodegenRecorder::new();
-        rec.record("click", None, &facts(2, Role::Button, "Save"), &tree)
+        rec.record("click", None, &facts(2, Role::Button, "Save"), &tree, None)
             .expect("1");
-        rec.record("hover", None, &facts(7, Role::Button, "Confirm"), &tree)
-            .expect("2");
+        rec.record(
+            "hover",
+            None,
+            &facts(7, Role::Button, "Confirm"),
+            &tree,
+            None,
+        )
+        .expect("2");
         assert!(!rec.is_empty());
         let (code, warnings) = rec.finish();
         assert_eq!(warnings.len(), 0);
@@ -576,7 +621,13 @@ mod tests {
         let tree = simple_tree(&[(2, named_node(Role::Button, "Renamed"))]);
         let mut rec = CodegenRecorder::new();
         let line = rec
-            .record("click", None, &facts(2, Role::Button, "Stale Name"), &tree)
+            .record(
+                "click",
+                None,
+                &facts(2, Role::Button, "Stale Name"),
+                &tree,
+                None,
+            )
             .expect("recorded");
         assert_eq!(line.selector_kind, "role_first");
         assert!(line.narrowed);
@@ -590,7 +641,7 @@ mod tests {
         let tree = simple_tree(&[(2, Node::new(Role::Document))]);
         let mut rec = CodegenRecorder::new();
         let err = rec
-            .record("click", None, &facts(2, Role::Document, ""), &tree)
+            .record("click", None, &facts(2, Role::Document, ""), &tree, None)
             .expect_err("nothing to select with");
         assert!(err.to_string().contains("Document"), "{err}");
     }
