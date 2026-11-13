@@ -8,7 +8,8 @@
 //!
 //! ```text
 //! cargo run -p guiwright-viewer --example live_tree
-//! # prints the attach report, the live ticks, and the renamed-node view
+//! # prints the attach report, the live ticks, the renamed-node view and
+//! # the path of the emitted live-capture trace.html
 //! ```
 //!
 //! The feed is transport-blind ([`guiwright_proto::ClientConn`], M18):
@@ -121,6 +122,16 @@ fn main() {
             scrubber.len(),
             feed.snapshot_count(),
             scrubber.meta_test,
+        );
+
+        // The §12 follow-on (M23): the emitter is on the live surface —
+        // the same self-contained scrubber the archive path emits,
+        // stamped `(live)`, written mid-session from the model so far.
+        let out = std::env::temp_dir().join("live_tree_demo.html");
+        std::fs::write(&out, feed.render_html()).expect("write the live capture");
+        println!(
+            "live capture: {} — open it in a browser; no server, no assets",
+            out.display()
         );
 
         feed.bye().await.expect("bye");
