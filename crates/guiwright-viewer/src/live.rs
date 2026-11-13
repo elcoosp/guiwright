@@ -80,6 +80,10 @@ pub struct LiveInfo {
 #[derive(Debug)]
 pub struct LiveTimeline {
     test: String,
+    /// The session's adapter name (the `Welcome`'s [`AdapterInfoV1::name`],
+    /// recorded by [`LiveFeed::attach`]) — the live emitter's header names
+    /// it the way the archive header names `meta.adapter`.
+    adapter: Option<String>,
     events: Vec<ArchiveEvent>,
     logs: Vec<String>,
     snapshots: BTreeMap<u64, TreeSnapshot>,
@@ -94,6 +98,7 @@ impl LiveTimeline {
     pub fn new(test: impl Into<String>) -> Self {
         Self {
             test: test.into(),
+            adapter: None,
             events: Vec::new(),
             logs: Vec::new(),
             snapshots: BTreeMap::new(),
@@ -106,6 +111,28 @@ impl LiveTimeline {
     /// The label [`LiveTimeline::timeline`] bakes into the scrubber model.
     pub fn set_test(&mut self, test: impl Into<String>) {
         self.test = test.into();
+    }
+
+    /// The label the emitter's header carries.
+    pub fn test(&self) -> &str {
+        &self.test
+    }
+
+    /// Record the session's adapter name (the attach report's
+    /// [`AdapterInfoV1::name`]) — the header the live emitter renders.
+    pub fn set_adapter(&mut self, adapter: impl Into<String>) {
+        self.adapter = Some(adapter.into());
+    }
+
+    /// The attach-recorded adapter name (`None` before one lands — the
+    /// emitter prints `(unknown)` then, honestly).
+    pub fn adapter(&self) -> Option<&str> {
+        self.adapter.as_deref()
+    }
+
+    /// The log lines recorded so far (the emitter's log view).
+    pub fn logs(&self) -> &[String] {
+        &self.logs
     }
 
     /// The frame the next record will stamp against (the last recorded
@@ -227,6 +254,9 @@ impl<C: ClientConn> LiveFeed<C> {
             .subscribe(&[EventKindV1::TreeChanged, EventKindV1::FramePresented])
             .await?;
         self.timeline.set_test(agent);
+        // The adapter facts feed the emitter's header (M23): the live HTML
+        // names the adapter the way the archive header names `meta.adapter`.
+        self.timeline.set_adapter(adapter.name.clone());
         self.sync_tree().await?;
         Ok(LiveInfo { adapter })
     }
@@ -285,6 +315,14 @@ impl<C: ClientConn> LiveFeed<C> {
     /// builds for a finished session's archive).
     pub fn timeline(&self) -> Timeline {
         self.timeline.timeline()
+    }
+
+    /// The self-contained scrubber HTML over everything recorded so far
+    /// (§12's follow-on, M23): the same emitter the archive path uses,
+    /// stamped `(live)` — write it to a file mid-session and the capture
+    /// up to that moment replays offline, no server, no assets.
+    pub fn render_html(&self) -> String {
+        crate::html::render_live_html(&self.timeline)
     }
 
     /// The resolved tree view at `frame` (archive semantics).
