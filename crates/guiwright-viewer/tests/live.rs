@@ -355,3 +355,35 @@ async fn pump_fails_honestly_when_the_door_closes() {
         "the wire error rides the viewer's Wire family, got {err:?}"
     );
 }
+
+/// The §12 follow-on (M23): the emitter is on the live surface — attach
+/// records the adapter facts the header names, and the accumulated model
+/// renders the same self-contained scrubber the archive path emits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attach_records_the_adapter_and_the_model_renders_html() {
+    let (handle, connect) = GwpServerHandle::spawn_inprocess(
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("in-process server starts");
+
+    let client = DuplexClient::connect(&connect)
+        .await
+        .expect("client connects");
+    let mut feed = LiveFeed::new(client);
+    feed.attach("viewer-live-html/0.1").await.expect("attach");
+    assert_eq!(
+        feed.live_timeline().adapter(),
+        Some("mock"),
+        "the attach report feeds the emitter's header"
+    );
+
+    let html = feed.render_html();
+    assert!(html.starts_with("<!doctype html>"), "the scrubber shape");
+    assert!(html.contains("viewer-live-html/0.1"), "the test label");
+    assert!(html.contains(r#""adapter":"mock""#), "the adapter name");
+    assert!(html.contains("(live)"), "the live schema stamp");
+
+    feed.bye().await.expect("bye");
+    handle.shutdown();
+}
