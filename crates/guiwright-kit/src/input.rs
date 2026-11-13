@@ -30,8 +30,8 @@ use crate::app::{App, KitError};
 /// window; [`MouseHandle::in_window`] pins the target for multi-window
 /// apps (the M6 vocabulary), the session default applies otherwise.
 pub struct MouseHandle<'a, A: guiwright_driver::FrameworkAdapter> {
-    app: &'a mut App<A>,
-    window: Option<String>,
+    pub(crate) app: &'a mut App<A>,
+    pub(crate) window: Option<String>,
 }
 
 impl<A: guiwright_driver::FrameworkAdapter> std::fmt::Debug for MouseHandle<'_, A> {
@@ -213,8 +213,8 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
 /// ride `TextInput`, the per-framework IME-vs-keys translation stays the
 /// adapter's §4.2 job).
 pub struct KeyboardHandle<'a, A: guiwright_driver::FrameworkAdapter> {
-    app: &'a mut App<A>,
-    window: Option<String>,
+    pub(crate) app: &'a mut App<A>,
+    pub(crate) window: Option<String>,
 }
 
 impl<A: guiwright_driver::FrameworkAdapter> std::fmt::Debug for KeyboardHandle<'_, A> {
