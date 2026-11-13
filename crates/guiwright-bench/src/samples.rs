@@ -1108,3 +1108,90 @@ pub fn checked_assert() -> Duration {
     }
     start.elapsed() / ITERATIONS
 }
+
+// --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
+
+/// §16 v0.4 multi-window, kit side: one `app.window(handle).get_by_role(…)
+/// .resolve()` through the window-handle surface — aim (validated against
+/// the tree), subtree-scoped strict resolution, metadata read. The launch
+/// and settle stay outside the measured span; the measured operation is
+/// one scoped resolve, the hot path every window-pinned locator action
+/// rides (the discriminator fixture: two "Save" buttons, one per window).
+pub fn kit_window_scoped_resolve() -> Duration {
+    use guiwright_core::test_util::MultiWindowFixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+    use std::time::Instant;
+
+    use accesskit::Role;
+
+    const ITERATIONS: u32 = 64;
+
+    let fx = MultiWindowFixture::default();
+    let mut app = App::launch(
+        "kit_window_scoped_resolve",
+        MockAdapter::with_multi_window(&fx),
+    );
+    app.wait_for_settle();
+    let w2 = fx.w2.0.to_string();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let resolved = app
+            .window(&w2)
+            .expect("Preview is a live target")
+            .get_by_role(Role::Button, "Save")
+            .resolve()
+            .expect("Save resolves inside Preview");
+        assert_eq!(resolved.key, fx.w2_save_key(), "the scope discriminates");
+    }
+    start.elapsed() / ITERATIONS
+}
+
+// --- M2-of-the-delivery sample: wire window targets (§16 v0.4 client) -------
+
+/// §15.1 `wire_window_targets`: one `window_list` + `window_use` pair over
+/// the in-process door through the `ClientConn` typed methods (§16 v0.4,
+/// the Rust-client window parity) — the aim-and-scope round-trip every
+/// window-aware Rust consumer rides. The handshake and warmup stay
+/// outside the measured span; the measured operation is the pair.
+pub fn wire_window_targets() -> Duration {
+    const ITERATIONS: u32 = 32;
+    use guiwright_core::test_util::MultiWindowFixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::{ClientConn, DuplexClient};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let fx = MultiWindowFixture::default();
+    let w2 = fx.w2.0.to_string();
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_multi_window(&fx),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        for _ in 0..4 {
+            client.window_list().await.expect("warm list");
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let windows = client.window_list().await.expect("bench list");
+            assert_eq!(windows.len(), 2, "the fixture's two targets");
+            let aimed = client.window_use(&w2).await.expect("bench aim");
+            assert_eq!(aimed, w2, "the ack echoes the aimed handle");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
