@@ -1,7 +1,7 @@
 # Guiwright — Technical Architecture
 
-**Status:** living design doc — the original v0.1 draft, amended through milestone 19 (records: `docs/m2-*.md` … `docs/m19-*.md`); the §16 parity map and §7 transport list track what shipped
-**Date:** 2026-11-06 (drafted), 2026-11-12 (last amended)
+**Status:** living design doc — the original v0.1 draft, amended through milestone 23 (records: `docs/m2-*.md` … `docs/m23-*.md`); the §16 parity map and §7 transport list track what shipped
+**Date:** 2026-11-06 (drafted), 2026-11-13 (last amended)
 **Scope:** a Playwright-grade test & automation driver for Rust GUI frameworks — GPUI, Xilem/Masonry, Floem, Iced, egui, Slint, Freya
 **Evidence base:** shallow clones of `zed`, `linebender/xilem`, `lapce/floem`, `iced-rs/iced`, `emilk/egui`, `slint-ui/slint`, `marc2332/freya`, `AccessKit/accesskit`, `rerun-io/kittest` (HEADs of 2026-11-03..06; versions and file paths cited inline). Paths are relative to each repo root.
 
@@ -471,7 +471,7 @@ index.bin          frame_seq → offsets (O(1) random access)
 ```
 
 - **Recorder:** lock-free SPSC ring on the UI thread → writer thread (LZ4, ring buffer with sliding-window eviction; cap default 256 MB, oldest-first eviction). Frames captured at a configurable rate (default: every frame up to 60 fps, hash-deduped).
-- **Viewer:** self-contained `trace.html` (plain HTML + vanilla JS; the WASM viewer is §12's full vision): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16) shipped with M18: the transport-side client seam (`ClientConn`, the client half of `Handler`) plus the viewer's `LiveFeed`/`LiveTimeline` — a running session over any door (UDS/TCP/WS/embedded) feeds the same scrubber model the archive path builds, dump-per-change, event-fed frame axis. The `trace.html` emitter for live captures stays a follow-on (the §12 archive is still the file format); the kit's trace flow still archives first.
+- **Viewer:** self-contained `trace.html` (plain HTML + vanilla JS; the WASM viewer is §12's full vision): timeline scrubber (frames), tree inspector at any point (resolved from snapshot+diffs), input replay overlay (ghost cursor/keys), log view, protocol calls; "open on failure" deep-links from assertion errors (`guiwright show-trace …`). Live mode (the v0.6 row of §16) shipped with M18: the transport-side client seam (`ClientConn`, the client half of `Handler`) plus the viewer's `LiveFeed`/`LiveTimeline` — a running session over any door (UDS/TCP/WS/embedded) feeds the same scrubber model the archive path builds, dump-per-change, event-fed frame axis. The §12 follow-on — the `trace.html` emitter for live captures — shipped with M23: `render_live_html` shares the archive payload builder (one code path), stamps the schema `gwtrace/v1 (live)`, and rides the attach-report's adapter name into the header (the §12 archive is still the file format); the kit's trace flow still archives first.
 
 ---
 
@@ -561,7 +561,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 
 - Micro (criterion): codec round-trips, diff apply, index build on synthetic 10 k-node trees, LZ4 blobs, hash throughput.
 - Macro: scripted 200-action session on the egui demo app and a synthetic masonry app (1 k nodes): end-to-end action latency histogram, suite wall-clock for 1 000 asserts, memory profile.
-- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor — 30 rows today), each bound to a sample in `check_budgets`.
+- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor, the count-assert floor — 31 rows today), each bound to a sample in `check_budgets`.
 
 ---
 
@@ -572,10 +572,10 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Locators (`getByRole/Label/Text/TestId/Value`, filters, strict mode) | §8 selector model over accesskit consumer + L2 logical trees | MVP |
 | Auto-waiting / actionability | §8.3 event-driven checks; explicit `locator.wait_for(state)` on the kit surface (`attached`/`visible`/`hidden`/`stable`, M21) | MVP |
 | Actions (click/dblclick/hover/fill/press/check/select/drag/scroll/focus) | §8.4–§9 (semantic + real-input paths); the wire `Action` honors `force`/`timeout_ms` (M17's pre-resolved gate); the kit locator surface carries `press`/`check`/`uncheck`/`set_checked`/`focus`/`blur` too (M19) | MVP |
-| Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines; the checked tri-state rides the §8 check row (`to_be_checked` / `to_be_unchecked` / `to_be_checked_mixed`, M20) | MVP |
+| Assertions with retry (`expect(locator).to_*`) | `guiwright-core::expect` + waiter state machines; the checked tri-state rides the §8 check row (`to_be_checked` / `to_be_unchecked` / `to_be_checked_mixed`, M20); the count surface (`to_have_count` + `locator.count()`) is the set-size escape hatch from strict mode over the first selector-level waiter (M22) | MVP |
 | Screenshots (page/element) + `toHaveScreenshot` | §10 (crop, per-OS baselines, dify-style diff); locator-level element shots (M9), the §7 render domain over GWP (M10) | MVP (embedded), M9 (locator), M10 (wire) |
 | Test runner, fixtures, parallel/shard, retries, reports | `guiwright-kit` + nextest integration + JUnit/HTML; the §16 v0.5 own runner is `guiwright test` over `gwtest/v1` specs (M5) | MVP (nextest-native), M5 (own runner) |
-| Trace viewer (time travel, live) | §12 | v0.3 (archive), M18 (live feed over the `ClientConn` seam) |
+| Trace viewer (time travel, live) | §12 | v0.3 (archive), M18 (live feed over the `ClientConn` seam), M23 (the live-capture HTML emitter) |
 | Codegen + inspector overlay | §13 | M2/M4 (codegen), M8 (live overlay) |
 | Video recording | §10 (ffmpeg pipe) | M3 (recorder + wire domain) |
 | Virtual clock (`clock.install/fastForward`) | §14 | v0.3 (egui/slint/masonry/freya), v0.5 (gpui/iced live) |
