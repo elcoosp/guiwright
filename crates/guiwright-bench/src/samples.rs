@@ -1209,8 +1209,44 @@ pub fn count_compare() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
-// --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
+// --- Locator all-matches sample (§16 assertions row over the kit, m22/m25 gap) ---
 
+/// §16 assertions row, the `all()` enumeration: one
+/// `role_locator(Role::Button).all(|item| item.resolve())` over the button
+/// fixture — one non-strict `resolve_all` walk (the snapshot set read) plus
+/// one index-pinned strict resolve per visited item (the `.nth(i)` pin,
+/// each with its own pump). The launch and settle stay outside the measured
+/// span; the measured operation is one full enumeration, the hot path every
+/// `all()`-driven iterate-and-collect flow rides. Zero matches enumerate to
+/// an empty `Vec` with no per-item cost (the `count_assert` row is the set read
+/// alone).
+pub fn locator_all() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("locator_all", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let keys = app
+            .role_locator(Role::Button)
+            .all(|item| Ok(item.resolve()?.key))
+            .expect("bench enumeration");
+        assert_eq!(keys.len(), 4, "the fixture's four buttons");
+    }
+    start.elapsed() / ITERATIONS
+}
+
+// --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
 /// §16 v0.4 multi-window, kit side: one `app.window(handle).get_by_role(…)
 /// .resolve()` through the window-handle surface — aim (validated against
 /// the tree), subtree-scoped strict resolution, metadata read. The launch
