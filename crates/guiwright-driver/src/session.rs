@@ -16,7 +16,8 @@ use guiwright_core::actionability::{Check, CheckStatus, action_checks};
 use guiwright_core::expect::DEFAULT_TIMEOUT;
 use guiwright_core::tree::{Resolved, TreeService};
 use guiwright_core::wait::{
-    ChecksWaiter, CountWaiter, StabilityTracker, WaitOutcome, Waiter, WaiterEvent,
+    ChecksWaiter, CountMatch, CountWaiter, NotWaiter, StabilityTracker, WaitOutcome, Waiter,
+    WaiterEvent,
 };
 use guiwright_core::{CoreError, NodeKey, Selector};
 
@@ -1103,7 +1104,69 @@ impl<A: FrameworkAdapter> Session<A> {
         expected: usize,
         deadline: Instant,
     ) -> Result<(), CoreError> {
-        let mut waiter = CountWaiter::new(selector.clone(), expected);
+        self.wait_count_match(selector, CountMatch::Exact(expected), deadline)
+    }
+
+    /// The comparator count wait (§16 assertions row, M25): the M22
+    /// count waiter generalized over [`CountMatch`] — the exact form and
+    /// the one-sided comparators ride the same zero-polling loop, the
+    /// comparator named in the timeout header
+    /// (`count > 3 — {selector} (found 2)`).
+    pub fn wait_count_match(
+        &mut self,
+        selector: &Selector,
+        comparison: CountMatch,
+        deadline: Instant,
+    ) -> Result<(), CoreError> {
+        let mut waiter = CountWaiter::with_match(selector.clone(), comparison);
+        self.wait_with(&mut waiter, selector, deadline).map(|_| ())
+    }
+
+    /// The negated check-list wait (§16 assertions row, M24): the
+    /// [`ChecksWaiter`] wrapped in the [`NotWaiter`] decorator — the
+    /// positive condition holding is exactly what keeps the negated
+    /// assertion waiting, and the decorator keeps strict-mode and
+    /// fail-fast outcomes failing. The outcome never carries a node (the
+    /// positive resolution is precisely what the negation rejects), so
+    /// unlike `wait_for` this returns `Result<(), CoreError>` directly.
+    /// The timeout error reads `not (…) — {selector}` (the decorator's
+    /// own description).
+    pub fn wait_not_checks(
+        &mut self,
+        selector: &Selector,
+        checks: Vec<Check>,
+        deadline: Instant,
+    ) -> Result<(), CoreError> {
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(selector.clone(), checks)));
+        self.wait_with(&mut waiter, selector, deadline).map(|_| ())
+    }
+
+    /// The negated count wait (M24): the [`CountWaiter`] under the same
+    /// decorator — satisfied while the count *differs*, pending once it
+    /// matches. The timeout error reads `not (count N — {selector})`.
+    pub fn wait_not_count(
+        &mut self,
+        selector: &Selector,
+        expected: usize,
+        deadline: Instant,
+    ) -> Result<(), CoreError> {
+        self.wait_not_count_match(selector, CountMatch::Exact(expected), deadline)
+    }
+
+    /// The negated comparator count wait (M25): the [`CountMatch`]
+    /// generalization under the [`NotWaiter`] decorator — satisfied
+    /// while the comparison does *not* hold. The timeout error reads
+    /// `not (count > 3 — {selector})`.
+    pub fn wait_not_count_match(
+        &mut self,
+        selector: &Selector,
+        comparison: CountMatch,
+        deadline: Instant,
+    ) -> Result<(), CoreError> {
+        let mut waiter = NotWaiter::new(Box::new(CountWaiter::with_match(
+            selector.clone(),
+            comparison,
+        )));
         self.wait_with(&mut waiter, selector, deadline).map(|_| ())
     }
 
@@ -1114,6 +1177,7 @@ impl<A: FrameworkAdapter> Session<A> {
             selector,
             timeout: DEFAULT_TIMEOUT,
             window: None,
+            negated: false,
         }
     }
 
@@ -1508,6 +1572,10 @@ pub struct ExpectBuilder<'s, A: FrameworkAdapter> {
     /// window-handle surface aims assertions the way the wire's
     /// `Window::Use` aims a connection.
     window: Option<String>,
+    /// The negation modifier (§16 assertions row, M24): `not().to_*`
+    /// inverts the terminal assertion through the [`NotWaiter`]
+    /// decorator. Set-once, like the core builder's.
+    negated: bool,
 }
 
 impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
@@ -1526,6 +1594,27 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
         self
     }
 
+    /// The negation modifier (§16 assertions row, M24):
+    /// `expect(locator).not().to_be_visible()` — the terminal assertion
+    /// is inverted through the [`NotWaiter`] decorator (satisfied while
+    /// the positive condition does not hold; strict-mode and fail-fast
+    /// outcomes keep failing). Set-once: calling it again changes
+    /// nothing.
+    pub fn not(mut self) -> Self {
+        self.negated = true;
+        self
+    }
+
+    /// The Playwright-shaped failure header: the (possibly negated)
+    /// assertion name plus the locator it was built from.
+    fn header(&self, name: &str) -> String {
+        if self.negated {
+            format!("not ({name} — {})", self.selector.render())
+        } else {
+            format!("{name} — {}", self.selector.render())
+        }
+    }
+
     fn run(self, checks: Vec<Check>, name: &str) -> Result<(), CoreError> {
         let deadline = Instant::now() + self.timeout;
         // The scope resolves at act time (the M17 discipline): the tree is
@@ -1536,15 +1625,22 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
             Some(handle) => self.session.window_scope(handle)?,
         };
         self.session.set_resolve_scope(scope);
-        let result = self.session.wait_for(&self.selector, checks, deadline);
+        let result = if self.negated {
+            self.session
+                .wait_not_checks(&self.selector, checks, deadline)
+        } else {
+            self.session
+                .wait_for(&self.selector, checks, deadline)
+                .map(|_| ())
+        };
         self.session.clear_resolve_scope();
-        result.map(|_| ()).map_err(|e| match e {
+        result.map_err(|e| match e {
             // Keep the Playwright-shaped failure header: the assertion
             // name plus the locator (the waiter's own description
             // carries the same context — errors must name what was
             // being waited for, §8.3).
             CoreError::Timeout { last, .. } => CoreError::Timeout {
-                operation: format!("{name} — {}", self.selector.render()),
+                operation: self.header(name),
                 timeout: self.timeout,
                 last,
             },
@@ -1604,17 +1700,45 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
     /// the timeout error keeps the count waiter's own
     /// `count N — {selector} (found M)` header (the `run` rewrite is for
     /// the check-list waiter, whose description is selector-first).
+    /// Under `not()` (M24) the decorator inverts the waiter and the
+    /// timeout header reads `not (count N — {selector})`.
     pub fn to_have_count(self, expected: usize) -> Result<(), CoreError> {
+        self.run_count(CountMatch::Exact(expected))
+    }
+
+    /// `expect(locator).to_have_count_greater_than(min)` (M25): the M22
+    /// record's reserved widening — satisfied while *more* than `min`
+    /// nodes match, the mismatch waitable, the timeout header naming
+    /// the comparator and the found count.
+    pub fn to_have_count_greater_than(self, min: usize) -> Result<(), CoreError> {
+        self.run_count(CountMatch::GreaterThan(min))
+    }
+
+    /// `expect(locator).to_have_count_less_than(max)` (M25): the mirror
+    /// comparator — satisfied while *fewer* than `max` nodes match,
+    /// same waiter, same error shape.
+    pub fn to_have_count_less_than(self, max: usize) -> Result<(), CoreError> {
+        self.run_count(CountMatch::LessThan(max))
+    }
+
+    /// The shared count path (M22 exact + M25 comparators): the window
+    /// scope resolves at act time (the M17 discipline), the comparator
+    /// rides the zero-polling loop, the decorator wrapping under
+    /// `not()`.
+    fn run_count(self, comparison: CountMatch) -> Result<(), CoreError> {
         let deadline = Instant::now() + self.timeout;
-        // The scope resolves at act time (the M17 discipline), exactly as
-        // the check-list path does: a window closed between aim and assert
-        // fails with `UnknownWindow`, not with a cross-window count.
         let scope = match &self.window {
             None => None,
             Some(handle) => self.session.window_scope(handle)?,
         };
         self.session.set_resolve_scope(scope);
-        let result = self.session.wait_count(&self.selector, expected, deadline);
+        let result = if self.negated {
+            self.session
+                .wait_not_count_match(&self.selector, comparison, deadline)
+        } else {
+            self.session
+                .wait_count_match(&self.selector, comparison, deadline)
+        };
         self.session.clear_resolve_scope();
         result
     }
@@ -1801,6 +1925,167 @@ mod tests {
             .expect(Selector::role(accesskit::Role::Button))
             .to_have_count(4)
             .expect("the builder surface rides the same loop");
+    }
+
+    // --- The negated assertions (§16 assertions row, M24) -----------------
+
+    #[test]
+    fn negated_assertions_run_on_session() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        // Absence satisfies not(visible)…
+        session
+            .expect(Selector::role_named(accesskit::Role::Button, "Ghost"))
+            .not()
+            .to_be_visible()
+            .expect("the ghost is not visible (absent)");
+        // …so does the filter-excluded hidden button…
+        session
+            .expect(Selector::role_named(accesskit::Role::Button, "Invisible"))
+            .not()
+            .to_be_visible()
+            .expect("the hidden button is not visible");
+        // …and the disabled button is not enabled.
+        session
+            .expect(Selector::role_named(accesskit::Role::Button, "Confirm"))
+            .not()
+            .to_be_enabled()
+            .expect("confirm is not enabled (disabled)");
+    }
+
+    #[test]
+    fn negated_count_runs_on_session() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .not()
+            .to_have_count(99)
+            .expect("4 buttons is not 99");
+    }
+
+    #[test]
+    fn a_negated_timeout_names_the_inversion() {
+        let fixture = Fixture::buttons();
+        // Settled: the fixture is rendered, so Save is visible and the
+        // negation must wait for a world that never comes.
+        let mut session = settled_session(&fixture);
+        let err = session
+            .expect(save_selector())
+            .with_timeout(Duration::from_millis(200))
+            .not()
+            .to_be_visible()
+            .expect_err("save stays visible");
+        let msg = err.to_string();
+        assert!(msg.contains("not (visible"), "{msg}");
+        assert!(msg.contains("getByRole"), "{msg}");
+    }
+
+    #[test]
+    fn a_negated_count_timeout_names_the_inverted_count() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let err = session
+            .expect(Selector::role(accesskit::Role::Button))
+            .with_timeout(Duration::from_millis(200))
+            .not()
+            .to_have_count(4)
+            .expect_err("the count stays 4");
+        let msg = err.to_string();
+        assert!(msg.contains("not (count 4"), "{msg}");
+        assert!(msg.contains("getByRole"), "{msg}");
+    }
+
+    #[test]
+    fn strict_mode_still_fails_under_negation_on_session() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let err = session
+            .expect(Selector::role(accesskit::Role::Button))
+            .not()
+            .to_be_visible()
+            .expect_err("four buttons is ambiguous either way");
+        assert!(err.to_string().contains("resolved to 4 nodes"), "{err}");
+    }
+
+    #[test]
+    fn a_non_checkable_role_fails_fast_under_negation() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let err = session
+            .expect(save_selector())
+            .not()
+            .to_be_checked()
+            .expect_err("a button is not checkable either way");
+        assert!(err.to_string().contains("no checked state"), "{err}");
+    }
+
+    #[test]
+    fn negated_assertion_completes_on_a_scripted_removal() {
+        let fixture = Fixture::buttons();
+        let scripts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let adapter = MockAdapter::with_fixture(&fixture).with_shared_scripts(scripts.clone());
+        let mut session = settled_session_from(adapter);
+        // The app removes its Save button 100 ms in — the negated
+        // assertion completes on the tree-diff event, never by polling.
+        let removal = fixture.remove_save_update();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            scripts.lock().expect("script channel").push(removal);
+        });
+        session
+            .expect(save_selector())
+            .not()
+            .to_be_visible()
+            .expect("the removal lands and the negation holds");
+    }
+
+    // --- The count comparators (§16 assertions row, M25) ------------------
+
+    #[test]
+    fn count_comparators_run_on_session() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .to_have_count_greater_than(3)
+            .expect("4 buttons clear the > 3 bound");
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .to_have_count_less_than(5)
+            .expect("4 buttons sit below the < 5 bound");
+    }
+
+    #[test]
+    fn a_comparator_timeout_names_the_comparator_and_the_found_count() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let err = session
+            .expect(Selector::role(accesskit::Role::Button))
+            .with_timeout(Duration::from_millis(200))
+            .to_have_count_greater_than(99)
+            .expect_err("4 buttons never clear > 99");
+        let msg = err.to_string();
+        assert!(msg.contains("count > 99"), "{msg}");
+        assert!(msg.contains("found 4"), "{msg}");
+    }
+
+    #[test]
+    fn negated_comparators_run_on_session() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .not()
+            .to_have_count_greater_than(99)
+            .expect("4 buttons do not clear > 99");
+        let err = session
+            .expect(Selector::role(accesskit::Role::Button))
+            .with_timeout(Duration::from_millis(200))
+            .not()
+            .to_have_count_greater_than(3)
+            .expect_err("4 buttons keep clearing > 3");
+        assert!(err.to_string().contains("not (count > 3"), "{err}");
     }
 
     #[test]
