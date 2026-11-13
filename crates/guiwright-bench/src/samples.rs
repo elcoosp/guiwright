@@ -1142,6 +1142,73 @@ pub fn count_assert() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- Negated-assertion sample (§16 assertions row, M24) ----------------------
+
+/// §16 assertions row, M24: one `not().to_be_visible()` kit assertion on
+/// the button fixture's absent "Ghost" locator — the negation decorator's
+/// steady-state cost. The decorator inverts the inner `ChecksWaiter`'s
+/// outcome, so the sampled path is one strict resolve that misses plus the
+/// three-way outcome inversion; the assertion completes on the initial
+/// evaluation (the node is absent, so the negated form holds), making this
+/// the floor every `expect(locator).not().to_*` adds on top of a resolve.
+pub fn not_assert() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("not_assert", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        guiwright_kit::expect(app.get_by_role(Role::Button, "Ghost"))
+            .not()
+            .to_be_visible()
+            .expect("bench assertion holds");
+    }
+    start.elapsed() / ITERATIONS
+}
+
+// --- Count-comparator sample (§16 assertions row, M25) -----------------------
+
+/// §16 assertions row, M25: one `to_have_count_greater_than(3)` kit
+/// assertion on the button fixture — the count waiter's comparator mode
+/// (the M22 record's reserved widening). The sampled path is the same
+/// non-strict `resolve_all` walk the exact count rides, plus the one-sided
+/// comparison; the assertion completes on the initial evaluation (4 > 3
+/// holds), so this is the floor every comparator assertion adds on top of
+/// the `resolve_cached_index` row.
+pub fn count_compare() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("count_compare", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        guiwright_kit::expect(app.role_locator(Role::Button))
+            .to_have_count_greater_than(3)
+            .expect("bench assertion holds");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 // --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
 
 /// §16 v0.4 multi-window, kit side: one `app.window(handle).get_by_role(…)
