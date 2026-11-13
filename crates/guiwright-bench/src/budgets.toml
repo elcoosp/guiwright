@@ -287,3 +287,21 @@ p95_us = 500
 notes = "the M20 checked-state assertion's steady-state cost on the checkbox-trio fixture: one strict resolve (auto-wait index path) plus the checked evaluation through the session's zero-polling wait — the assertion completes on the initial evaluation, so this is the floor every expect(locator).to_* adds on top of a resolve; rides the resolve_cached_index row"
 m0_measurable = true
 sample = "checked_assert"
+
+[[budget]]
+id = "kit_window_scoped_resolve"
+name = "Kit: one window-scoped resolve through the handle surface"
+p50_us = 100
+p95_us = 500
+notes = "the M6 kit half's steady-state cost on the two-window discriminator fixture: aim (tree-validated handle) + subtree-scoped strict resolve + metadata read — the floor every window-pinned locator action adds on top of the resolve_cached_index row"
+m0_measurable = true
+sample = "kit_window_scoped_resolve"
+
+[[budget]]
+id = "wire_window_targets"
+name = "Wire: window_list + window_use pair over the embedded door"
+p50_us = 1200
+p95_us = 6000
+notes = "the Rust-client window parity's aim-and-scope round-trip (two Window domain requests on the ClientConn seam): list + use over the in-process transport, riding the inprocess_ping_roundtrip floor — the M6 vocabulary for Rust consumers, byte-identical over UDS/TCP/WS"
+m0_measurable = true
+sample = "wire_window_targets"
