@@ -1023,6 +1023,7 @@ impl<A: FrameworkAdapter> Session<A> {
         waiter: &mut dyn Waiter,
         selector: &Selector,
         deadline: Instant,
+        operation: Option<String>,
     ) -> Result<Option<Resolved>, CoreError> {
         let configured = deadline.saturating_duration_since(Instant::now());
 
@@ -1038,12 +1039,21 @@ impl<A: FrameworkAdapter> Session<A> {
 
         loop {
             if Instant::now() >= deadline {
-                let mut operation = waiter.describe();
+                // The operation header: the caller's assertion-shaped form
+                // when one was handed in (the `expect` builder's header —
+                // `not (visible — …)`), the waiter's own description
+                // otherwise. A waiter that can name its mismatch embeds it
+                // (the M17 stuck convention); a waiter whose condition
+                // currently holds (the negated forms) names what still
+                // holds instead (the m24 satisfied-state accessor).
+                let mut header = operation.unwrap_or_else(|| waiter.describe());
                 if let Some(stuck) = waiter.stuck_on() {
-                    operation.push_str(&format!(" ({stuck})"));
+                    header.push_str(&format!(" ({stuck})"));
+                } else if let Some(held) = waiter.held_on() {
+                    header.push_str(&format!(" (still {held})"));
                 }
                 return Err(CoreError::Timeout {
-                    operation,
+                    operation: header,
                     timeout: configured,
                     last: Box::new(self.tree.summary()),
                 });
@@ -1088,7 +1098,7 @@ impl<A: FrameworkAdapter> Session<A> {
         deadline: Instant,
     ) -> Result<WaitResolved, CoreError> {
         let mut waiter = ChecksWaiter::new(selector.clone(), checks);
-        self.wait_with(&mut waiter, selector, deadline)
+        self.wait_with(&mut waiter, selector, deadline, None)
             .map(|resolved| resolved.map_or(WaitResolved::Absent, WaitResolved::Node))
     }
 
@@ -1119,7 +1129,8 @@ impl<A: FrameworkAdapter> Session<A> {
         deadline: Instant,
     ) -> Result<(), CoreError> {
         let mut waiter = CountWaiter::with_match(selector.clone(), comparison);
-        self.wait_with(&mut waiter, selector, deadline).map(|_| ())
+        self.wait_with(&mut waiter, selector, deadline, None)
+            .map(|_| ())
     }
 
     /// The negated check-list wait (§16 assertions row, M24): the
@@ -1129,16 +1140,22 @@ impl<A: FrameworkAdapter> Session<A> {
     /// fail-fast outcomes failing. The outcome never carries a node (the
     /// positive resolution is precisely what the negation rejects), so
     /// unlike `wait_for` this returns `Result<(), CoreError>` directly.
-    /// The timeout error reads `not (…) — {selector}` (the decorator's
-    /// own description).
+    /// `operation` is the assertion-shaped header the caller wants on a
+    /// timeout (`not (visible — …)`, the [`crate::session::ExpectBuilder`]
+    /// header) — `None` falls back to the decorator's own description.
+    /// Either way the suffixes ride: a waiter that can name its mismatch
+    /// embeds it, and the m24 satisfied-state accessor names what still
+    /// holds when the positive form does (`… (still visible)`).
     pub fn wait_not_checks(
         &mut self,
         selector: &Selector,
         checks: Vec<Check>,
         deadline: Instant,
+        operation: Option<String>,
     ) -> Result<(), CoreError> {
         let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(selector.clone(), checks)));
-        self.wait_with(&mut waiter, selector, deadline).map(|_| ())
+        self.wait_with(&mut waiter, selector, deadline, operation)
+            .map(|_| ())
     }
 
     /// The negated count wait (M24): the [`CountWaiter`] under the same
@@ -1167,7 +1184,8 @@ impl<A: FrameworkAdapter> Session<A> {
             selector.clone(),
             comparison,
         )));
-        self.wait_with(&mut waiter, selector, deadline).map(|_| ())
+        self.wait_with(&mut waiter, selector, deadline, None)
+            .map(|_| ())
     }
 
     /// expect()-style assertion with retry-until-timeout semantics (§16).
@@ -1625,27 +1643,36 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
             Some(handle) => self.session.window_scope(handle)?,
         };
         self.session.set_resolve_scope(scope);
+        let header = self.header(name);
         let result = if self.negated {
+            // The negated header rides into the wait loop (the assertion
+            // name plus the locator — errors must name what was being
+            // waited for, §8.3) so the timeout keeps the decorator's
+            // stuck/still suffixes under the inversion: the m24
+            // satisfied-state accessor names what still holds
+            // (`not (visible — …) (still visible)`).
             self.session
-                .wait_not_checks(&self.selector, checks, deadline)
+                .wait_not_checks(&self.selector, checks, deadline, Some(header))
         } else {
             self.session
                 .wait_for(&self.selector, checks, deadline)
                 .map(|_| ())
+                .map_err(|e| match e {
+                    // Keep the Playwright-shaped failure header on the
+                    // positive path: the check-list waiter's own
+                    // description is selector-first (a pending check has
+                    // no stuck/still suffix to preserve — the header
+                    // carries the whole context).
+                    CoreError::Timeout { last, .. } => CoreError::Timeout {
+                        operation: header,
+                        timeout: self.timeout,
+                        last,
+                    },
+                    other => other,
+                })
         };
         self.session.clear_resolve_scope();
-        result.map_err(|e| match e {
-            // Keep the Playwright-shaped failure header: the assertion
-            // name plus the locator (the waiter's own description
-            // carries the same context — errors must name what was
-            // being waited for, §8.3).
-            CoreError::Timeout { last, .. } => CoreError::Timeout {
-                operation: self.header(name),
-                timeout: self.timeout,
-                last,
-            },
-            other => other,
-        })
+        result
     }
 
     pub fn to_be_visible(self) -> Result<(), CoreError> {
