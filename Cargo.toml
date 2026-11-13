@@ -115,6 +115,12 @@ cast_precision_loss = "allow"
 # Playwright §16 shape: the `to_*` assertion methods consume the pending
 # builder by value (single-shot assertions — see kit/app.rs).
 wrong_self_convention = "allow"
+# `expect(locator).not().to_be_visible()` (§16 assertions row, M24)
+# keeps Playwright's `not` modifier as a builder method on the
+# assertion DSL surface: `std::ops::Not` returns `!self`, not a
+# pending builder, so the trait is not implementable here — the
+# consuming-builder shape (like `to_*` above) is the design.
+should_implement_trait = "allow"
 # The §6.2 capability matrix rides the wire as a plain flag struct
 # (`Caps` / `CapsV1`, six capability booleans): bitflag crates would
 # change the wire format for no gain at this size.
