@@ -11,7 +11,10 @@
 //!   at any point, resolved from snapshot+diffs").
 //! * [`html`] — the self-contained `trace.html` emitter: timeline
 //!   scrubber, tree inspector, event/log views and the virtual-clock
-//!   ledger in one file (no server, no external assets, §12).
+//!   ledger in one file (no server, no external assets, §12). The live
+//!   half (`render_live_html`) renders the same scrubber from a
+//!   running session's accumulated model (M23 — §12's recorded
+//!   follow-on).
 //! * [`live`] — the M18 live mode: [`live::LiveFeed`] attaches to a
 //!   running GWP session over any [`guiwright_proto::ClientConn`] door
 //!   and [`live::LiveTimeline`] accumulates the same scrubber model the
@@ -32,6 +35,6 @@ pub mod live;
 pub mod timeline;
 
 pub use archive::{TraceArchive, ViewerError};
-pub use html::render_html;
+pub use html::{render_html, render_live_html};
 pub use live::{LiveChange, LiveFeed, LiveInfo, LiveTimeline};
 pub use timeline::{Timeline, TimelineTick, TreeView, TreeViewNode};
