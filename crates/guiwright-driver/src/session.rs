@@ -808,7 +808,12 @@ impl<A: FrameworkAdapter> Session<A> {
         let Some(mut recorder) = self.codegen.take() else {
             return;
         };
-        if let Err(err) = recorder.record(kind, argument.as_deref(), facts, &self.tree) {
+        // The session-side tap records the shared session surface (the
+        // wire's codegen domain): a connection's window target is
+        // per-connection state the recorder does not model, so the line
+        // is emitted unscoped — the kit's window-handle surface records
+        // its own scoped lines at the App tap.
+        if let Err(err) = recorder.record(kind, argument.as_deref(), facts, &self.tree, None) {
             tracing::debug!(%err, action = %kind, "codegen: no stable selector");
         }
         self.codegen = Some(recorder);
@@ -1071,7 +1076,28 @@ impl<A: FrameworkAdapter> Session<A> {
             session: self,
             selector,
             timeout: DEFAULT_TIMEOUT,
+            window: None,
         }
+    }
+
+    /// Run `op` with every resolution path narrowed to `window`'s subtree
+    /// (§16 v0.4 "targets per window"): the handle is validated against
+    /// the tree (the source of truth — an adapter metadata entry without
+    /// tree content is not a usable target), the scope is set, `op` runs,
+    /// and the scope is cleared on every path. This is the set/act/clear
+    /// rendezvous pattern the GWP server applies around scoped requests,
+    /// published as one method so embedded consumers (the kit's
+    /// window-handle surface) get identical semantics.
+    pub fn scoped<R>(
+        &mut self,
+        window: &str,
+        op: impl FnOnce(&mut Self) -> Result<R, CoreError>,
+    ) -> Result<R, CoreError> {
+        let scope = self.window_scope(window)?;
+        self.set_resolve_scope(scope);
+        let result = op(self);
+        self.clear_resolve_scope();
+        result
     }
 
     /// Run a semantic action with full actionability checking (§8.3–§8.4).
@@ -1440,6 +1466,11 @@ pub struct ExpectBuilder<'s, A: FrameworkAdapter> {
     session: &'s mut Session<A>,
     selector: Selector,
     timeout: Duration,
+    /// The optional window scope (§16 v0.4): when set, every wait-loop
+    /// poll resolves only inside that window's subtree — the kit's
+    /// window-handle surface aims assertions the way the wire's
+    /// `Window::Use` aims a connection.
+    window: Option<String>,
 }
 
 impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
@@ -1448,23 +1479,40 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
         self
     }
 
+    /// Aim the assertion at one window target (§16 v0.4): resolution is
+    /// scoped for the duration of the wait loop and the scope is cleared
+    /// on every path (the server's set/act/clear rendezvous pattern).
+    /// The handle is validated at act time — a dead target fails with
+    /// `UnknownWindow`, not with a cross-window hit.
+    pub fn with_window(mut self, window: Option<String>) -> Self {
+        self.window = window;
+        self
+    }
+
     fn run(self, checks: Vec<Check>, name: &str) -> Result<(), CoreError> {
         let deadline = Instant::now() + self.timeout;
-        self.session
-            .wait_for(&self.selector, checks, deadline)
-            .map(|_| ())
-            .map_err(|e| match e {
-                // Keep the Playwright-shaped failure header: the assertion
-                // name plus the locator (the waiter's own description
-                // carries the same context — errors must name what was
-                // being waited for, §8.3).
-                CoreError::Timeout { last, .. } => CoreError::Timeout {
-                    operation: format!("{name} — {}", self.selector.render()),
-                    timeout: self.timeout,
-                    last,
-                },
-                other => other,
-            })
+        // The scope resolves at act time (the M17 discipline): the tree is
+        // the source of truth, so a window closed between aim and assert
+        // fails here instead of resolving across windows.
+        let scope = match &self.window {
+            None => None,
+            Some(handle) => self.session.window_scope(handle)?,
+        };
+        self.session.set_resolve_scope(scope);
+        let result = self.session.wait_for(&self.selector, checks, deadline);
+        self.session.clear_resolve_scope();
+        result.map(|_| ()).map_err(|e| match e {
+            // Keep the Playwright-shaped failure header: the assertion
+            // name plus the locator (the waiter's own description
+            // carries the same context — errors must name what was
+            // being waited for, §8.3).
+            CoreError::Timeout { last, .. } => CoreError::Timeout {
+                operation: format!("{name} — {}", self.selector.render()),
+                timeout: self.timeout,
+                last,
+            },
+            other => other,
+        })
     }
 
     pub fn to_be_visible(self) -> Result<(), CoreError> {
