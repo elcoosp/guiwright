@@ -314,3 +314,19 @@ p95_us = 500
 notes = "the M22 selector-level assertion's steady-state cost on the button fixture: one non-strict resolve_all walk (the filter/codegen index path) plus the set-size compare through the session's zero-polling wait — the first waiter that resolves the whole match set instead of one node, riding the resolve_cached_index row"
 m0_measurable = true
 sample = "count_assert"
+[[budget]]
+id = "not_assert"
+name = "Kit: one not().to_be_visible() assertion (decorator over a missed resolve)"
+p50_us = 100
+p95_us = 500
+notes = "the M24 negated assertion's steady-state cost on the button fixture's absent Ghost locator: one strict resolve that misses plus the NotWaiter decorator's three-way outcome inversion through the session's zero-polling wait — the assertion completes on the initial evaluation (absence satisfies the negated form), so this is the floor every expect(locator).not().to_* adds on top of the resolve_cached_index row"
+m0_measurable = true
+sample = "not_assert"
+[[budget]]
+id = "count_compare"
+name = "Kit: one to_have_count_greater_than() assertion (comparator count)"
+p50_us = 100
+p95_us = 500
+notes = "the M25 count comparator's steady-state cost on the button fixture: the same non-strict resolve_all walk the exact count rides plus the one-sided CountMatch comparison through the session's zero-polling wait — the M22 record's reserved vocabulary widening, completing on the initial evaluation (4 > 3 holds), riding the resolve_cached_index row"
+m0_measurable = true
+sample = "count_compare"
