@@ -305,3 +305,12 @@ p95_us = 6000
 notes = "the Rust-client window parity's aim-and-scope round-trip (two Window domain requests on the ClientConn seam): list + use over the in-process transport, riding the inprocess_ping_roundtrip floor — the M6 vocabulary for Rust consumers, byte-identical over UDS/TCP/WS"
 m0_measurable = true
 sample = "wire_window_targets"
+
+[[budget]]
+id = "count_assert"
+name = "Kit: one to_have_count() assertion (resolve_all + compare)"
+p50_us = 100
+p95_us = 500
+notes = "the M22 selector-level assertion's steady-state cost on the button fixture: one non-strict resolve_all walk (the filter/codegen index path) plus the set-size compare through the session's zero-polling wait — the first waiter that resolves the whole match set instead of one node, riding the resolve_cached_index row"
+m0_measurable = true
+sample = "count_assert"
