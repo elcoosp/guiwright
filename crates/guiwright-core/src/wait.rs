@@ -60,6 +60,16 @@ pub trait Waiter {
     fn stuck_on(&self) -> Option<String> {
         None
     }
+    /// The condition that currently holds, for negated timeout reports —
+    /// the m24 record's satisfied-state accessor. A [`NotWaiter`] pends
+    /// exactly while the positive form it wraps is satisfied, so when the
+    /// session loop times a negated assertion out, `held_on` names what
+    /// still holds and the header embeds it as `(still …)`
+    /// (`not (count 4 — …) (still count 4)`). Default: `None` — the
+    /// waiter names nothing beyond its own description.
+    fn held_on(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Stability tracker: bounds identical across 2 consecutive `FramePresented`
@@ -112,6 +122,10 @@ pub struct ChecksWaiter {
     /// Index of the next check that has not passed yet. Checks run in
     /// order; a node identity change resets progress (generation guard, §8.2).
     current: usize,
+    /// The condition that currently holds, when the last evaluation
+    /// satisfied the waiter — the [`Waiter::held_on`] state (the m24
+    /// satisfied-state accessor). Cleared at the top of every event.
+    held: Option<String>,
 }
 
 impl ChecksWaiter {
@@ -122,6 +136,7 @@ impl ChecksWaiter {
             stability: StabilityTracker::default(),
             last_resolved: None,
             current: 0,
+            held: None,
         }
     }
 
@@ -138,10 +153,23 @@ impl ChecksWaiter {
     fn allows_absence(&self) -> bool {
         self.checks.iter().all(|c| *c == Check::Hidden)
     }
+
+    /// The check vocabulary joined the way [`Self::describe`] renders it —
+    /// the condition a completed evaluation holds ("visible", or
+    /// "visible, enabled" for a multi-check sequence).
+    fn holding_condition(&self) -> String {
+        self.checks
+            .iter()
+            .map(Check::describe)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 impl Waiter for ChecksWaiter {
     fn on_event(&mut self, event: WaiterEvent<'_>, tree: &TreeService) -> WaitOutcome {
+        // The held state describes the LAST evaluation only.
+        self.held = None;
         // Re-resolve on every event: the node may have appeared, moved, or
         // been replaced since the last one (Playwright re-query semantics).
         let resolved = match tree.resolve(&self.selector) {
@@ -159,7 +187,12 @@ impl Waiter for ChecksWaiter {
         };
 
         match resolved {
-            None => WaitOutcome::Satisfied(None),
+            None => {
+                // Absence IS the hidden form (Playwright parity): the
+                // condition that holds is the check vocabulary itself.
+                self.held = Some(self.holding_condition());
+                WaitOutcome::Satisfied(None)
+            }
             Some(resolved) => {
                 // A different identity invalidates per-node progress (§8.2).
                 if self
@@ -206,6 +239,7 @@ impl Waiter for ChecksWaiter {
                 }
 
                 if self.current >= self.checks.len() {
+                    self.held = Some(self.holding_condition());
                     WaitOutcome::Satisfied(Some(resolved))
                 } else {
                     WaitOutcome::Pending
@@ -217,6 +251,10 @@ impl Waiter for ChecksWaiter {
     fn describe(&self) -> String {
         let checks: Vec<String> = self.checks.iter().map(Check::describe).collect();
         format!("{}: {}", self.selector.render(), checks.join(", "))
+    }
+
+    fn held_on(&self) -> Option<String> {
+        self.held.clone()
     }
 }
 
@@ -283,6 +321,9 @@ pub struct CountWaiter {
     comparison: CountMatch,
     /// The match count the last evaluation saw (timeout reports name it).
     found: Option<usize>,
+    /// The count that currently holds, when the comparison is satisfied —
+    /// the [`Waiter::held_on`] state (the m24 satisfied-state accessor).
+    held: Option<String>,
 }
 
 impl CountWaiter {
@@ -297,6 +338,7 @@ impl CountWaiter {
             selector,
             comparison,
             found: None,
+            held: None,
         }
     }
 
@@ -322,13 +364,17 @@ impl Waiter for CountWaiter {
         // resolution error keeps waiting — transient by contract, and
         // there is no strict mode to fail fast into. The event kind itself
         // is irrelevant: any world change re-reads the set.
+        self.held = None;
         let Ok(matches) = tree.resolve_all(&self.selector) else {
             return WaitOutcome::Pending;
         };
         self.found = Some(matches.len());
         if self.comparison.holds(matches.len()) {
             // The comparison is the answer; no node rides back (the same
-            // `Satisfied(None)` shape the negated-existence assertions use).
+            // `Satisfied(None)` shape the negated-existence assertions
+            // use). What holds is the count itself — the m24 record's
+            // "count still 4" shape, comparator forms included.
+            self.held = Some(format!("count {}", matches.len()));
             WaitOutcome::Satisfied(None)
         } else {
             WaitOutcome::Pending
@@ -348,6 +394,10 @@ impl Waiter for CountWaiter {
             Some(found) if !self.comparison.holds(found) => Some(format!("found {found}")),
             _ => None,
         }
+    }
+
+    fn held_on(&self) -> Option<String> {
+        self.held.clone()
     }
 }
 
@@ -402,6 +452,13 @@ impl Waiter for NotWaiter {
 
     fn describe(&self) -> String {
         format!("not ({})", self.inner.describe())
+    }
+
+    fn held_on(&self) -> Option<String> {
+        // The decorator pends exactly while the inner form holds, so its
+        // satisfied state IS the still-holds context of the inversion
+        // (the m24 record's satisfied-state accessor, delegated).
+        self.inner.held_on()
     }
 }
 
@@ -919,5 +976,97 @@ mod tests {
         let waiter = NotWaiter::new(Box::new(CountWaiter::new(Selector::role(Role::Button), 5)));
         let rendered = format!("{waiter:?}");
         assert!(rendered.contains("count 5"), "{rendered}");
+    }
+
+    // --- The satisfied-state accessor (§16 assertions row, the m24 gap) ---
+
+    #[test]
+    fn held_on_names_the_checks_that_pass_right_now() {
+        let (tree, _) = setup();
+        // Save is visible: the positive form holds, and the accessor names
+        // it (the negated timeout embeds it as `(still visible)`).
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Visible],
+        );
+        assert!(waiter.held_on().is_none(), "nothing evaluated yet");
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_satisfied();
+        assert_eq!(waiter.held_on().as_deref(), Some("visible"));
+    }
+
+    #[test]
+    fn held_on_names_the_absent_hidden_form() {
+        let tree = TreeService::new();
+        // Absence satisfies `to_be_hidden` — the condition that holds is
+        // the hidden form itself (Playwright parity: absence IS hidden).
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Ghost"),
+            vec![Check::Hidden],
+        );
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("absence satisfies hidden, got {other:?}"),
+        }
+        assert_eq!(waiter.held_on().as_deref(), Some("hidden"));
+    }
+
+    #[test]
+    fn held_on_stays_none_while_a_check_is_pending() {
+        let (tree, _) = setup();
+        // Stability needs two equal presented frames: on the initial
+        // event the check pends, and a pending check is not a holding
+        // condition.
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Stable],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert!(
+            waiter.held_on().is_none(),
+            "a pending check is not a holding condition"
+        );
+    }
+
+    #[test]
+    fn held_on_names_the_count_that_holds() {
+        let (tree, _) = setup();
+        let mut waiter = CountWaiter::new(Selector::role(Role::Button), 4);
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_satisfied();
+        // The m24 record's shape: "count still 4".
+        assert_eq!(waiter.held_on().as_deref(), Some("count 4"));
+        // The comparator form names the count too (what holds is the size).
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::GreaterThan(3));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_satisfied();
+        assert_eq!(waiter.held_on().as_deref(), Some("count 4"));
+        // A mismatched comparison holds nothing.
+        let mut waiter = CountWaiter::new(Selector::role(Role::Button), 5);
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert!(waiter.held_on().is_none());
+    }
+
+    #[test]
+    fn not_waiter_delegates_the_still_holds_context() {
+        let (tree, _) = setup();
+        // Save is visible → the negated form pends → the decorator's
+        // held_on is exactly the inner form's.
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Visible],
+        )));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.held_on().as_deref(), Some("visible"));
     }
 }
