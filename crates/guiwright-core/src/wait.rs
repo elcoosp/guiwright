@@ -220,32 +220,94 @@ impl Waiter for ChecksWaiter {
     }
 }
 
+/// The comparison a count assertion demands (§16 assertions row, M25):
+/// the M22 exact match widened with the two one-sided comparators — the
+/// m22 record's reserved vocabulary widening. A comparator holds while
+/// the match-set size stands on the demanded side of the bound; the
+/// mismatch stays waitable, never fail-fast (nodes stream in and out,
+/// the same contract as the exact count).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CountMatch {
+    /// Exactly `n` matches (M22's `to_have_count`).
+    Exact(usize),
+    /// More than `n` matches (M25's `to_have_count_greater_than`).
+    GreaterThan(usize),
+    /// Fewer than `n` matches (M25's `to_have_count_less_than`).
+    LessThan(usize),
+}
+
+impl CountMatch {
+    /// Whether `found` satisfies the comparison.
+    fn holds(self, found: usize) -> bool {
+        match self {
+            CountMatch::Exact(n) => found == n,
+            CountMatch::GreaterThan(n) => found > n,
+            CountMatch::LessThan(n) => found < n,
+        }
+    }
+
+    /// The rendering used by descriptions and timeout headers
+    /// (`count 4`, `count > 3`, `count < 5`) — the exact form is the
+    /// M22 header, byte-identical through the shared path.
+    pub fn describe(self) -> String {
+        match self {
+            CountMatch::Exact(n) => format!("count {n}"),
+            CountMatch::GreaterThan(n) => format!("count > {n}"),
+            CountMatch::LessThan(n) => format!("count < {n}"),
+        }
+    }
+
+    /// The bound the comparison stands against (the count the assertion
+    /// names).
+    pub fn bound(self) -> usize {
+        match self {
+            CountMatch::Exact(n) | CountMatch::GreaterThan(n) | CountMatch::LessThan(n) => n,
+        }
+    }
+}
+
 /// The selector-level waiter (§16 assertions row, M22): counts
 /// [`TreeService::resolve_all`] matches instead of strict-resolving one
 /// node — the seam that lets the assertion engine talk about the *set* of
 /// matches (`expect(locator).to_have_count(n)`, Playwright parity) without
 /// tripping strict mode. A mismatched count is waitable, never fail-fast:
 /// nodes stream in and out, exactly what the assertion is for.
+///
+/// M25 generalizes the demanded count into a [`CountMatch`]: the exact
+/// form and the one-sided comparators are one waiter — only the
+/// comparison differs.
 #[derive(Debug)]
 pub struct CountWaiter {
     selector: Selector,
-    expected: usize,
+    /// The comparison the assertion demands.
+    comparison: CountMatch,
     /// The match count the last evaluation saw (timeout reports name it).
     found: Option<usize>,
 }
 
 impl CountWaiter {
     pub fn new(selector: Selector, expected: usize) -> Self {
+        Self::with_match(selector, CountMatch::Exact(expected))
+    }
+
+    /// The comparator-shaped constructor (M25): the exact count, the
+    /// greater-than and the less-than assertions ride the same waiter.
+    pub fn with_match(selector: Selector, comparison: CountMatch) -> Self {
         Self {
             selector,
-            expected,
+            comparison,
             found: None,
         }
     }
 
-    /// The count the assertion demands.
+    /// The bound the assertion demands (the comparator's count).
     pub fn expected(&self) -> usize {
-        self.expected
+        self.comparison.bound()
+    }
+
+    /// The comparison the assertion demands.
+    pub fn comparison(&self) -> CountMatch {
+        self.comparison
     }
 
     /// The count the last evaluation found (`None` before the first one).
@@ -264,8 +326,8 @@ impl Waiter for CountWaiter {
             return WaitOutcome::Pending;
         };
         self.found = Some(matches.len());
-        if matches.len() == self.expected {
-            // The count is the answer; no node rides back (the same
+        if self.comparison.holds(matches.len()) {
+            // The comparison is the answer; no node rides back (the same
             // `Satisfied(None)` shape the negated-existence assertions use).
             WaitOutcome::Satisfied(None)
         } else {
@@ -274,14 +336,72 @@ impl Waiter for CountWaiter {
     }
 
     fn describe(&self) -> String {
-        format!("count {} — {}", self.expected, self.selector.render())
+        format!(
+            "{} — {}",
+            self.comparison.describe(),
+            self.selector.render()
+        )
     }
 
     fn stuck_on(&self) -> Option<String> {
         match self.found {
-            Some(found) if found != self.expected => Some(format!("found {found}")),
+            Some(found) if !self.comparison.holds(found) => Some(format!("found {found}")),
             _ => None,
         }
+    }
+}
+
+/// The negation decorator (§16 assertions row, M24): wraps any waiter and
+/// inverts its *waitable* outcome — Playwright's `expect(locator).not.…`
+/// modifier as a waiter over any waiter (the M22 `Box<dyn Waiter>` seam
+/// made `Expectation` a dispatcher over any waiter; this is the first
+/// composition that seam enables).
+///
+/// The mapping is the Playwright semantics:
+///
+/// * inner **satisfied** → outer [`WaitOutcome::Pending`] — the condition
+///   the assertion rejects still holds, so the negated form keeps
+///   waiting;
+/// * inner **pending** → outer `Satisfied(None)` — the world does not
+///   satisfy the positive condition right now, so the negation holds,
+///   with no node to hand back (the node that satisfied the positive
+///   form is precisely the one the negation rejects);
+/// * inner **failed** → outer **failed** — fail-fast stays fail-fast. A
+///   strict-mode violation is a resolution failure, not a state
+///   mismatch, so `not` must not launder it into a pass (Playwright
+///   parity), and a role that can never expose the checked state cannot
+///   pass under negation either (the M20 rule).
+pub struct NotWaiter {
+    inner: Box<dyn Waiter>,
+}
+
+impl NotWaiter {
+    pub fn new(inner: Box<dyn Waiter>) -> Self {
+        Self { inner }
+    }
+}
+
+impl std::fmt::Debug for NotWaiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The inner waiter is a state machine over borrowed trees, not
+        // `Debug` itself; its own description is the honest rendering.
+        f.debug_tuple("NotWaiter")
+            .field(&self.inner.describe())
+            .finish()
+    }
+}
+
+impl Waiter for NotWaiter {
+    fn on_event(&mut self, event: WaiterEvent<'_>, tree: &TreeService) -> WaitOutcome {
+        match self.inner.on_event(event, tree) {
+            WaitOutcome::Satisfied(_) => WaitOutcome::Pending,
+            WaitOutcome::Pending => WaitOutcome::Satisfied(None),
+            WaitOutcome::Failed(failure) => WaitOutcome::Failed(failure),
+        }
+    }
+
+    fn describe(&self) -> String {
+        format!("not ({})", self.inner.describe())
     }
 }
 
@@ -572,5 +692,232 @@ mod tests {
             .expect_pending();
         assert_eq!(waiter.found(), Some(4));
         assert_eq!(waiter.stuck_on().as_deref(), Some("found 4"));
+    }
+
+    // --- The count comparators (§16 assertions row, M25) ------------------
+
+    #[test]
+    fn greater_than_satisfied_when_the_count_clears_the_bound() {
+        let (tree, _) = setup();
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::GreaterThan(3));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("4 buttons clear the > 3 bound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn greater_than_pends_below_the_bound_and_names_the_found_count() {
+        let (tree, _) = setup();
+        let mut waiter = CountWaiter::with_match(
+            Selector::role_named(Role::Button, "Save"),
+            CountMatch::GreaterThan(1),
+        );
+        // Exactly 1 "Save": not more than 1 — waitable, never fail-fast.
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.stuck_on().as_deref(), Some("found 1"));
+        assert_eq!(waiter.expected(), 1);
+    }
+
+    #[test]
+    fn less_than_satisfied_below_the_bound_and_pends_above() {
+        let (tree, _) = setup();
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::LessThan(5));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("4 buttons sit below the < 5 bound, got {other:?}"),
+        }
+        // Zero matches sit below any positive bound too.
+        let tree = TreeService::new();
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("0 buttons sit below the < 5 bound, got {other:?}"),
+        }
+        let (tree, _) = setup();
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::LessThan(4));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn comparators_describe_the_comparison() {
+        let waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::GreaterThan(3));
+        assert_eq!(waiter.describe(), "count > 3 — getByRole(Button)");
+        let waiter = CountWaiter::with_match(Selector::role(Role::Button), CountMatch::LessThan(5));
+        assert_eq!(waiter.describe(), "count < 5 — getByRole(Button)");
+        // The exact form keeps the M22 description byte-identical.
+        let waiter = CountWaiter::new(Selector::role(Role::Button), 4);
+        assert_eq!(waiter.describe(), "count 4 — getByRole(Button)");
+    }
+
+    #[test]
+    fn the_bound_is_the_demanded_count_for_every_comparator() {
+        assert_eq!(CountMatch::Exact(4).bound(), 4);
+        assert_eq!(CountMatch::GreaterThan(3).bound(), 3);
+        assert_eq!(CountMatch::LessThan(5).bound(), 5);
+    }
+
+    // --- The negation decorator (§16 assertions row, M24) -----------------
+
+    #[test]
+    fn not_waiter_pends_while_the_positive_condition_holds() {
+        let (tree, _) = setup();
+        // Save is visible → the positive waiter is satisfied → the negated
+        // assertion is exactly not satisfied yet.
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Visible],
+        )));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn not_waiter_satisfies_when_the_positive_condition_does_not_hold() {
+        let (tree, _) = setup();
+        // "Ghost" matches nothing → to_be_visible pends → not(visible)
+        // holds right now, with no node to hand back.
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Ghost"),
+            vec![Check::Visible],
+        )));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("absence satisfies the negated visibility, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_waiter_flips_when_the_world_flips() {
+        let fixture = Fixture::buttons();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Visible],
+        )));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        // The app removes Save: the next event satisfies the negation.
+        tree.apply_update(fixture.remove_save_update());
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("the removal satisfies not(visible), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_hidden_on_an_absent_node_keeps_waiting() {
+        // Absent IS hidden, so not(hidden) cannot hold yet: the wrapper
+        // inverts the inner `Satisfied(None)` into a pending wait.
+        let tree = TreeService::new();
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Ghost"),
+            vec![Check::Hidden],
+        )));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn not_waiter_keeps_strict_mode_failing() {
+        let (mut tree, f) = setup();
+        let mut b2 = accesskit::Node::new(Role::Button);
+        b2.set_label("Save");
+        b2.set_bounds(accesskit::Rect {
+            x0: 200.0,
+            y0: 16.0,
+            x1: 320.0,
+            y1: 48.0,
+        });
+        let mut group = accesskit::Node::new(Role::Group);
+        group.set_children([
+            f.save_button,
+            f.cancel_button,
+            f.welcome_label,
+            f.email_input,
+            f.hidden_button,
+            f.disabled_button,
+            NodeId(9),
+        ]);
+        tree.apply_update(accesskit::TreeUpdate {
+            nodes: vec![(NodeId(9), b2), (NodeId(1), group)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        });
+        // Strict mode is a resolution failure, not a state mismatch: the
+        // negation must not launder it into a pass (Playwright parity).
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Visible],
+        )));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Failed(failure) => assert_eq!(failure.check, "strict mode"),
+            other => panic!("strict violation must fail under not(), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_waiter_keeps_the_fail_fast_checked_rule() {
+        let (tree, _) = setup();
+        // A plain button can never expose a checked state: not(checked)
+        // cannot pass either — the world cannot change it (the M20 rule).
+        let mut waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Checked(accesskit::Toggled::True)],
+        )));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Failed(failure) => {
+                assert!(failure.reason.contains("no checked state"), "{failure:?}");
+            }
+            other => panic!("the non-checkable role must fail fast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn not_count_satisfies_while_the_count_differs() {
+        let (mut tree, f) = setup();
+        let mut waiter =
+            NotWaiter::new(Box::new(CountWaiter::new(Selector::role(Role::Button), 5)));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("4 buttons is not 5, the negation holds, got {other:?}"),
+        }
+        // The fifth button lands: the count matches and the negation flips
+        // to pending.
+        tree.apply_update(f.add_button_update("Export"));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn not_waiter_describes_the_inversion() {
+        let waiter = NotWaiter::new(Box::new(ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Visible],
+        )));
+        assert_eq!(
+            waiter.describe(),
+            "not (getByRole(Button, \"Save\" (fuzzy)): visible)"
+        );
+    }
+
+    #[test]
+    fn not_waiter_is_debuggable_through_the_inner_description() {
+        let waiter = NotWaiter::new(Box::new(CountWaiter::new(Selector::role(Role::Button), 5)));
+        let rendered = format!("{waiter:?}");
+        assert!(rendered.contains("count 5"), "{rendered}");
     }
 }
