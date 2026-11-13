@@ -330,3 +330,11 @@ p95_us = 500
 notes = "the M25 count comparator's steady-state cost on the button fixture: the same non-strict resolve_all walk the exact count rides plus the one-sided CountMatch comparison through the session's zero-polling wait — the M22 record's reserved vocabulary widening, completing on the initial evaluation (4 > 3 holds), riding the resolve_cached_index row"
 m0_measurable = true
 sample = "count_compare"
+[[budget]]
+id = "locator_all"
+name = "Kit: one all() enumeration (resolve_all set read + per-item pinned resolves)"
+p50_us = 400
+p95_us = 2000
+notes = "the m22/m25 records' open kit gap closed: one non-strict resolve_all walk (the snapshot set read, the count_assert row's cost) plus one index-pinned strict resolve per visited item (the .nth(i) pin, each with its own pump) — four visits on the button fixture; a snapshot read with no waiting, so the per-item cost rides the resolve_cached_index row"
+m0_measurable = true
+sample = "locator_all"
