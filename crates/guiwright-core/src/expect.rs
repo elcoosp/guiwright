@@ -5,6 +5,11 @@
 //! owns the deadline and feeds it events. This keeps assertions event-driven:
 //! they complete exactly when the asserted condition becomes true, or time
 //! out with the last tree summary embedded in the error.
+//!
+//! The entry sugar lives in [`crate::test_util::expect`] — the
+//! core-internal/test-support door (the product surface is the session's
+//! `ExpectBuilder`, which drives these waiters through the driver); core's
+//! own waiter tests build it the same way.
 
 use std::fmt::Write;
 use std::time::Duration;
@@ -20,27 +25,18 @@ use crate::wait::{
 /// Default assertion timeout (Playwright default: 5 s).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Entry point: `expect(locator).to_be_visible()` — a builder whose
-/// `to_*` methods evaluate now (`Expectation::check_now(&tree)`) or
-/// retry-until-timeout through [`crate::wait`].
-pub fn expect(locator: Selector) -> ExpectBuilder {
-    ExpectBuilder {
-        locator,
-        timeout: DEFAULT_TIMEOUT,
-        negated: false,
-    }
-}
-
-/// Builder for retry-until-timeout assertions.
+/// Builder for retry-until-timeout assertions. Constructed through the
+/// test-support door ([`crate::test_util::expect`]) — the fields stay
+/// crate-internal so the only public construction path is that door.
 #[derive(Debug)]
 pub struct ExpectBuilder {
-    locator: Selector,
-    timeout: Duration,
+    pub(crate) locator: Selector,
+    pub(crate) timeout: Duration,
     /// The negation modifier (§16 assertions row, M24): `not().to_*`
     /// inverts the terminal assertion through the [`NotWaiter`]
     /// decorator. Set-once (Playwright's modifier is a property; double
     /// negation is not part of the surface).
-    negated: bool,
+    pub(crate) negated: bool,
 }
 
 impl ExpectBuilder {
@@ -274,7 +270,7 @@ impl Expectation {
 mod tests {
     use accesskit::Role;
 
-    use crate::test_util::Fixture;
+    use crate::test_util::{Fixture, expect};
     use crate::tree::TreeService;
 
     use super::*;
