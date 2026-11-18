@@ -253,7 +253,9 @@ TypeScript client. The kit's set reads ride the wire too: `resolveAll()` enumera
 set over any door in document order, rows usable directly as action handles (M30). Beyond the demo above: `snapshot full` / `snapshot under <get-args…>` (typed
 tree dumps, whole or subtree), `screenshot [path]` (window or element PNG evidence),
 `mouse` / `key` / `text` (the gesture surface), `inspect on | off | clear | <get-args…>`,
-`hit <x> <y>` (the hit-test read — what occupies a point, M32),
+`hit <x> <y>` (the hit-test read — what occupies a point, M32, its row carrying the
+node's role/name through the describe read since M37),
+`describe <get-args…>` (one node's identity facts — role, name, value, bounds, M37),
 `events on | off` (pushed tree diffs, frames and an opt-in `tracing` log tail — seq numbers
 expose any gap a slow consumer misses), and video.
 
@@ -279,7 +281,7 @@ match client.request(RequestV1::TreeSnapshot).await? {
 Resolve requests carry selectors and auto-wait over the wire exactly as embedded sessions do
 (`crates/guiwright-driver/tests/remote_session.rs`). The typed `ClientConn` seam mirrors the
 read-and-aim domains: `window_list()` / `window_use()`, `subscribe` / `next_event`,
-`resolve_all()` (M30) and `hit_test()` (M32); the raw `request()` covers the rest.
+`resolve_all()` (M30), `hit_test()` (M32) and `describe()` (M36); the raw `request()` covers the rest.
 
 </details>
 
@@ -383,13 +385,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M33**       | The locator drag: `locator.drag_to(target)` (Playwright parity, the m19 row's named drag item) — both ends auto-wait in one window context, the M7 pacing synthesis, the §13-over-§9 record, one budget row |
 | **M34**       | The locator filter surface: `.has_not(&selector)` + `.locator(&child)` — the §8.1 filter vocabulary completed on the kit (the inverted subtree filter + the descendant chain, pure composition, one budget row) |
 | **M35**       | The REPL read-vocabulary pass: `count`/`all` over the M30 `ResolveAll` domain — the m30 record's named REPL row (reads, not resolve-stores) |
+| **M36**       | The node-describe read over the wire: `Describe` → `Described` (the m32 record's standing gap, closed) — one node's identity facts for a handle the client holds, the Action boundary's generation guard, the kit's `describe()` surface, the TS `describe()`, golden-pinned + e2e |
+| **M37**       | The describe REPL rows: `describe <get-args…>` + the enriched `hit` row (the m32/m36 records' named REPL consumer) — the m36 record's client half as its own pass, reads not resolve-stores, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m35-repl-read-vocabulary.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m37-describe-rows.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
