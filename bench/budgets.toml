@@ -408,3 +408,19 @@ p95_us = 2500
 notes = "the M36 node-describe read over the wire (the m32 record's standing gap, closed): one Describe round-trip over the embedded door — pump, the Action-boundary generation guard, one consumer-tree node read (role Debug name, accessible label, value, bounds), one DescribedV1 row marshalled back; handle-addressed (no scope walk, no selector), so the floor is the hit_test_wire round-trip shape carrying one row instead of a point walk"
 m0_measurable = true
 sample = "node_describe"
+[[budget]]
+id = "identity_assert"
+name = "Kit: one to_have_role() identity assertion (resolve + evaluate)"
+p50_us = 100
+p95_us = 500
+notes = "the M38 identity-assertion family's steady-state cost on the button fixture: one strict resolve (auto-wait index path) plus the check evaluation against the consumer node (the role compare — no label/value string materialization) through the session's zero-polling wait — the assertion completes on the initial evaluation, so this is the floor every to_have_role / to_have_accessible_name / to_have_accessible_description adds on top of a resolve; the same shape as the checked_assert row (a state check rides an existing waiter, no new machinery)"
+m0_measurable = true
+sample = "identity_assert"
+[[budget]]
+id = "describe_all_wire"
+name = "Describe-all set read, in-process door (4 fact rows)"
+p50_us = 900
+p95_us = 4000
+notes = "the M39 describe-all set read over the wire (the m37 record's standing gap, closed): one DescribeAll round-trip over the embedded door — pump, the non-strict resolve_all walk (the resolve_cached_index index path), one consumer-tree node read per row (role Debug name, accessible label, value, bounds), one DescribedAll row-set marshalled back; the resolve_all_wire round-trip shape carrying four fact rows instead of four point rows — one round trip instead of one Describe per row (the m37 batch note's cost, retired)"
+m0_measurable = true
+sample = "describe_all_wire"
