@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use guiwright_proto::schema::{AdapterInfoV1, GwpEvent, RequestV1, ResponseV1};
+use guiwright_proto::client::ClientConn;
+use guiwright_proto::schema::{AdapterInfoV1, EventKindV1, GwpEvent, RequestV1, ResponseV1};
 use guiwright_proto::{GwpError, tcp, uds, ws};
 
 /// A connect target that failed to parse (§5.3 launch-mode URLs): one
@@ -126,6 +127,60 @@ impl Connection {
         match tokio::time::timeout(std::time::Duration::ZERO, self.next_event()).await {
             Ok(event) => event.map(Some),
             Err(_elapsed) => Ok(None),
+        }
+    }
+}
+
+/// The transport dispatcher as a [`ClientConn`] (m43): the REPL's own
+/// connection type joins the client seam, so the seam's domain sugar —
+/// the m42 `wait_for` today — lands on every transport at once, the same
+/// one-impl-for-every-door rule the four shipped clients ride.
+impl ClientConn for Connection {
+    async fn handshake(&mut self, agent: &str) -> Result<AdapterInfoV1, GwpError> {
+        match self {
+            Connection::Uds(c) => c.handshake(agent).await,
+            Connection::Tcp(c) => c.handshake(agent).await,
+            Connection::Ws(c) => c.handshake(agent).await,
+        }
+    }
+
+    async fn request(&mut self, request: RequestV1) -> Result<ResponseV1, GwpError> {
+        match self {
+            Connection::Uds(c) => c.request(request).await,
+            Connection::Tcp(c) => c.request(request).await,
+            Connection::Ws(c) => c.request(request).await,
+        }
+    }
+
+    async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
+        match self {
+            Connection::Uds(c) => c.next_event().await,
+            Connection::Tcp(c) => c.next_event().await,
+            Connection::Ws(c) => c.next_event().await,
+        }
+    }
+
+    async fn subscribe(&mut self, kinds: &[EventKindV1]) -> Result<(), GwpError> {
+        match self {
+            Connection::Uds(c) => c.subscribe(kinds).await,
+            Connection::Tcp(c) => c.subscribe(kinds).await,
+            Connection::Ws(c) => c.subscribe(kinds).await,
+        }
+    }
+
+    async fn unsubscribe(&mut self) -> Result<(), GwpError> {
+        match self {
+            Connection::Uds(c) => c.unsubscribe().await,
+            Connection::Tcp(c) => c.unsubscribe().await,
+            Connection::Ws(c) => c.unsubscribe().await,
+        }
+    }
+
+    async fn ping(&mut self) -> Result<(), GwpError> {
+        match self {
+            Connection::Uds(c) => c.ping().await,
+            Connection::Tcp(c) => c.ping().await,
+            Connection::Ws(c) => c.ping().await,
         }
     }
 }
