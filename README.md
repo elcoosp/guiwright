@@ -129,7 +129,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | Playwright                                                                    | Guiwright                                                                            | Notes                                                                                                   |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
 | `getByRole` / `getByLabel` / `getByText` / `getByTestId`                      | `get_by_role` / `get_by_label` / `get_by_text` / `get_by_test_id` (+ `get_by_value`) | strict mode on ambiguity; `.first()` / `.nth()` / `.last()` / `.has_text(…)`                            |
-| `click` / `fill` / `hover` / `press` / `check` / `uncheck` / `focus` / `blur` | same names (+ `set_checked`)                                                         | actionability-gated, codegen-recorded (M19)                                                             |
+| `click` / `fill` / `hover` / `press` / `check` / `uncheck` / `focus` / `blur` | same names (+ `set_checked`, **`drag_to`**)                                                           | actionability-gated, codegen-recorded (M19); `drag_to` resolves both ends in one window context and rides the M7 pacing synthesis (M33)                                   |
 | `expect().toBeVisible` / `toHaveText` / `toHaveValue`                         | `to_be_visible` / `to_have_text` / `to_have_value`                                   | complete exactly when the condition turns true                                                          |
 | `expect().toBeChecked`                                                        | `to_be_checked` / `to_be_unchecked` / **`to_be_checked_mixed`**                      | AccessKit's tri-state; mixed is a Guiwright extension (M20)                                             |
 | `expect().toHaveCount` / `count()`                                            | `to_have_count(n)` / `count()`                                                       | the strict-mode escape hatch — waitable in both directions, `count()` a snapshot read (M22)             |
@@ -252,6 +252,7 @@ TypeScript client. The kit's set reads ride the wire too: `resolveAll()` enumera
 set over any door in document order, rows usable directly as action handles (M30). Beyond the demo above: `snapshot full` / `snapshot under <get-args…>` (typed
 tree dumps, whole or subtree), `screenshot [path]` (window or element PNG evidence),
 `mouse` / `key` / `text` (the gesture surface), `inspect on | off | clear | <get-args…>`,
+`hit <x> <y>` (the hit-test read — what occupies a point, M32),
 `events on | off` (pushed tree diffs, frames and an opt-in `tracing` log tail — seq numbers
 expose any gap a slow consumer misses), and video.
 
@@ -376,6 +377,8 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M17**       | Wire `Action` honors `force`/`timeout_ms` — the act-time gate with named stuck checks                                                                                           |
 | **M18 / M23** | The viewer's live mode over any door + mid-session scrubber HTML (`gwtrace/v1 (live)`)                                                                                          |
 | **M19–M31**   | The kit parity stream: `press`/`check`/`focus`/`blur` · tri-state assertions · `wait_for` · `count` + comparators · `.not()` · `all()` · the `held_on` satisfied-state accessor · the editable/read-only pair · the `all_text_contents()` bulk read · the set read over the wire (`ResolveAll` → `resolveAll()`, golden-pinned + e2e) · the `all_values()` form-dump read |
+| **M32**       | The hit-test read over the wire: `HitTest` → `HitTest` (the §8.3 point mechanism as a total public read) — the REPL `hit` command, the kit's `hit_test` surface, the TS `hitTest()`, golden-pinned + e2e |
+| **M33**       | The locator drag: `locator.drag_to(target)` (Playwright parity, the m19 row's named drag item) — both ends auto-wait in one window context, the M7 pacing synthesis, the §13-over-§9 record, one budget row |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
