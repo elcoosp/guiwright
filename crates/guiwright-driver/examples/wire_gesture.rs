@@ -15,8 +15,8 @@
 use guiwright_core::test_util::Fixture;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
-use guiwright_proto::schema::{GestureV1, PointerButtonV1, RequestV1, ResponseV1};
 use guiwright_proto::DuplexClient;
+use guiwright_proto::schema::{GestureV1, PointerButtonV1, RequestV1, ResponseV1};
 
 fn main() {
     let runtime = tokio::runtime::Builder::new_current_thread()
