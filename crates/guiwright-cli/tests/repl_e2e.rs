@@ -528,6 +528,119 @@ async fn repl_read_vocabulary_count_and_all() {
     handle.shutdown();
 }
 
+/// The REPL bulk-read rows (M40 — the m35 record's named follow-up: "a
+/// `texts <get-args…>` row lands when a debugging session asks for it —
+/// one more client-side rendering over the same domain"): `texts` and
+/// `values` read the set's *content* through the M39 `DescribeAll`
+/// domain — the m29/m31 kit readers' REPL half, one round trip instead
+/// of the m35 batch note's one `Describe` per row. Both are reads in the
+/// M35 discipline (no resolve-store), with the kit readers' source
+/// orders: `texts` reads label-first (what the text locators match),
+/// `values` reads value-first (what the form carries) — the fixture's
+/// Email input answers `"Email"` to one and `"ada@example.dev"` to the
+/// other, so the two reads can never silently agree on the wrong datum.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_bulk_read_rows_texts_and_values() {
+    let path = socket_path("repl-bulk-reads.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The source orders on the same set: the Email input carries both a
+    // label and a value, so `texts` answers the label (what the text
+    // locators match, the m29 read) and `values` answers the value (what
+    // the form carries, the m31 read).
+    assert_eq!(
+        rendered(&repl.step("texts role TextInput").await),
+        vec![r#"accesskit#5 "Email""#],
+        "texts reads label-first",
+    );
+    assert_eq!(
+        rendered(&repl.step("values role TextInput").await),
+        vec![r#"accesskit#5 "ada@example.dev""#],
+        "values reads value-first",
+    );
+
+    // The button set walks in document order — hidden and disabled
+    // included (the non-strict set semantics, the m30 rule), each row
+    // carrying the handle form the action vocabulary aims with.
+    let out = rendered(&repl.step("texts role Button").await);
+    assert_eq!(out.len(), 4, "{out:?}");
+    assert_eq!(out[0], r#"accesskit#2 "Save""#, "{out:?}");
+    assert_eq!(out[1], r#"accesskit#3 "Cancel""#, "{out:?}");
+    assert_eq!(out[2], r#"accesskit#6 "Invisible""#, "{out:?}");
+    assert_eq!(out[3], r#"accesskit#7 "Confirm""#, "{out:?}");
+
+    // An empty set is one info line (the read is total, never an error).
+    assert_eq!(
+        rendered(&repl.step("values role CheckBox").await),
+        vec!["no matches"],
+    );
+
+    // A read, not a resolve-store: `last` keeps the node `get` aimed at
+    // (the M35 read rule, unchanged for the bulk rows).
+    let get = repl.step("get role Button Save").await;
+    assert!(ok_line(&get).starts_with("resolved "), "{get:?}");
+    rendered(&repl.step("texts role Button").await);
+    assert!(ok_line(&repl.step("last").await).contains("\"Save\""));
+
+    // The help lists the new rows (the vocabulary is discoverable).
+    let help_text: Vec<String> = rendered(&repl.step("help").await);
+    assert!(
+        help_text.iter().any(|l| l.contains("texts <get-args")),
+        "{help_text:?}"
+    );
+    assert!(
+        help_text.iter().any(|l| l.contains("values <get-args")),
+        "{help_text:?}"
+    );
+
+    handle.shutdown();
+}
+
+/// The bulk-read rows over a set where every input carries both a label
+/// and a value (the M28 extension band): the walk stays 1:1 with the
+/// document order — three inputs, three rows — and the two source orders
+/// disagree on every labelled input, which is the point.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_bulk_read_rows_source_orders_on_labelled_inputs() {
+    let path = socket_path("repl-bulk-reads-labelled.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::with_readonly())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    let texts = rendered(&repl.step("texts role TextInput").await);
+    assert_eq!(
+        texts,
+        vec![
+            r#"accesskit#5 "Email""#,
+            r#"accesskit#12 "Bio""#,
+            r#"accesskit#13 "Serial""#,
+        ],
+        "label-first, document order (5, 12, 13)"
+    );
+    let values = rendered(&repl.step("values role TextInput").await);
+    assert_eq!(
+        values,
+        vec![
+            r#"accesskit#5 "ada@example.dev""#,
+            r#"accesskit#12 "hello""#,
+            r#"accesskit#13 "GW-001""#,
+        ],
+        "value-first, document order (5, 12, 13)"
+    );
+
+    handle.shutdown();
+}
+
 /// The node-describe REPL pass (M37 — the m32/m36 records' named REPL
 /// consumer: "the REPL renders the hit as the handle (`accesskit#2`) +
 /// rect — role/name would ride a node-describe domain"): the `describe`
