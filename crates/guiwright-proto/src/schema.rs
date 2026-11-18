@@ -156,6 +156,30 @@ pub enum RequestV1 {
     /// [`ResponseV1::Described`]. Wire discipline: appended after
     /// `HitTest` (discriminant 18); see [`RequestV1::Video`].
     Describe(DescribeV1),
+    /// Describe-all domain (the §8.2 set read carrying facts, M39 — the
+    /// m37 record's standing gap: "enumerating a set's facts would open
+    /// one `Describe` round trip per row"): the non-strict
+    /// enumeration of a selector's current match set, each row carrying
+    /// the identity facts the [`RequestV1::Describe`] read returns —
+    /// one round trip instead of N. Snapshot semantics: the read never
+    /// waits (hence no `timeout_ms` — an empty set answers with an
+    /// empty list; a client that wants arrivals waits and re-reads, the
+    /// way the kit's snapshot reads compose with `wait_for` and the
+    /// assertions). The connection's window scope narrows the walk
+    /// exactly like [`RequestV1::ResolveAll`]. The reply is
+    /// [`ResponseV1::DescribedAll`]. Wire discipline: appended after
+    /// `Describe` (discriminant 19); see [`RequestV1::Video`].
+    DescribeAll(DescribeAllV1),
+}
+
+/// The describe-all read's request payload (§8.1/§8.2, M39): the
+/// selector the set read walks — the [`RequestV1::ResolveAll`] payload's
+/// exact shape, so every client that can enumerate a set can describe it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DescribeAllV1 {
+    /// The selector whose match set is enumerated (non-strict — the
+    /// whole set, document order; the m30 rule).
+    pub selector: SelectorV1,
 }
 
 /// The node-describe read's request payload (§8.1, M36): the handle plus
@@ -582,6 +606,18 @@ pub enum ResponseV1 {
     /// unknown handles ride the typed `Error` codes, never a partial
     /// row. Append-only wire discipline — see [`RequestV1::Video`].
     Described(DescribedV1),
+    /// Describe-all reply (the §8.2 set read carrying facts, M39): one
+    /// [`DescribedV1`] row per match, document order (the `all()` /
+    /// `count()` ordering) — the resolve-all walk's rows plus the facts
+    /// the [`ResponseV1::Described`] read returns, one round trip
+    /// instead of N. An empty set answers with an empty list — the set
+    /// read is total, never an error. Append-only wire discipline — see
+    /// [`RequestV1::Video`].
+    DescribedAll {
+        /// One row per match, document order (the `all()`/`count()`
+        /// ordering).
+        rows: Vec<DescribedV1>,
+    },
 }
 
 /// One node's identity facts ([`ResponseV1::Described`], M36) — the
@@ -1443,6 +1479,7 @@ mod tests {
             })),
             18
         );
+
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1602,8 +1639,31 @@ mod tests {
         );
         // M32 (the hit-test read): the hit-test reply appends after ResolvedAll.
         assert_eq!(discriminant(&ResponseV1::HitTest { hit: None }), 20);
-        // M36 (the node-describe read): the describe reply appends after HitTest.
-        assert_eq!(discriminant(&ResponseV1::Described(described_shell())), 21);
+    }
+
+    /// The M39 describe-all pins — one statement per milestone keeps the
+    /// append-only sequence a readable table (the m36 pin split's rule).
+    #[test]
+    fn m39_describe_all_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        // M39 (the describe-all read): the domain appends after Describe.
+        assert_eq!(
+            discriminant(&RequestV1::DescribeAll(DescribeAllV1 {
+                selector: SelectorV1::TestId(String::new()),
+            })),
+            19
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::DescribedAll { rows: Vec::new() }),
+            22
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::Described(described_shell())),
+            21
+        );
     }
 
     /// The M36 describe pin's payload — a `DescribedV1` shell whose fields
