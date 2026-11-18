@@ -1426,6 +1426,106 @@ pub fn all_values() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+/// §15.1 `drag_to`: one locator `drag_to` (M33) — the m19 parity
+/// stream's named drag item. The measured window is the whole embedded
+/// operation on the button fixture: two `Attached`-gated auto-wait
+/// resolves in the source locator's window context (the wire Resolve
+/// discipline on both ends), the bounds-center pair, the
+/// [`guiwright_driver::Gesture::Drag`] synthesis under the adapter's
+/// pacing table, and the one rendezvous pump — the `kit_input_click`
+/// gesture shape plus the second gated resolve.
+pub fn drag_to() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::Selector;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("drag_to", adapter);
+    app.wait_for_settle();
+    let target = Selector::role_named(Role::Button, "Cancel");
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let outcome = app
+            .get_by_role(Role::Button, "Save")
+            .drag_to(&target)
+            .expect("bench drag");
+        assert!(outcome.detail.contains("dragged"), "{outcome:?}");
+    }
+    start.elapsed() / ITERATIONS
+}
+
+// --- M32 sample (wire hit-test, §8.3's mechanism over the door) --------------
+
+/// §15.1 `hit_test_wire`: one `HitTest` round-trip over the in-process
+/// door (M32) — the §8.3 "receives events" mechanism as a public read.
+/// The measured window is one point walk at the Save button's center plus
+/// the one marshalled `ResolvedMatchV1` row: pump, `node_at_point` under
+/// the common filter, generation + bounds attached — no waiting (a total
+/// read; the warm-up's miss probe pins the `None` shape, the same round
+/// trip with an empty answer).
+pub fn hit_test_wire() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::schema::{RequestV1, ResponseV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        for (x, y, expected) in [(76.0, 32.0, true), (400.0, 220.0, false)] {
+            let done = client
+                .request(RequestV1::HitTest { x, y })
+                .await
+                .expect("warm hit read");
+            match done {
+                ResponseV1::HitTest { hit } => {
+                    assert_eq!(hit.is_some(), expected, "warm probe shape");
+                }
+                other => unreachable!("expected HitTest, got {other:?}"),
+            }
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .request(RequestV1::HitTest { x: 76.0, y: 32.0 })
+                .await
+                .expect("bench hit read");
+            match done {
+                ResponseV1::HitTest { hit } => {
+                    assert!(hit.is_some(), "the save button sits under the point");
+                }
+                other => unreachable!("expected HitTest, got {other:?}"),
+            }
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
 // --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
 /// §16 v0.4 multi-window, kit side: one `app.window(handle).get_by_role(…)
 /// .resolve()` through the window-handle surface — aim (validated against
