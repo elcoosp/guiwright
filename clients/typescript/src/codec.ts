@@ -85,6 +85,10 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       enc.u32(RequestV1.ResolveAll);
       encodeSelector(enc, req.selector);
       break;
+    case "hit_test":
+      // §8.3 hit-test read (M32): the point only — the read never waits.
+      enc.u32(RequestV1.HitTest).f64(req.x).f64(req.y);
+      break;
     case "action":
       enc.u32(RequestV1.Action);
       encodeNodeKey(enc, req.node);
@@ -547,15 +551,14 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       // document order.
       const n = dec.varint();
       const matches: ResolvedMatch[] = [];
-      for (let i = 0; i < n; i += 1) {
-        const node = decodeNodeKey(dec);
-        const generation = dec.u32();
-        const rect = dec.optionTag()
-          ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
-          : null;
-        matches.push({ node, generation, rect });
-      }
+      for (let i = 0; i < n; i += 1) matches.push(decodeResolvedMatch(dec));
       return { kind: "resolved_all", matches };
+    }
+    case 20: {
+      // §8.3 hit-test reply (M32): the node under the point as one
+      // ResolvedMatch row, null on a miss (the read is total).
+      const hit = dec.optionTag() ? decodeResolvedMatch(dec) : null;
+      return { kind: "hit_test", hit };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
@@ -629,6 +632,18 @@ function decodeNodeKey(dec: Decoder): NodeKey {
     default:
       throw new Error(`unknown NodeKey variant ${variant}`);
   }
+}
+
+/** §8.2 set read row (M30) / §8.3 hit row (M32): one match of a
+ * `ResolveAll` — or the node under a `HitTest` point — the same facts
+ * `Resolved` carries, usable directly as an `action` node. */
+function decodeResolvedMatch(dec: Decoder): ResolvedMatch {
+  const node = decodeNodeKey(dec);
+  const generation = dec.u32();
+  const rect = dec.optionTag()
+    ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
+    : null;
+  return { node, generation, rect };
 }
 
 function decodeSnapshotNode(dec: Decoder): SnapshotNodeV1 {
