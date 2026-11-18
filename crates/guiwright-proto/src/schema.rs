@@ -1479,7 +1479,6 @@ mod tests {
             })),
             18
         );
-
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1660,10 +1659,7 @@ mod tests {
             discriminant(&ResponseV1::DescribedAll { rows: Vec::new() }),
             22
         );
-        assert_eq!(
-            discriminant(&ResponseV1::Described(described_shell())),
-            21
-        );
+        assert_eq!(discriminant(&ResponseV1::Described(described_shell())), 21);
     }
 
     /// The M36 describe pin's payload — a `DescribedV1` shell whose fields
