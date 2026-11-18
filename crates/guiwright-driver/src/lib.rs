@@ -53,4 +53,6 @@ pub use server::{
     BoxServeFuture, GwpServerHandle, ServerOptions, Transport, spawn_session_server,
     spawn_session_server_with,
 };
-pub use session::{ActionOpts, GestureOutcome, Session, SnapshotNode, TreeDump, WireShot};
+pub use session::{
+    ActionOpts, GestureOutcome, NodeDescription, Session, SnapshotNode, TreeDump, WireShot,
+};
