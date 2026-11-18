@@ -180,6 +180,31 @@ try {
   assert.deepEqual(emptyAll, [], "an empty set answers with an empty list (the m30 rule)");
   console.log("✓ describe-all:", describedAll.length, "fact rows in document order, empty set total");
 
+  // --- bulk reads at set width (M41) ---
+  // The m29/m31 kit readers over any door: `allTextContents` rides the
+  // describe-all round trip label-first (the source order the text
+  // locators match), `allValues` value-first (what the form carries).
+  // The demo fixture's Email input carries both, so the two reads
+  // disagree on it — the distinction the m31 record pinned embedded,
+  // now cross-language.
+  const bulkTexts = await client.allTextContents({ kind: "role", role: "Button", name: null });
+  assert.deepEqual(
+    bulkTexts,
+    ["Save", "Cancel", "Invisible", "Confirm"],
+    "the full 4-button walk, document order, label-first",
+  );
+  const inputTexts = await client.allTextContents({ kind: "role", role: "TextInput", name: null });
+  assert.deepEqual(inputTexts, ["Email"], "texts reads the label (the m29 source order)");
+  const inputValues = await client.allValues({ kind: "role", role: "TextInput", name: null });
+  assert.deepEqual(
+    inputValues,
+    ["ada@example.dev"],
+    "values reads the value first (the m31 source order)",
+  );
+  const ghostRead = await client.allTextContents({ kind: "test_id", id: "ghost" });
+  assert.deepEqual(ghostRead, [], "an empty set answers with an empty list (the m30 rule)");
+  console.log("✓ bulk reads:", bulkTexts.length, "text rows, the Email input split across the two source orders, empty set total");
+
   // --- act (§8.4) ---
   const done = await client.action(resolved.node, resolved.generation, { kind: "click" });
   assert.equal(done.detail, "clicked");
