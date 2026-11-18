@@ -1,6 +1,6 @@
 # Guiwright — Technical Architecture
 
-**Status:** living design doc — the original v0.1 draft, amended through milestone 39 (records: `docs/m2-*.md` … `docs/m39-*.md`); the §16 parity map and §7 transport list track what shipped
+**Status:** living design doc — the original v0.1 draft, amended through milestone 41 (records: `docs/m2-*.md` … `docs/m41-*.md`); the §16 parity map and §7 transport list track what shipped
 **Date:** 2026-11-06 (drafted), 2026-11-18 (last amended)
 **Scope:** a Playwright-grade test & automation driver for Rust GUI frameworks — GPUI, Xilem/Masonry, Floem, Iced, egui, Slint, Freya
 **Evidence base:** shallow clones of `zed`, `linebender/xilem`, `lapce/floem`, `iced-rs/iced`, `emilk/egui`, `slint-ui/slint`, `marc2332/freya`, `AccessKit/accesskit`, `rerun-io/kittest` (HEADs of 2026-11-03..06; versions and file paths cited inline). Paths are relative to each repo root.
@@ -591,10 +591,10 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Multi-window / tabs | targets per window (all frameworks support multi-window; freya-testing single-window initially) | M6 |
 | Headless CI | §11 | MVP |
 | Error context (call log, DOM snapshot on failure) | error embeds tree snapshot + trace link | MVP |
-| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under, M14 log kind), M32 (`hit` — the m32 record), M35 (`count`/`all` — the m30 record's read-vocabulary pass), M37 (`describe` + the enriched `hit` row — the m36 record's client half), M39 (the enriched `all` rows — the m37 record's REPL half of the set-facts read) |
+| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under, M14 log kind), M32 (`hit` — the m32 record), M35 (`count`/`all` — the m30 record's read-vocabulary pass), M37 (`describe` + the enriched `hit` row — the m36 record's client half), M39 (the enriched `all` rows — the m37 record's REPL half of the set-facts read), M40 (`texts`/`values` — the m35 record's REPL half of the m29/m31 content reads) |
 | Live event stream (server-push) | §7 event channel: `Subscribe { On | Off }`, events ride `ResponseV1::Event`; the `Log` kind rides the per-session `tracing` tap | M12 (logs M14) |
 | Component testing | embedded mode = widget-level (Simulator/RenderRoot/harness) | MVP |
-| Other-language clients | GWP over TCP/UDS/WS + the in-process embedded door; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust); M16 (embedded door + public `Transport` seam); M30 (the set read over the wire: `resolveAll()` + golden vectors); M32 (the point read over the wire: `hitTest()` + golden vectors); M36 (the node-describe read over the wire: `describe()` + golden vectors); M39 (the set read carrying facts over the wire: `describeAll()` + golden vectors) |
+| Other-language clients | GWP over TCP/UDS/WS + the in-process embedded door; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust); M16 (embedded door + public `Transport` seam); M30 (the set read over the wire: `resolveAll()` + golden vectors); M32 (the point read over the wire: `hitTest()` + golden vectors); M36 (the node-describe read over the wire: `describe()` + golden vectors); M39 (the set read carrying facts over the wire: `describeAll()` + golden vectors); M41 (the kit content reads over any door: `allTextContents()` / `allValues()` derived client-side from the M39 round trip, no protocol change) |
 
 ---
 
