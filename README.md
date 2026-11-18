@@ -139,6 +139,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | `locator.waitFor(state)`                                                      | `wait_for(state)`                                                                    | `attached` / `visible` / `hidden` / `stable` (M21)                                                      |
 | `locator.all()`                                                               | `all(\|item\| …)`                                                                    | document order, each match an nth-pinned locator handed to the visitor — the borrow-and-act shape (M26) |
 | `locator.allTextContents()`                                                   | `all_text_contents()`                                                                | one snapshot read per set: document order, the same text the text locators match (M29)                  |
+| — (form-dump read)                                                            | `all_values()`                                                                       | the same walk, value first — what the form carries, label fallback (M31 extension)                      |
 | `page.screenshot` / `locator.screenshot`                                      | `app.screenshot` / `locator.screenshot`                                              | one render pass, element crops cut by resolved bounds — never re-render                                 |
 | `mouse` / `keyboard`                                                          | GWP `Gesture` domain; TS `mouse` / `keyboard`                                        | click / drag / wheel / key / type, driver-synthesized from the adapter's pacing table (M7)              |
 
@@ -247,7 +248,8 @@ app.get_by_role(Role::Button, "Save").click();
 ```
 
 Every command is a GWP request — the same conversation works over TCP, WebSocket, and from the
-TypeScript client. Beyond the demo above: `snapshot full` / `snapshot under <get-args…>` (typed
+TypeScript client. The kit's set reads ride the wire too: `resolveAll()` enumerates the match
+set over any door in document order, rows usable directly as action handles (M30). Beyond the demo above: `snapshot full` / `snapshot under <get-args…>` (typed
 tree dumps, whole or subtree), `screenshot [path]` (window or element PNG evidence),
 `mouse` / `key` / `text` (the gesture surface), `inspect on | off | clear | <get-args…>`,
 `events on | off` (pushed tree diffs, frames and an opt-in `tracing` log tail — seq numbers
@@ -373,14 +375,14 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M15–M16**   | The WebSocket and in-process duplex doors; the `Transport` seam for custom listeners                                                                                            |
 | **M17**       | Wire `Action` honors `force`/`timeout_ms` — the act-time gate with named stuck checks                                                                                           |
 | **M18 / M23** | The viewer's live mode over any door + mid-session scrubber HTML (`gwtrace/v1 (live)`)                                                                                          |
-| **M19–M29**   | The kit parity stream: `press`/`check`/`focus`/`blur` · tri-state assertions · `wait_for` · `count` + comparators · `.not()` · `all()` · the `held_on` satisfied-state accessor · the editable/read-only pair · the `all_text_contents()` bulk read |
+| **M19–M31**   | The kit parity stream: `press`/`check`/`focus`/`blur` · tri-state assertions · `wait_for` · `count` + comparators · `.not()` · `all()` · the `held_on` satisfied-state accessor · the editable/read-only pair · the `all_text_contents()` bulk read · the set read over the wire (`ResolveAll` → `resolveAll()`, golden-pinned + e2e) · the `all_values()` form-dump read |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m29-bulk-text-reads.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m31-all-values.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
