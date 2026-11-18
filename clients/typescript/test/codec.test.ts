@@ -60,6 +60,15 @@ test("golden manifest is the expected shape", () => {
     golden.responses.some((v: any) => v.name === "resolved_all"),
     "the M30 resolve-all reply is pinned",
   );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "hit_test_save_center"),
+    "the M32 hit-test request is pinned",
+  );
+  assert.ok(
+    golden.responses.some((v: any) => v.name === "hit_test_hit") &&
+      golden.responses.some((v: any) => v.name === "hit_test_miss"),
+    "the M32 hit-test reply (hit + miss) is pinned",
+  );
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -194,6 +203,7 @@ test("requests encode byte-identical to the Rust wire", () => {
       kind: "resolve_all",
       selector: { kind: "role", role: "Button", name: null },
     }),
+    hit_test_save_center: () => ({ kind: "hit_test", x: 76.0, y: 32.0 }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -270,7 +280,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-8), [
+  assert.deepEqual(byName(requests).slice(-9), [
     "Bye",
     "Video",
     "Window",
@@ -279,6 +289,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "Snapshot",
     "Subscribe",
     "ResolveAll",
+    "HitTest",
   ]);
   assert.deepEqual(
     Object.values(RequestV1),
@@ -286,7 +297,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-9), [
+  assert.deepEqual(byName(responses).slice(-10), [
     "VideoFile",
     "Windows",
     "WindowUsed",
@@ -296,6 +307,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "Event",
     "Subscribed",
     "ResolvedAll",
+    "HitTest",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
