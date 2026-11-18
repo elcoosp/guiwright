@@ -15,10 +15,10 @@
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GestureV1, InputEventV1,
-    InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResolvedMatchV1,
-    ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1,
-    TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
+    GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
+    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
+    SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -289,6 +289,23 @@ fn hit_test_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M36 (the node-describe read): the handle request — the dump-row form
+/// a resolve/hit row mints (the same tree/node vocabulary the Action
+/// request takes) plus the generation it was minted at (the Action
+/// boundary's guard).
+fn describe_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "describe_save_handle",
+        RequestV1::Describe(DescribeV1 {
+            node: NodeKeyV1::AccessKit {
+                tree: [0x01; 16],
+                node: 2,
+            },
+            generation: 0,
+        }),
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -297,7 +314,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(service_requests())
         .chain(multi_window_gesture_requests())
         .chain(resolve_all_requests())
-        .chain(hit_test_requests());
+        .chain(hit_test_requests())
+        .chain(describe_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -474,6 +492,35 @@ fn hit_test_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
             }),
         ),
     ]
+}
+
+/// M36 (the node-describe read): the identity-facts reply — the dump
+/// row's facts, one node instead of a walk; the handle echoes the
+/// request's (the dump-row rule).
+fn describe_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "described_save_button",
+        ResponseV1::Described(DescribedV1 {
+            node: NodeKeyV1::AccessKit {
+                tree: [0x01; 16],
+                node: 2,
+            },
+            generation: 0,
+            role: "Button".into(),
+            name: Some("Save".into()),
+            value: None,
+            bounds: Some([16.0, 16.0, 136.0, 48.0]),
+        }),
+        serde_json::json!({
+            "kind": "described",
+            "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 2},
+            "generation": 0,
+            "role": "Button",
+            "name": "Save",
+            "value": null,
+            "bounds": [16.0, 16.0, 136.0, 48.0],
+        }),
+    )]
 }
 
 /// Clock / mock / codegen / error service responses.
@@ -682,6 +729,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .into_iter()
         .chain(resolve_all_responses())
         .chain(hit_test_responses())
+        .chain(describe_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
