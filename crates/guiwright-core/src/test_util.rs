@@ -48,6 +48,10 @@ pub struct Fixture {
     /// rule as the checkbox trio applies to the base.
     pub editable_input: Option<NodeId>,
     pub readonly_input: Option<NodeId>,
+    /// The described button (§8 check vocabulary, M38) — `Some` only for
+    /// [`Fixture::with_description`]; the same byte-stability rule as the
+    /// checkbox trio applies to the base.
+    pub described_button: Option<NodeId>,
     pub screen_size: (f64, f64),
 }
 
@@ -84,6 +88,7 @@ impl Fixture {
             mixed_checkbox: None,
             editable_input: None,
             readonly_input: None,
+            described_button: None,
             screen_size: (480.0, 240.0),
         }
     }
@@ -133,6 +138,28 @@ impl Fixture {
         }
     }
 
+    /// The described-node fixture (§8 check vocabulary, M38): the
+    /// `buttons()` base plus one button carrying an accessible
+    /// description under the group —
+    ///
+    /// ```text
+    /// group (1)
+    /// ├── … the six buttons()/label/input nodes …
+    /// └── button "Install" (14, description="Installs the latest build")
+    /// ```
+    ///
+    /// `NodeId(8)` stays reserved for [`Fixture::add_button_update`],
+    /// `NodeId(9..=11)` for [`Fixture::with_checkboxes`] and
+    /// `NodeId(12..=13)` for [`Fixture::with_readonly`]; this fixture
+    /// takes `NodeId(14)` so every constructor stays independent.
+    pub fn with_description() -> Self {
+        Self {
+            expected_nodes: 9,
+            described_button: Some(NodeId(14)),
+            ..Self::buttons()
+        }
+    }
+
     fn node(role: Role, name: Option<&str>) -> Node {
         let mut n = Node::new(role);
         if let Some(name) = name {
@@ -146,6 +173,28 @@ impl Fixture {
         let mut n = Self::node(Role::CheckBox, Some(name));
         n.set_toggled(toggled);
         n
+    }
+
+    /// The described button row of the extension band (`with_description`,
+    /// M38) — `initial_update`'s extension helper, the `input_pair` shape:
+    /// bounded, labeled, description-stamped. `first_extra` indexes the
+    /// band rows the earlier extensions already took.
+    fn described_pair(&self, first_extra: usize) -> Vec<(NodeId, Node)> {
+        self.described_button
+            .map(|id| {
+                let mut btn = Self::node(Role::Button, Some("Install"));
+                btn.set_description("Installs the latest build");
+                let y0 = 204.0 + 40.0 * first_extra as f64;
+                btn.set_bounds(Rect {
+                    x0: 16.0,
+                    y0,
+                    x1: 136.0,
+                    y1: y0 + 32.0,
+                });
+                (id, btn)
+            })
+            .into_iter()
+            .collect()
     }
 
     /// One input row of the read-only pair: bounded, labeled, valued,
@@ -233,6 +282,10 @@ impl Fixture {
             children.push(slot);
             inputs.push((slot, node));
         }
+        // The described button rides the same extension band
+        // (`with_description`, M38); the base keeps its 8-node shape.
+        let described = self.described_pair(checkboxes.len() + inputs.len());
+        children.extend(described.iter().map(|(slot, _)| *slot));
         group.set_children(children);
 
         let mut save = Self::node(Role::Button, Some("Save"));
@@ -292,6 +345,7 @@ impl Fixture {
         ];
         nodes.extend(checkboxes);
         nodes.extend(inputs);
+        nodes.extend(described);
         TreeUpdate {
             nodes,
             tree: Some(TreeInfo {
