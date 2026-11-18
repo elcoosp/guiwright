@@ -28,6 +28,11 @@ pub struct Fixture {
     pub checked_checkbox: Option<NodeId>,
     pub unchecked_checkbox: Option<NodeId>,
     pub mixed_checkbox: Option<NodeId>,
+    /// The editable/read-only input pair (§8 check vocabulary, M28) —
+    /// `Some` only for [`Fixture::with_readonly`]; the same byte-stability
+    /// rule as the checkbox trio applies to the base.
+    pub editable_input: Option<NodeId>,
+    pub readonly_input: Option<NodeId>,
     pub screen_size: (f64, f64),
 }
 
@@ -62,6 +67,8 @@ impl Fixture {
             checked_checkbox: None,
             unchecked_checkbox: None,
             mixed_checkbox: None,
+            editable_input: None,
+            readonly_input: None,
             screen_size: (480.0, 240.0),
         }
     }
@@ -89,6 +96,28 @@ impl Fixture {
         }
     }
 
+    /// The editable/read-only fixture (§8 check vocabulary, M28): the
+    /// `buttons()` base plus two text inputs under the group —
+    ///
+    /// ```text
+    /// group (1)
+    /// ├── … the six buttons()/label/input nodes …
+    /// ├── text_input "Bio"    (12, value="hello",  editable)
+    /// └── text_input "Serial" (13, value="GW-001", set_read_only)
+    /// ```
+    ///
+    /// `NodeId(8)` stays reserved for [`Fixture::add_button_update`] and
+    /// `NodeId(9..=11)` for [`Fixture::with_checkboxes`]; this fixture
+    /// takes `NodeId(12..=13)` so every constructor stays independent.
+    pub fn with_readonly() -> Self {
+        Self {
+            expected_nodes: 10,
+            editable_input: Some(NodeId(12)),
+            readonly_input: Some(NodeId(13)),
+            ..Self::buttons()
+        }
+    }
+
     fn node(role: Role, name: Option<&str>) -> Node {
         let mut n = Node::new(role);
         if let Some(name) = name {
@@ -102,6 +131,49 @@ impl Fixture {
         let mut n = Self::node(Role::CheckBox, Some(name));
         n.set_toggled(toggled);
         n
+    }
+
+    /// One input row of the read-only pair: bounded, labeled, valued,
+    /// optionally flagged read-only.
+    fn input_node(name: &str, value: &str, read_only: bool, y0: f64) -> Node {
+        let mut n = Self::node(Role::TextInput, Some(name));
+        n.set_value(value);
+        if read_only {
+            n.set_read_only();
+        }
+        n.set_bounds(Rect {
+            x0: 16.0,
+            y0,
+            x1: 256.0,
+            y1: y0 + 28.0,
+        });
+        n
+    }
+
+    /// The read-only pair's present slots, built for the extension band
+    /// the checkboxes leave open (`first_extra` indexes the band rows the
+    /// checkboxes already took) — `initial_update`'s extension helper.
+    fn input_pair(&self, first_extra: usize) -> Vec<(NodeId, Node)> {
+        [
+            (self.editable_input, "Bio", "hello", false),
+            (self.readonly_input, "Serial", "GW-001", true),
+        ]
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, (slot, name, value, read_only))| {
+            slot.map(|id| {
+                (
+                    id,
+                    Self::input_node(
+                        name,
+                        value,
+                        read_only,
+                        204.0 + 40.0 * (first_extra + i) as f64,
+                    ),
+                )
+            })
+        })
+        .collect()
     }
 
     /// Full initial update carrying the root `TreeInfo` (what egui emits on
@@ -138,6 +210,13 @@ impl Fixture {
                 children.push(id);
                 checkboxes.push((id, node));
             }
+        }
+        // The editable/read-only input pair rides the same extension band
+        // (`with_readonly`, M28); the base keeps its 8-node shape.
+        let mut inputs: Vec<(NodeId, Node)> = Vec::new();
+        for (slot, node) in self.input_pair(checkboxes.len()) {
+            children.push(slot);
+            inputs.push((slot, node));
         }
         group.set_children(children);
 
@@ -197,6 +276,7 @@ impl Fixture {
             (self.disabled_button, disabled),
         ];
         nodes.extend(checkboxes);
+        nodes.extend(inputs);
         TreeUpdate {
             nodes,
             tree: Some(TreeInfo {
@@ -230,6 +310,27 @@ impl Fixture {
         });
         Some(TreeUpdate {
             nodes: vec![(node, box_node)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        })
+    }
+
+    /// Incremental update: re-state one input of the read-only pair with
+    /// a new read-only flag (the editable-check flip mid-wait, M28).
+    /// Fixture-scoped: `None` for ids outside the pair, so callers decide
+    /// how to fail.
+    pub fn input_readonly_update(&self, node: NodeId, read_only: bool) -> Option<TreeUpdate> {
+        let (name, value, y0) = [
+            (self.editable_input, "Bio", "hello", 204.0),
+            (self.readonly_input, "Serial", "GW-001", 244.0),
+        ]
+        .into_iter()
+        .find(|(slot, _, _, _)| *slot == Some(node))
+        .map(|(_, name, value, y0)| (name, value, y0))?;
+        let input = Self::input_node(name, value, read_only, y0);
+        Some(TreeUpdate {
+            nodes: vec![(node, input)],
             tree: None,
             tree_id: TreeId::ROOT,
             focus: NodeId(0),
