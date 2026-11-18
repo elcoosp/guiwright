@@ -11,6 +11,8 @@
 //! * [`conn`] — the transport-agnostic connection state machine all doors share
 //! * [`client`] — the client-side connection seam: one [`ClientConn`]
 //!   trait every shipped client implements (M18), the mirror of [`Handler`]
+//! * [`wait`] — the client-side wait (m42): the `waitFor(state)` row-set
+//!   evaluator behind [`ClientConn::wait_for`], no wire change
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -28,6 +30,7 @@ pub mod schema;
 pub mod schemadoc;
 pub mod tcp;
 pub mod uds;
+pub mod wait;
 pub mod ws;
 
 pub use client::ClientConn;
@@ -40,6 +43,7 @@ pub use schema::{
 };
 pub use tcp::Client as TcpClient;
 pub use uds::Client;
+pub use wait::WaitState;
 pub use ws::WsClient;
 
 use thiserror::Error;
@@ -62,4 +66,17 @@ pub enum GwpError {
     Rejected { code: ErrorCode, message: String },
     #[error("protocol misuse: {0}")]
     Protocol(String),
+    /// The client-side wait expired (m42): the state it waited for, the
+    /// locator, the budget it had and the last evaluation — the kit's
+    /// "failures name names" discipline (§8.3) carried over the wire.
+    /// Never a wire answer: the timeout is decided client-side (the wire
+    /// `ErrorCode::Timeout` stays the driver's resolve/action answer), so
+    /// the vocabulary is a client-side addition, not a schema change.
+    #[error("wait {state} timed out after {timeout_ms} ms — {selector} ({last})")]
+    WaitTimeout {
+        state: &'static str,
+        selector: String,
+        timeout_ms: u64,
+        last: String,
+    },
 }
