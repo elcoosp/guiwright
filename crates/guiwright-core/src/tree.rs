@@ -311,6 +311,21 @@ impl TreeService {
             .map(|n| node_key(&n))
     }
 
+    /// Hit-test restricted to a window subtree (the §16 v0.4 scoping rule
+    /// every resolve path runs, M32): the point resolves against the whole
+    /// tree, then the answer is kept only when it lives inside `scope` —
+    /// a `None` scope sees the whole tree. The read is total: empty space
+    /// (or a hit outside the scope) answers `None`, never an error.
+    /// Hidden nodes cannot answer — `node_at_point` walks under the same
+    /// [`common_filter`] the resolution pipeline applies.
+    pub fn hit_test_scoped(&self, point: Point, scope: Option<&NodeKey>) -> Option<NodeKey> {
+        let key = self.hit_test(point)?;
+        match scope {
+            None => Some(key),
+            Some(root) => self.is_within(&key, root).then_some(key),
+        }
+    }
+
     /// Current focus (tree-local; host focus state is `false` for headless
     /// sessions so this reports the adapter-reported focus).
     pub fn focus(&self) -> Option<NodeKey> {
@@ -954,7 +969,7 @@ impl TreeChangeHandler for DiffCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::Fixture;
+    use crate::test_util::{Fixture, MultiWindowFixture};
 
     fn svc_with(fixture: &Fixture) -> TreeService {
         let mut svc = TreeService::new();
@@ -1026,5 +1041,91 @@ mod tests {
         // Now the real one initializes.
         svc.apply_update(fixture.initial_update());
         assert_eq!(svc.node_count(), fixture.expected_nodes);
+    }
+
+    // --- The hit-test read (§8.3's mechanism as a scoped read, M32) -------
+
+    #[test]
+    fn hit_test_answers_the_node_under_the_point() {
+        let fixture = Fixture::buttons();
+        let svc = svc_with(&fixture);
+        // The Save button's center (16,16 → 136,48, physical px).
+        let key = svc
+            .hit_test_scoped(accesskit::Point::new(76.0, 32.0), None)
+            .expect("the save button sits under the point");
+        let NodeKey::AccessKit { node, .. } = key else {
+            panic!("accesskit fixture keys");
+        };
+        assert_eq!(node, fixture.save_button);
+    }
+
+    #[test]
+    fn hit_test_misses_empty_space_with_none() {
+        let fixture = Fixture::buttons();
+        let svc = svc_with(&fixture);
+        // Past every bounded node: the read is total — None, not an error
+        // (the same totality the set read runs, one point instead of a set).
+        assert!(
+            svc.hit_test_scoped(accesskit::Point::new(400.0, 220.0), None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hit_test_reports_disabled_nodes_no_actionability_gate() {
+        let fixture = Fixture::buttons();
+        let svc = svc_with(&fixture);
+        // Confirm (disabled) still occupies its bounds: the hit-test is a
+        // tree read, not an actionability gate (§8.3) — the check
+        // vocabulary decides actionability on top of what is there.
+        let key = svc
+            .hit_test_scoped(accesskit::Point::new(76.0, 180.0), None)
+            .expect("the disabled button occupies space");
+        let NodeKey::AccessKit { node, .. } = key else {
+            panic!("accesskit fixture keys");
+        };
+        assert_eq!(node, fixture.disabled_button);
+    }
+
+    #[test]
+    fn scoped_hit_test_only_sees_the_scope_subtree() {
+        // Two windows, one Save button per window (Editor at 16,16,
+        // Preview at 12,416): the same point inside Editor's subtree
+        // answers Editor's button unscoped, None under the Preview scope,
+        // and Preview's own button under it — the §16 v0.4 scoping rule
+        // every resolve path runs.
+        let fx = MultiWindowFixture::default();
+        let mut svc = TreeService::new();
+        for update in fx.initial_updates() {
+            svc.apply_update(update);
+        }
+        let preview = svc
+            .windows()
+            .into_iter()
+            .find(|w| w.title.as_deref() == Some("Preview"))
+            .expect("preview window");
+
+        let hit = svc
+            .hit_test_scoped(accesskit::Point::new(76.0, 32.0), None)
+            .expect("unscoped hit");
+        let NodeKey::AccessKit { tree, node } = hit else {
+            panic!("accesskit fixture keys");
+        };
+        assert_eq!(tree, fx.w1, "the point lands in the Editor subtree");
+        assert_eq!(node, accesskit::NodeId(2), "Editor's Save button");
+
+        assert!(
+            svc.hit_test_scoped(accesskit::Point::new(76.0, 32.0), Some(&preview.root))
+                .is_none(),
+            "a hit outside the aimed window reads None"
+        );
+        let scoped = svc
+            .hit_test_scoped(accesskit::Point::new(72.0, 432.0), Some(&preview.root))
+            .expect("Preview's own Save answers under the scope");
+        let NodeKey::AccessKit { tree, node } = scoped else {
+            panic!("accesskit fixture keys");
+        };
+        assert_eq!(tree, fx.w2, "the Preview subtree");
+        assert_eq!(node, accesskit::NodeId(2), "Preview's Save button");
     }
 }
