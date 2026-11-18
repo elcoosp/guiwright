@@ -23,8 +23,8 @@ use std::future::Future;
 
 use crate::GwpError;
 use crate::schema::{
-    AdapterInfoV1, EventKindV1, GwpEvent, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1,
-    WindowInfoV1, WindowV1,
+    AdapterInfoV1, DescribeV1, DescribedV1, EventKindV1, GwpEvent, RequestV1, ResolvedMatchV1,
+    ResponseV1, SelectorV1, WindowInfoV1, WindowV1,
 };
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
@@ -144,6 +144,33 @@ pub trait ClientConn: Send + 'static {
             match self.request(RequestV1::HitTest { x, y }).await? {
                 ResponseV1::HitTest { hit } => Ok(hit),
                 other => Err(GwpError::Protocol(format!("HitTest answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The node-describe read over the wire (M36 — the m32 record's
+    /// standing gap): one node's identity facts — role, accessible name,
+    /// value, bounds — for a handle the client already holds (a
+    /// [`Self::resolve_all`] row, a hit row, a dump row: the dump-row
+    /// rule, M11). Handle-addressed, so no window scope applies (the
+    /// [`RequestV1::Action`] boundary); the generation guard rejects a
+    /// recycled id (`ErrorCode::StaleGeneration`) and a dead one
+    /// (`ErrorCode::UnknownNode`) as the typed `Error` — the same
+    /// honesty an [`RequestV1::Action`] on the row would meet.
+    fn describe(
+        &mut self,
+        node: crate::schema::NodeKeyV1,
+        generation: u32,
+    ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::Describe(DescribeV1 { node, generation }))
+                .await?
+            {
+                ResponseV1::Described(described) => Ok(described),
+                other => Err(GwpError::Protocol(format!(
+                    "Describe answered by {other:?}"
+                ))),
             }
         }
     }
