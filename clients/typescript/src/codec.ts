@@ -89,6 +89,13 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       // §8.3 hit-test read (M32): the point only — the read never waits.
       enc.u32(RequestV1.HitTest).f64(req.x).f64(req.y);
       break;
+    case "describe":
+      // §8.1 node-describe read (M36): the dump-row handle plus the
+      // generation it was minted at (the Action boundary's guard).
+      enc.u32(RequestV1.Describe);
+      encodeNodeKey(enc, req.node);
+      enc.u32(req.generation);
+      break;
     case "action":
       enc.u32(RequestV1.Action);
       encodeNodeKey(enc, req.node);
@@ -559,6 +566,19 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       // ResolvedMatch row, null on a miss (the read is total).
       const hit = dec.optionTag() ? decodeResolvedMatch(dec) : null;
       return { kind: "hit_test", hit };
+    }
+    case 21: {
+      // §8.1 node-describe reply (M36): the handle's identity facts —
+      // the dump row's facts, one node instead of a walk.
+      const node = decodeNodeKey(dec);
+      const generation = dec.u32();
+      const role = dec.str();
+      const name = dec.optionTag() ? dec.str() : null;
+      const value = dec.optionTag() ? dec.str() : null;
+      const bounds = dec.optionTag()
+        ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
+        : null;
+      return { kind: "described", node, generation, role, name, value, bounds };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
