@@ -14,11 +14,11 @@
 use std::collections::VecDeque;
 use std::future::Future;
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 
 use crate::GwpError;
-use crate::framing::{FrameReader, read_frame, write_frame};
+use crate::framing::{FrameBuffer, FrameReader, write_frame};
 use crate::schema::{
     ErrorCode, EventKindV1, EventV1, GwpEvent, GwpRequest, GwpResponse, PROTO_VERSION, RequestV1,
     ResponseV1, SubscribeV1,
@@ -159,46 +159,6 @@ fn try_next_event(events: &mut Option<mpsc::Receiver<GwpEvent>>) -> Option<Event
     rx.try_recv().ok().map(|GwpEvent::V1(event)| event)
 }
 
-/// Client-side receive half (§7 conversation): reads one response frame,
-/// buffering any pushed [`ResponseV1::Event`] frames that interleave —
-/// events flow between responses on a subscribed connection, and a
-/// request reply always eventually follows. Shared by both transports'
-/// `Client::request`.
-pub(crate) async fn read_response_demuxing<R: AsyncRead + Unpin>(
-    stream: &mut R,
-    events: &mut VecDeque<GwpEvent>,
-) -> Result<ResponseV1, GwpError> {
-    loop {
-        let resp: GwpResponse = crate::framing::read_frame(stream).await?;
-        let GwpResponse::V1(inner) = resp;
-        match inner {
-            ResponseV1::Event(event) => events.push_back(GwpEvent::V1(event)),
-            other => return Ok(other),
-        }
-    }
-}
-
-/// Client-side event read (§7, M12): the next pushed event — from the
-/// buffer of events that interleaved earlier responses, or straight off
-/// the wire. A non-event frame here means the server answered a request
-/// the client never made: a protocol violation, never silently swallowed.
-pub(crate) async fn read_next_event<R: AsyncRead + Unpin>(
-    stream: &mut R,
-    events: &mut VecDeque<GwpEvent>,
-) -> Result<GwpEvent, GwpError> {
-    if let Some(event) = events.pop_front() {
-        return Ok(event);
-    }
-    let resp: GwpResponse = crate::framing::read_frame(stream).await?;
-    let GwpResponse::V1(inner) = resp;
-    match inner {
-        ResponseV1::Event(event) => Ok(GwpEvent::V1(event)),
-        other => Err(GwpError::Protocol(format!(
-            "expected a pushed event frame, got a response: {other:?}"
-        ))),
-    }
-}
-
 /// Extract a `Welcome` from a handler response, or synthesize an error.
 fn handshake_response(resp: &ResponseV1) -> GwpResponse {
     match resp {
@@ -220,15 +180,90 @@ fn handshake_response(resp: &ResponseV1) -> GwpResponse {
 #[derive(Debug)]
 pub(crate) struct ClientCore<S> {
     stream: S,
+    /// The buffered read half (§7, M44): bytes consumed from the stream
+    /// but not yet consumed as a frame survive every dropped read future.
+    /// The m42 wait's deadline and the viewer live feed's pacing window
+    /// race `next_event` with `tokio::time::timeout` — a cancel landing
+    /// mid-frame keeps its bytes, so the frame completes on the next call
+    /// instead of desynchronizing the stream (the same contract the
+    /// server loop's `FrameReader` has held since M12).
+    buf: FrameBuffer,
     /// Events that interleaved earlier responses (§7, M12): pushed frames
     /// read while waiting for a request reply are buffered here, not lost.
     events: VecDeque<GwpEvent>,
+}
+
+impl<S: AsyncRead + Unpin> ClientCore<S> {
+    /// Read one complete frame body off the buffered read half.
+    /// Cancellation-safe: dropping the future mid-read keeps the
+    /// consumed bytes in the buffer for the next call — the client-side
+    /// twin of the server loop's `FrameReader::next_frame` contract (the
+    /// m42 record's named conn-level follow-up, M44). The read half only
+    /// asks `AsyncRead` of the stream: the write half stays with the
+    /// conversation impl below.
+    async fn next_frame_body(&mut self) -> Result<Vec<u8>, GwpError> {
+        loop {
+            if let Some(body) = self.buf.try_take_frame()? {
+                return Ok(body);
+            }
+            // Not enough buffered yet: pull one chunk from the stream.
+            let mut chunk = [0u8; 4096];
+            let n = self.stream.read(&mut chunk).await.map_err(GwpError::Io)?;
+            if n == 0 {
+                return Err(GwpError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection closed mid-frame",
+                )));
+            }
+            self.buf.extend(&chunk[..n]);
+        }
+    }
+
+    /// Client-side receive half (§7 conversation): reads one response
+    /// frame, buffering any pushed [`ResponseV1::Event`] frames that
+    /// interleave — events flow between responses on a subscribed
+    /// connection, and a request reply always eventually follows. The
+    /// buffered read half owns the incremental state, so a dropped read
+    /// future keeps its bytes (the deadline races the m42 wait and the
+    /// viewer live feed's pacing window run).
+    async fn read_response_demuxing(&mut self) -> Result<ResponseV1, GwpError> {
+        loop {
+            let body = self.next_frame_body().await?;
+            let resp: GwpResponse = postcard::from_bytes(&body)?;
+            let GwpResponse::V1(inner) = resp;
+            match inner {
+                ResponseV1::Event(event) => self.events.push_back(GwpEvent::V1(event)),
+                other => return Ok(other),
+            }
+        }
+    }
+
+    /// Client-side event read (§7, M12): the next pushed event — from the
+    /// buffer of events that interleaved earlier responses, or straight
+    /// off the buffered read half. A non-event frame here means the
+    /// server answered a request the client never made: a protocol
+    /// violation, never silently swallowed.
+    async fn read_next_event(&mut self) -> Result<GwpEvent, GwpError> {
+        if let Some(event) = self.events.pop_front() {
+            return Ok(event);
+        }
+        let body = self.next_frame_body().await?;
+        let resp: GwpResponse = postcard::from_bytes(&body)?;
+        let GwpResponse::V1(inner) = resp;
+        match inner {
+            ResponseV1::Event(event) => Ok(GwpEvent::V1(event)),
+            other => Err(GwpError::Protocol(format!(
+                "expected a pushed event frame, got a response: {other:?}"
+            ))),
+        }
+    }
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> ClientCore<S> {
     pub(crate) fn new(stream: S) -> Self {
         Self {
             stream,
+            buf: FrameBuffer::new(),
             events: VecDeque::new(),
         }
     }
@@ -258,7 +293,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientCore<S> {
             }),
         )
         .await?;
-        let resp: GwpResponse = read_frame(&mut self.stream).await?;
+        let body = self.next_frame_body().await?;
+        let resp: GwpResponse = postcard::from_bytes(&body)?;
         let GwpResponse::V1(ResponseV1::Welcome {
             proto_version,
             adapter,
@@ -283,7 +319,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientCore<S> {
         // One response, with pushed events buffered for `next_event` (§7,
         // M12): a subscribed connection receives `Event` frames between
         // responses; a connection that never subscribes never sees one.
-        let inner = read_response_demuxing(&mut self.stream, &mut self.events).await?;
+        let inner = self.read_response_demuxing().await?;
         match inner {
             ResponseV1::Error { code, message } => Err(GwpError::Rejected { code, message }),
             other => Ok(other),
@@ -293,9 +329,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientCore<S> {
     /// The next pushed event (§7, M12): from the buffer of events that
     /// interleaved earlier responses, or straight off the wire. Blocks
     /// until the driver publishes one — pair it with the subscriber's
-    /// own pacing, never on a hot path.
+    /// own pacing, never on a hot path. Cancellation-safe since M44:
+    /// a deadline racing this read keeps whatever the read consumed.
     pub(crate) async fn next_event(&mut self) -> Result<GwpEvent, GwpError> {
-        read_next_event(&mut self.stream, &mut self.events).await
+        self.read_next_event().await
     }
 
     /// Subscribe this connection to the named event kinds (§7, M12).
@@ -548,6 +585,146 @@ mod tests {
         assert!(
             got_pong,
             "the half-read request was not lost: {first:?} then {second:?}"
+        );
+    }
+
+    /// The scripted Welcome every client-half test handshakes against.
+    fn scripted_welcome() -> GwpResponse {
+        GwpResponse::V1(ResponseV1::Welcome {
+            proto_version: PROTO_VERSION,
+            session_id: "test-session".into(),
+            tree_seq: 1,
+            frame_seq: 2,
+            adapter: AdapterInfoV1 {
+                name: "mock".into(),
+                framework: "fixture".into(),
+                framework_version: "0".into(),
+                caps: CapsV1::default(),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn a_half_read_event_survives_a_spent_deadline() {
+        // The client-side twin of `a_half_read_request_survives_a_concurrent_event`:
+        // the m42 wait's deadline (and the viewer live feed's pacing
+        // window) drops the `next_event` future while a partial event
+        // frame sits half-consumed. The read half must keep the bytes it
+        // already consumed — a buffered client read — so the frame
+        // completes on the next call instead of desynchronizing the
+        // stream (the m42 record's named conn-level follow-up).
+        use tokio::io::AsyncWriteExt;
+        let (mut server, client_side) = duplex(4096);
+        let mut client = ClientCore::new(client_side);
+
+        // Handshake against a scripted peer: the test stages frames at
+        // byte granularity, so no connection loop runs on this side.
+        write_frame(&mut server, &scripted_welcome()).await.unwrap();
+        client.handshake("conn-test").await.unwrap();
+
+        // A TreeChanged event frame, delivered only halfway (mid-body).
+        let event = GwpResponse::V1(ResponseV1::Event(EventV1::TreeChanged { seq: 7 }));
+        let frame = crate::framing::encode_frame(&event).unwrap();
+        let (head, tail) = frame.split_at(frame.len() - 2);
+        server.write_all(head).await.unwrap();
+
+        // The deadline wins — nothing completes the frame in the window.
+        let spent =
+            tokio::time::timeout(std::time::Duration::from_millis(30), client.next_event()).await;
+        assert!(spent.is_err(), "the deadline expires on a half frame");
+
+        // The rest lands, followed by a Pong for the next round trip.
+        server.write_all(tail).await.unwrap();
+        write_frame(&mut server, &GwpResponse::V1(ResponseV1::Pong))
+            .await
+            .unwrap();
+
+        // The half-consumed event completes from the retained bytes...
+        // (bounded: a desynced read half never completes, and the bound
+        // turns that hang into the named failure the suite reports.)
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), client.next_event())
+            .await
+            .expect("the half-read event survived the spent deadline (no desync)");
+        let event = event.expect("the staged event decoded");
+        let GwpEvent::V1(EventV1::TreeChanged { seq: 7 }) = event else {
+            panic!("expected the staged TreeChanged, got {event:?}");
+        };
+        // ...and the conversation stays aligned (a Pong follows, not the
+        // tail bytes misread as a length prefix).
+        let pong = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.request(RequestV1::Ping),
+        )
+        .await
+        .expect("the stream stayed aligned after the spent deadline");
+        let pong = pong.expect("the follow-up round trip decoded");
+        assert_eq!(pong, ResponseV1::Pong);
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_request_read_keeps_the_stream_aligned() {
+        // `request` is raced in practice too (a consumer wrapping the
+        // round trip in its own budget, the wait's entry read): a cancel
+        // landing mid-response-frame must not desync the stream either —
+        // the same buffered client read half, the same contract.
+        use tokio::io::AsyncWriteExt;
+        let (mut server, client_side) = duplex(4096);
+        let mut client = ClientCore::new(client_side);
+        write_frame(&mut server, &scripted_welcome()).await.unwrap();
+        client.handshake("conn-test").await.unwrap();
+
+        // Half a Pong frame — the 3-byte prefix only, mid-body (the
+        // Pong's frame is 6 bytes: prefix + envelope + variant) — then
+        // the deadline wins.
+        let frame = crate::framing::encode_frame(&GwpResponse::V1(ResponseV1::Pong)).unwrap();
+        let (head, tail) = frame.split_at(3);
+        server.write_all(head).await.unwrap();
+        let spent = tokio::time::timeout(
+            std::time::Duration::from_millis(30),
+            client.request(RequestV1::Ping),
+        )
+        .await;
+        assert!(
+            spent.is_err(),
+            "the deadline expires before the reply lands"
+        );
+
+        // The reply completes, followed by a distinct frame: byte order
+        // proves nothing was lost or duplicated.
+        server.write_all(tail).await.unwrap();
+        write_frame(
+            &mut server,
+            &GwpResponse::V1(ResponseV1::TreeSnapshot {
+                tree_seq: 42,
+                node_count: 3,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // The half-read Pong completes from the retained bytes...
+        let pong = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.request(RequestV1::Ping),
+        )
+        .await
+        .expect("the half-read reply survived the spent deadline (no desync)");
+        let pong = pong.expect("the completed reply decoded");
+        assert_eq!(pong, ResponseV1::Pong);
+        // ...and the next frame arrives whole, in order.
+        let snapshot = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.request(RequestV1::Ping),
+        )
+        .await
+        .expect("the following frame arrived whole");
+        let snapshot = snapshot.expect("the following frame decoded");
+        assert_eq!(
+            snapshot,
+            ResponseV1::TreeSnapshot {
+                tree_seq: 42,
+                node_count: 3
+            }
         );
     }
 
