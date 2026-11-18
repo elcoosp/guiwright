@@ -11,15 +11,18 @@
 //! session — a debugging tool must survive its user's mistakes.
 
 use std::fmt::Write;
+use std::time::Duration;
 
 use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
+use guiwright_proto::client::ClientConn;
 use guiwright_proto::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
     EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1,
     RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1,
     TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
 };
+use guiwright_proto::wait::WaitState;
 
 /// One output line of a REPL step.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,6 +240,7 @@ impl Repl {
             "all" => self.all_command(tokens).await,
             "texts" => self.texts_command(tokens).await,
             "values" => self.values_command(tokens).await,
+            "wait" => self.wait_command(tokens).await,
             "expect" => {
                 // The runner's assertion wording over the same resolve
                 // path (M5): like `get`, stores the current node, but
@@ -694,8 +698,7 @@ impl Repl {
                     let mut lines = Vec::with_capacity(matches.len());
                     for match_ in &matches {
                         let row = self.describe_row(&match_.node, match_.generation).await;
-                        let (name, value) =
-                            row.map_or((None, None), |row| (row.name, row.value));
+                        let (name, value) = row.map_or((None, None), |row| (row.name, row.value));
                         let content = if value_first {
                             value.or(name).unwrap_or_default()
                         } else {
@@ -729,6 +732,70 @@ impl Repl {
         {
             Ok(ResponseV1::Described(row)) => Some(row),
             _ => None,
+        }
+    }
+
+    /// `wait <state> <get-args…>` (m43 — the m42 client-side wait's
+    /// interactive half, the m35/m40 one-milestone-per-surface pattern):
+    /// the [`ClientConn::wait_for`] seam driven by the `timeout <ms>`
+    /// budget. The states are the kit's `WaitState` vocabulary —
+    /// attached / visible / hidden / stable — re-evaluated over the
+    /// describe-all rows on every event wake. A positive state answers
+    /// one ok line naming the satisfying row (the action vocabulary's
+    /// handle form); `hidden` is satisfied by absence; a spent budget
+    /// prints the typed timeout (state, locator, last evaluation). A
+    /// read, not a resolve-store: `last` keeps the node `get` aimed at.
+    /// The wait owns the event filter for its duration — an `events on`
+    /// filter is restored afterwards (best effort), so the live-debug
+    /// stream keeps flowing.
+    async fn wait_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let state = match tokens.get(1).map(String::as_str) {
+            Some("attached") => WaitState::Attached,
+            Some("visible") => WaitState::Visible,
+            Some("hidden") => WaitState::Hidden,
+            Some("stable") => WaitState::Stable,
+            _ => return Err("wait needs a state — attached | visible | hidden | stable".into()),
+        };
+        let (selector, _describe) = parse_selector(
+            tokens
+                .get(2..)
+                .ok_or("needs a locator — wait <state> <get-args…>")?,
+        )?;
+        let outcome = self
+            .conn
+            .wait_for(selector, state, Duration::from_millis(self.timeout_ms))
+            .await;
+        // The wait installed its own event filter; restore the `events on`
+        // one (best effort — a broken stream surfaces at the next drain).
+        if self.events_subscribed {
+            let _ = self
+                .conn
+                .subscribe(&[
+                    EventKindV1::TreeChanged,
+                    EventKindV1::FramePresented,
+                    EventKindV1::Log,
+                ])
+                .await;
+        }
+        match outcome {
+            Ok(Some(row)) => {
+                let mut line = format!(
+                    "wait {} — {} {:?} (generation {})",
+                    state.describe(),
+                    describe_node(&row.node),
+                    row.name.as_deref().unwrap_or_default(),
+                    row.generation,
+                );
+                if let Some([x0, y0, x1, y1]) = row.bounds {
+                    let _ = write!(line, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+                }
+                Ok(vec![Line::Ok(line)])
+            }
+            Ok(None) => Ok(vec![Line::Ok(format!(
+                "wait {} — satisfied by absence (no visible rows)",
+                state.describe()
+            ))]),
+            Err(err) => Err(render_gwp_error(&err)),
         }
     }
 
@@ -1271,6 +1338,7 @@ impl Repl {
             "  all <get-args…>             the set rows, one line each (M35 read pass)",
             "  texts <get-args…>           the set's text content, label first (M40)",
             "  values <get-args…>          the set's values, value first (M40)",
+            "  wait <state> <get-args…>    attached|visible|hidden|stable (m43)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
