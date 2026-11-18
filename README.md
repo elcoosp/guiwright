@@ -138,7 +138,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | —                                                                             | `to_have_count_greater_than` / `to_have_count_less_than`                             | one-sided count comparators, compose with `.not()` (M25 extension)                                      |
 | `expect().not()`                                                              | `.not().to_*()`                                                                      | one `NotWaiter` decorator inverts the whole vocabulary; strict-mode violations still fail (M24)         |
 | `expect().toBeEditable`                                                       | `to_be_editable` / **`to_be_readonly`**                                              | the consumer's effective read-only state — flag, role defaults, unsupported roles (M28 extension)       |
-| `locator.waitFor(state)`                                                      | `wait_for(state)`                                                                    | `attached` / `visible` / `hidden` / `stable` (M21)                                                      |
+| `locator.waitFor(state)`                                                      | `wait_for(state)`                                                                    | `attached` / `visible` / `hidden` / `stable` (M21); the TS `waitFor()` carries the same wait over any door (M45)                                                        |
 | `locator.all()`                                                               | `all(\|item\| …)`                                                                    | document order, each match an nth-pinned locator handed to the visitor — the borrow-and-act shape (M26) |
 | `locator.allTextContents()`                                                   | `all_text_contents()`                                                                | one snapshot read per set: document order, the same text the text locators match (M29); the REPL `texts` row (M40) and the TS `allTextContents()` (M41) carry the same read over the describe-all round trip |
 | — (form-dump read)                                                            | `all_values()`                                                                       | the same walk, value first — what the form carries, label fallback (M31 extension); the REPL `values` row (M40) and the TS `allValues()` (M41) carry the flipped source order over any door |
@@ -293,7 +293,9 @@ read-and-aim domains: `window_list()` / `window_use()`, `subscribe` / `next_even
 `resolve_all()` (M30), `hit_test()` (M32), `describe()` (M36) and `describe_all()` (M39) —
 plus the client-side wait, `wait_for(selector, state, timeout)` (m42), composing the event
 channel with describe-all re-reads so a remote suite waits
-attached/visible/hidden/stable like the kit does; the raw `request()` covers the rest.
+attached/visible/hidden/stable like the kit does — the connection's read half is
+cancel-safe (m44), so a deadline racing the wait can never desync the door; the raw
+`request()` covers the rest.
 
 </details>
 
@@ -405,6 +407,8 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M41**       | The TypeScript client's bulk reads: `allTextContents()` + `allValues()` (the m29/m31 kit readers' client half) — derivations over the M39 `describeAll()` round trip, the kit source orders pinned against the blessed vectors + e2e, no wire change |
 | **M42**       | The client-side wait: `ClientConn::wait_for(selector, state, timeout)` (the m21 record's named follow-up, closed) — the event channel + the describe-all re-reads composed client-side, attached/visible/hidden/stable over any door, the typed timeout naming state/locator/last-evaluation, the subscription window dropped on return, one budget row + the wire consumer example, no wire change |
 | **M43**       | The REPL wait row: `wait <state> <get-args…>` (the m42 seam's interactive half, the m35/m40 pattern) — the `timeout <ms>` budget, the satisfying-row / absence / typed-timeout renders, the `events on` filter restored after the wait's subscription window, `Connection` joining the client seam, no wire change |
+| **M44**       | The cancel-safe client read half: `FrameBuffer` + the buffered `ClientCore` reads (the m42 record's named conn-level follow-up) — a deadline dropping a read future mid-frame keeps its consumed bytes, so the m42 wait, the REPL wait row and the live feed's pacing window cannot desync any door; byte-staged hazard tests + the spent-wait consumer example, no wire change |
+| **M45**       | The TypeScript wait row: `client.waitFor(selector, state, timeoutMs)` (the m42/m43 records' named follow-up, the m41 one-milestone-per-surface pattern) — the pure `WaitTracker` evaluator mirroring the Rust seam row-for-row, the typed `GwpWaitTimeout` naming state/locator/last-evaluation, the subscription window dropped on return, the wake-and-re-read e2e against the real Rust server, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
