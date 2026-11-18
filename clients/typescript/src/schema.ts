@@ -48,6 +48,8 @@ export const RequestV1 = {
   HitTest: 17,
   /** §8.1 node-describe read (M36): one node's identity facts, no scope. */
   Describe: 18,
+  /** §8.2 set read carrying facts (M39): the describe-all enumeration, no timeout. */
+  DescribeAll: 19,
 } as const;
 
 export const ClockV1 = {
@@ -151,6 +153,8 @@ export const ResponseV1 = {
   HitTest: 20,
   /** §8.1 node-describe read (M36): the handle's identity facts. */
   Described: 21,
+  /** §8.2 set read carrying facts (M39): one Described row per match. */
+  DescribedAll: 22,
 } as const;
 
 export const ErrorCode = {
@@ -364,7 +368,8 @@ export type GwpRequest =
   | { kind: "subscribe"; cmd: SubscribeCmd }
   | { kind: "resolve_all"; selector: Selector }
   | { kind: "hit_test"; x: number; y: number }
-  | { kind: "describe"; node: NodeKey; generation: number };
+  | { kind: "describe"; node: NodeKey; generation: number }
+  | { kind: "describe_all"; selector: Selector };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -499,4 +504,5 @@ export type GwpResponse =
   | { kind: "subscribed"; kinds: EventKind[] }
   | { kind: "resolved_all"; matches: ResolvedMatch[] }
   | { kind: "hit_test"; hit: ResolvedMatch | null }
-  | ({ kind: "described" } & DescribedNode);
+  | ({ kind: "described" } & DescribedNode)
+  | { kind: "described_all"; rows: DescribedNode[] };
