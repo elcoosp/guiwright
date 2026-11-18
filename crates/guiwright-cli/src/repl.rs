@@ -231,6 +231,8 @@ impl Repl {
             "last" => Ok(vec![Self::render_current(self.current.as_ref())]),
             "get" => self.get_command(tokens).await,
             "hit" => self.hit_command(tokens).await,
+            "count" => self.count_command(tokens).await,
+            "all" => self.all_command(tokens).await,
             "expect" => {
                 // The runner's assertion wording over the same resolve
                 // path (M5): like `get`, stores the current node, but
@@ -442,6 +444,64 @@ impl Repl {
                 Ok(vec![Line::Info(format!("nothing at ({x}, {y})"))])
             }
             other => Err(unexpected("HitTest", &other)),
+        }
+    }
+
+    // --- set reads (the M30 domain's REPL rows, M35) -----------------------
+
+    /// `count <get-args…>` (M35 — the m30 record's named REPL gap): the
+    /// set read as a number — how many nodes match right now, strict
+    /// mode never consulted. A read, not a resolve-store: `last` and the
+    /// actions keep aiming where `get`/`hit` aimed, and an empty set
+    /// answers 0 (the snapshot rule, never an error). One `ResolveAll`
+    /// round trip — the same domain the TypeScript `resolveAll()` speaks.
+    async fn count_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (selector, describe) = parse_selector(
+            tokens
+                .get(1..)
+                .ok_or("`count` needs a locator — role | text | label | testid | value")?,
+        )?;
+        match self.request(RequestV1::ResolveAll { selector }).await? {
+            ResponseV1::ResolvedAll { matches } => Ok(vec![Line::Ok(format!(
+                "{} match{} ({describe})",
+                matches.len(),
+                if matches.len() == 1 { "" } else { "es" }
+            ))]),
+            other => Err(unexpected("ResolvedAll", &other)),
+        }
+    }
+
+    /// `all <get-args…>` (M35): the set read as rows — one line per
+    /// match in document order, the same identity + generation + rect
+    /// rendering `last`/`hit` print, each row directly usable as the
+    /// `Action` handle (the dump-row rule, M11). A read like `count`:
+    /// no current-node store. An empty set is one info line — the read
+    /// is total, never an error.
+    async fn all_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (selector, _) = parse_selector(
+            tokens
+                .get(1..)
+                .ok_or("`all` needs a locator — role | text | label | testid | value")?,
+        )?;
+        match self.request(RequestV1::ResolveAll { selector }).await? {
+            ResponseV1::ResolvedAll { matches } if matches.is_empty() => {
+                Ok(vec![Line::Info("no matches".into())])
+            }
+            ResponseV1::ResolvedAll { matches } => Ok(matches
+                .iter()
+                .map(|row| {
+                    let mut text = format!(
+                        "{} (generation {})",
+                        describe_node(&row.node),
+                        row.generation
+                    );
+                    if let Some([x0, y0, x1, y1]) = row.rect {
+                        let _ = write!(text, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+                    }
+                    Line::Ok(text)
+                })
+                .collect()),
+            other => Err(unexpected("ResolvedAll", &other)),
         }
     }
 
@@ -979,6 +1039,8 @@ impl Repl {
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
             "  hit <x> <y>                 which node occupies the point (M32 hit-test read)",
+            "  count <get-args…>           the set size, strict mode aside (M35 read pass)",
+            "  all <get-args…>             the set rows, one line each (M35 read pass)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
