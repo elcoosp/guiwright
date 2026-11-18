@@ -18,6 +18,7 @@ import { encodeRequest, decodeResponse } from "./codec.ts";
 /** The protocol version this client speaks. */
 export { PROTO_VERSION } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
+import { renderSelector, WaitTracker, type WaitState } from "./wait.ts";
 import {
   type ClockCmd,
   type DescribedNode,
@@ -65,6 +66,35 @@ const ERROR_NAMES: Record<number, string> = {
   7: "Internal",
   8: "UnknownWindow",
 };
+
+/** The buffered pushed-event queue's bound (§15.6 backpressure) — the
+ * Rust side's `EVENT_QUEUE_CAPACITY`: a slow consumer drops the oldest,
+ * seq numbers expose the gap. Named here so the client and the driver
+ * agree on one number (M45 cleanup; the literal used to be inline). */
+export const EVENT_QUEUE_CAPACITY = 64;
+
+/** The client-side wait's typed expiry (M45 — the m42 error shape over
+ * TypeScript): the wait is client-side composition, so this is not a
+ * wire answer — it names the state, the locator (the kit's render
+ * vocabulary) and the last evaluation, the failures-name-names
+ * discipline. */
+export class GwpWaitTimeout extends Error {
+  readonly state: string;
+  readonly selector: string;
+  readonly timeoutMs: number;
+  readonly lastEvaluation: string;
+
+  constructor(state: string, selector: string, timeoutMs: number, lastEvaluation: string) {
+    super(
+      `wait ${state} timed out after ${timeoutMs} ms — ${selector} (${lastEvaluation})`,
+    );
+    this.name = "GwpWaitTimeout";
+    this.state = state;
+    this.selector = selector;
+    this.timeoutMs = timeoutMs;
+    this.lastEvaluation = lastEvaluation;
+  }
+}
 
 export class GwpClient {
   private pending: ((resp: GwpResponse) => void) | null = null;
@@ -164,7 +194,7 @@ export class GwpClient {
           waiter(resp.event);
         } else {
           this.eventQueue.push(resp.event);
-          if (this.eventQueue.length > 64) this.eventQueue.shift();
+          if (this.eventQueue.length > EVENT_QUEUE_CAPACITY) this.eventQueue.shift();
         }
         continue;
       }
@@ -314,6 +344,116 @@ export class GwpClient {
   async allValues(selector: Selector): Promise<string[]> {
     const rows = await this.describeAll(selector);
     return rows.map((row) => row.value ?? row.name ?? "");
+  }
+
+  /** The client-side wait (M45 — the m42 seam's TypeScript row, the
+   * m42/m43 records' named follow-up): Playwright's
+   * `locator.waitFor(state)` for remote TS suites. Composes the §7
+   * event channel with the M39 describe-all re-reads — subscribe to
+   * `tree_changed`/`frame_presented`, evaluate the state against the
+   * rows (the `WaitTracker` rules in `wait.ts`), and re-read on every
+   * wake until the state holds or `timeoutMs` expires. No wire change:
+   * the wait rides existing domains byte-for-byte, the same shape the
+   * Rust `ClientConn::wait_for` rides.
+   *
+   * **Answers.** The positive states resolve with the row that
+   * satisfied them — directly usable as an `action()` node (the
+   * dump-row rule). `hidden` resolves `null`: absence is the satisfying
+   * fact. A spent budget rejects with the typed `GwpWaitTimeout`,
+   * naming the state, the locator and the last evaluation.
+   *
+   * **Subscription ownership.** The wait installs the
+   * `tree_changed` + `frame_presented` filter for its duration and
+   * drops it on return — on resolution it propagates the unsubscribe
+   * result; on expiry it drops the filter best-effort (the Rust
+   * `expire()` shape: the timeout outcome is the answer, a failed
+   * cleanup surfaces at the next conversation). A connection running
+   * its own long-lived subscription (the viewer's live feed) should
+   * not hand the same client to a wait: the one-event-consumer rule
+   * the §7 channel already states. */
+  async waitFor(
+    selector: Selector,
+    state: WaitState,
+    timeoutMs = 5000,
+  ): Promise<DescribedNode | null> {
+    this.assertHandshaked();
+    await this.subscribe(["tree_changed", "frame_presented"]);
+
+    const rendered = renderSelector(selector);
+    const deadline = Date.now() + timeoutMs;
+    const tracker = new WaitTracker(state);
+    // The entry read is a tree-time evaluation; frame wakes re-pin and
+    // — only for `stable` — confirm.
+    let wake: "tree" | "frame" = "tree";
+    try {
+      for (;;) {
+        const rows = await this.describeAll(selector);
+        const answer = wake === "tree" ? tracker.evaluate(rows) : tracker.observeFrame(rows);
+        if (answer.done) {
+          await this.unsubscribe();
+          return answer.row;
+        }
+        // The event wait: a tree wake re-decides the state, a frame
+        // wake may confirm `stable`, `log` records are never wakes, and
+        // a spent budget ends the wait — the expiry path below. The
+        // deadline races the event read the way the Rust wait's
+        // `tokio::select!` does; the m44 read-half contract makes the
+        // cancelled read harmless on the wire (the Rust side's buffered
+        // `ClientCore`; the TS `FrameReader` always buffered).
+        let next: "tree" | "frame" | null = null;
+        while (next === null) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          const event = await this.nextEventWithin(remaining);
+          if (event === null) break;
+          if (event.kind === "tree_changed") next = "tree";
+          if (event.kind === "frame_presented") next = "frame";
+          // `log` records: not a wake — keep waiting.
+        }
+        if (next === null) {
+          // Best-effort cleanup (the Rust `expire()` shape), then the
+          // typed timeout naming state/locator/last-evaluation.
+          await this.unsubscribe().catch(() => undefined);
+          throw new GwpWaitTimeout(state, rendered, timeoutMs, answer.reason);
+        }
+        wake = next;
+      }
+    } catch (err) {
+      // A protocol failure propagates as-is (the m41 fail-fast rule);
+      // the wait's subscription window drops on the way out.
+      await this.unsubscribe().catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** The next pushed event or `null` when `ms` elapses first (the m45
+   * wait's deadline race): the event waiter is disarmed on expiry so
+   * the consumer can keep driving the connection — a later event lands
+   * in the buffer instead of resolving an abandoned promise. */
+  private nextEventWithin(ms: number): Promise<EventV1 | null> {
+    return new Promise<EventV1 | null>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        timer = null;
+        this.eventWaiter = null; // disarm: a spent deadline drops the wait
+        resolve(null);
+      }, ms);
+      this.nextEvent().then(
+        (event) => {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+            resolve(event);
+          }
+        },
+        (err) => {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+            reject(err);
+          }
+        },
+      );
+    });
   }
 
   async action(
