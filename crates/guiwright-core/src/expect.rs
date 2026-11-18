@@ -117,6 +117,41 @@ impl ExpectBuilder {
         self.checks(vec![Check::HasText(value.into())], "value")
     }
 
+    /// `expect(locator).toHaveRole(role)` (§16 assertions row, M38) — the
+    /// identity family's role row: the node's AccessKit role equals the
+    /// wanted role. The mismatch is waitable (a re-render can restate the
+    /// role, Playwright parity); the timeout error names the assertion,
+    /// the locator and the role the last evaluation found. Under
+    /// [`Self::not`] the decorator inverts the waiter (M24).
+    pub fn to_have_role(self, role: accesskit::Role) -> Expectation {
+        self.checks(vec![Check::Role(role)], "role")
+    }
+
+    /// `expect(locator).toHaveAccessibleName(name)` (§16 assertions row,
+    /// M38) — the identity family's name row: the node's accessible name
+    /// (`label()`) matches. Deliberately narrower than
+    /// [`Self::to_have_text`], which covers label-or-value: a text
+    /// input's *value* never satisfies a name assertion. The mismatch is
+    /// waitable; a missing name stays Pending (labels arrive with the
+    /// node's restatement). Under [`Self::not`] the decorator inverts
+    /// the waiter (M24).
+    pub fn to_have_accessible_name(self, name: impl Into<TextMatch>) -> Expectation {
+        self.checks(vec![Check::Name(name.into())], "accessible name")
+    }
+
+    /// `expect(locator).toHaveAccessibleDescription(description)` (§16
+    /// assertions row, M38) — the identity family's description row: the
+    /// node's accessible description (`description()`) matches. The
+    /// mismatch is waitable; a missing description stays Pending
+    /// (descriptions arrive with the node's restatement). Under
+    /// [`Self::not`] the decorator inverts the waiter (M24).
+    pub fn to_have_accessible_description(self, description: impl Into<TextMatch>) -> Expectation {
+        self.checks(
+            vec![Check::Description(description.into())],
+            "accessible description",
+        )
+    }
+
     /// `expect(locator).toHaveCount(count)` — the selector-level assertion
     /// (M22): how many nodes match, strict mode never consulted. The
     /// mismatch is waitable (nodes stream in and out, Playwright parity);
