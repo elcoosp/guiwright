@@ -222,14 +222,6 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
     }
 }
 
-/// Screenshot hook for the CI matrix pass (§10 `render_frame`): binds
-/// `iced_test::screenshot` to the adapter once the backend seam lands.
-pub fn screenshot_unsupported() -> Result<(), AdapterError> {
-    Err(AdapterError::Unsupported(
-        "render_frame (binds iced_test::screenshot in the CI matrix pass)",
-    ))
-}
-
 impl<S: SimulatorSeam> std::fmt::Debug for IcedAdapter<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IcedAdapter")
