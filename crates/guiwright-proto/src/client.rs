@@ -126,6 +126,27 @@ pub trait ClientConn: Send + 'static {
             }
         }
     }
+
+    /// The hit-test read over the wire (M32): which node occupies the
+    /// point — window-relative physical px, the same space the tree's
+    /// bounds speak (the dump rows' `bounds`, the resolve rects), so a
+    /// client can hit inside a rect it just resolved. The connection's
+    /// window scope (§16 v0.4) narrows the answer exactly like the
+    /// resolves [`Self::window_use`] aims; empty space answers `None` —
+    /// the read is total, never an error. The hit row is directly usable
+    /// as an [`RequestV1::Action`] handle (the dump-row rule, M11).
+    fn hit_test(
+        &mut self,
+        x: f64,
+        y: f64,
+    ) -> impl Future<Output = Result<Option<ResolvedMatchV1>, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::HitTest { x, y }).await? {
+                ResponseV1::HitTest { hit } => Ok(hit),
+                other => Err(GwpError::Protocol(format!("HitTest answered by {other:?}"))),
+            }
+        }
+    }
 }
 
 impl ClientConn for crate::uds::Client {
