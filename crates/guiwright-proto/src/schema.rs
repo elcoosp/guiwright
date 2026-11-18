@@ -110,6 +110,18 @@ pub enum RequestV1 {
     /// §15.6). Wire discipline: appended after `Snapshot` (discriminant
     /// 15); see [`RequestV1::Video`].
     Subscribe(SubscribeV1),
+    /// Resolve-all domain (§8.2's set read, M30): the non-strict
+    /// enumeration of a selector's current match set — the kit's
+    /// `count()` / `all()` walk over the wire, the m22/m26/m29 records'
+    /// named protocol half. Snapshot semantics: the read never waits
+    /// (hence no `timeout_ms` — an empty set answers with an empty list;
+    /// a client that wants arrivals waits and re-reads, the way the kit's
+    /// snapshot reads compose with `wait_for` and the assertions). The
+    /// connection's window scope narrows the walk exactly like
+    /// [`RequestV1::Resolve`]. The reply is
+    /// [`ResponseV1::ResolvedAll`]. Wire discipline: appended after
+    /// `Subscribe` (discriminant 16); see [`RequestV1::Video`].
+    ResolveAll { selector: SelectorV1 },
 }
 
 /// `Snapshot { Full, Filtered }` (§7 tree domain, M11/M13). Extensible on
@@ -489,6 +501,34 @@ pub enum ResponseV1 {
         /// all-or-nothing filter contract).
         kinds: Vec<EventKindV1>,
     },
+    /// Resolve-all reply (§8.2's set read, M30): every current match of
+    /// the selector, document order — the same non-strict walk
+    /// `resolve_all` runs embedded (no strict mode, no waiting, hidden
+    /// nodes included — the `count()`/`all()` set semantics). Each row
+    /// is directly usable as an [`RequestV1::Action`] handle (the
+    /// dump-row rule, M11). An empty set answers with an empty list —
+    /// the set read is total, never an error. Append-only wire
+    /// discipline — see [`RequestV1::Video`].
+    ResolvedAll {
+        /// One row per match, document order (the `all()`/`count()`
+        /// ordering).
+        matches: Vec<ResolvedMatchV1>,
+    },
+}
+
+/// One row of a [`ResponseV1::ResolvedAll`] (M30): the identity facts the
+/// set read returns per match — the same three fields
+/// [`ResponseV1::Resolved`] carries, one per node of the set.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedMatchV1 {
+    /// The node identity (a dump-row handle: directly usable as the
+    /// [`RequestV1::Action`] node).
+    pub node: NodeKeyV1,
+    /// The node's resolve generation (the ABA guard, §8.2 step 2).
+    pub generation: u32,
+    /// Window-relative bounds, physical px (AccessKit convention) — the
+    /// same rect [`ResponseV1::Resolved`] reports.
+    pub rect: Option<[f64; 4]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1262,6 +1302,13 @@ mod tests {
             discriminant(&RequestV1::Subscribe(SubscribeV1::On { kinds: Vec::new() })),
             15
         );
+        // M30 (§8.2's set read): the resolve-all domain appends after Subscribe.
+        assert_eq!(
+            discriminant(&RequestV1::ResolveAll {
+                selector: SelectorV1::TestId(String::new()),
+            }),
+            16
+        );
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1411,6 +1458,13 @@ mod tests {
         assert_eq!(
             discriminant(&ResponseV1::Subscribed { kinds: Vec::new() }),
             18
+        );
+        // M30 (§8.2's set read): the resolve-all reply appends after Subscribed.
+        assert_eq!(
+            discriminant(&ResponseV1::ResolvedAll {
+                matches: Vec::new()
+            }),
+            19
         );
     }
 
