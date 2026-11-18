@@ -36,7 +36,8 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// (M12, event channel), `ResolveAll` follows `Subscribe`
 /// (M30, §8.2's set read), `HitTest` follows `ResolveAll`
 /// (M32, the hit-test read) and `Describe` follows `HitTest`
-/// (M36, the node-describe read); the pinning tests enforce the order.
+/// (M36, the node-describe read), `DescribeAll` follows `Describe`
+/// (M39, the describe-all read); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -81,6 +82,11 @@ const REQUESTS: &[Variant] = &[
         "Describe",
         "{ node: NodeKeyV1, generation: u32 varint } — the §8.1 node-describe read (M36): one node's identity facts for a handle the client already holds (a resolve/hit/dump row, the dump-row rule) → Described; handle-addressed, so no window scope applies (the Action boundary), and the generation guard is the Action boundary's — a stale handle is Error { StaleGeneration }, an unknown one Error { UnknownNode }",
     ),
+    v(
+        19,
+        "DescribeAll",
+        "{ selector: SelectorV1 } — the §8.2 set read carrying facts (M39, the m37 record's standing gap): the resolve-all walk's rows plus the Described identity facts, one round trip instead of one Describe per row → DescribedAll; the connection's window scope narrows the walk exactly like ResolveAll (M30)",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
@@ -88,7 +94,8 @@ const REQUESTS: &[Variant] = &[
 /// `GestureDone` reply at 14, the M10 `Shot` reply at 15, the M11
 /// `TreeDump` reply at 16, the M12 event replies (`Event`,
 /// `Subscribed`) at 17–18, the M30 `ResolvedAll` reply at 19, the
-/// M32 `HitTest` reply at 20 and the M36 `Described` reply at 21.
+/// M32 `HitTest` reply at 20, the M36 `Described` reply at 21 and the
+/// M39 `DescribedAll` reply at 22.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -163,6 +170,11 @@ const RESPONSES: &[Variant] = &[
         21,
         "Described",
         "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]> } — the handle's identity facts (the dump row's facts, one node instead of a walk, M36); the handle echoes the request's and is directly usable as an Action handle",
+    ),
+    v(
+        22,
+        "DescribedAll",
+        "{ rows: seq<DescribedV1> } — the set read carrying facts (the resolve-all walk's rows plus the Described identity facts, one round trip instead of N, M39); document order, an empty set answers with an empty list",
     ),
 ];
 
