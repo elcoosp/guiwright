@@ -23,7 +23,8 @@ use std::future::Future;
 
 use crate::GwpError;
 use crate::schema::{
-    AdapterInfoV1, EventKindV1, GwpEvent, RequestV1, ResponseV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, EventKindV1, GwpEvent, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1,
+    WindowInfoV1, WindowV1,
 };
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
@@ -100,6 +101,27 @@ pub trait ClientConn: Send + 'static {
                 ResponseV1::WindowUsed { handle: aimed } => Ok(aimed),
                 other => Err(GwpError::Protocol(format!(
                     "Window::Use answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// The §8.2 set read over the wire (M30 — the m22/m26/m29 records'
+    /// named protocol half): every current match of `selector`, document
+    /// order — the kit's `count()`/`all()` walk, non-strict and never
+    /// waiting, so an empty set answers with an empty list. Rows are
+    /// directly usable as `RequestV1::Action` handles (the dump-row
+    /// rule, M11). The connection's window scope (§16 v0.4) narrows the
+    /// walk exactly like the resolves [`Self::window_use`] aims.
+    fn resolve_all(
+        &mut self,
+        selector: SelectorV1,
+    ) -> impl Future<Output = Result<Vec<ResolvedMatchV1>, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::ResolveAll { selector }).await? {
+                ResponseV1::ResolvedAll { matches } => Ok(matches),
+                other => Err(GwpError::Protocol(format!(
+                    "ResolveAll answered by {other:?}"
                 ))),
             }
         }
