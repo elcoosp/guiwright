@@ -85,6 +85,21 @@ impl ExpectBuilder {
         self.checks(vec![Check::Focused], "focused")
     }
 
+    /// `expect(locator).toBeEditable()` — the M28 pair on the
+    /// test-support door (the session builder's rows, mirrored here so
+    /// the door carries every `to_*` the product surface does): the
+    /// consumer's effective read-only state reports editable.
+    pub fn to_be_editable(self) -> Expectation {
+        self.checks(vec![Check::Editable], "editable")
+    }
+
+    /// `expect(locator).toBeReadonly()` — the M28 pair's complement: a
+    /// value never satisfies a read-only read and a read-only input
+    /// never satisfies [`Self::to_be_editable`] (the negated pair, M28).
+    pub fn to_be_readonly(self) -> Expectation {
+        self.checks(vec![Check::ReadOnly], "read-only")
+    }
+
     /// `expect(locator).toBeChecked()` — the node's AccessKit tri-state is
     /// `true` (M20: the §8 check vocabulary row).
     pub fn to_be_checked(self) -> Expectation {
@@ -354,6 +369,32 @@ mod tests {
             .to_be_disabled()
             .check_now(&tree)
             .expect_err("save is not disabled");
+    }
+
+    #[test]
+    fn the_editable_pair_reflects_the_effective_readonly_state() {
+        // The M28 rows at the test-support door: the editable input
+        // passes editable, the read-only input passes read-only, and a
+        // wrong-direction read times out naming the assertion and the
+        // locator (the same contract the session builder's rows carry).
+        let fixture = Fixture::with_readonly();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        expect(Selector::role_named(Role::TextInput, "Bio"))
+            .to_be_editable()
+            .check_now(&tree)
+            .expect("bio is editable");
+        expect(Selector::role_named(Role::TextInput, "Serial"))
+            .to_be_readonly()
+            .check_now(&tree)
+            .expect("serial is read-only");
+        let err = expect(Selector::role_named(Role::TextInput, "Serial"))
+            .to_be_editable()
+            .check_now(&tree)
+            .expect_err("serial is not editable");
+        let msg = err.to_string();
+        assert!(msg.contains("editable"), "{msg}");
+        assert!(msg.contains("Serial"), "{msg}");
     }
 
     #[test]
