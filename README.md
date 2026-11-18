@@ -263,6 +263,8 @@ node's role/name through the describe read since M37),
 `describe <get-args…>` (one node's identity facts — role, name, value, bounds, M37),
 `count` / `all` / `texts` / `values` (the set reads: how many, the rows, what the set says,
 what the set carries — M35 + the m40 record),
+`wait attached|visible|hidden|stable <get-args…>` (the client-side wait at the prompt —
+the m42 seam's interactive half, M43),
 `events on | off` (pushed tree diffs, frames and an opt-in `tracing` log tail — seq numbers
 expose any gap a slow consumer misses), and video.
 
@@ -288,8 +290,10 @@ match client.request(RequestV1::TreeSnapshot).await? {
 Resolve requests carry selectors and auto-wait over the wire exactly as embedded sessions do
 (`crates/guiwright-driver/tests/remote_session.rs`). The typed `ClientConn` seam mirrors the
 read-and-aim domains: `window_list()` / `window_use()`, `subscribe` / `next_event`,
-`resolve_all()` (M30), `hit_test()` (M32), `describe()` (M36) and `describe_all()` (M39); the
-raw `request()` covers the rest.
+`resolve_all()` (M30), `hit_test()` (M32), `describe()` (M36) and `describe_all()` (M39) —
+plus the client-side wait, `wait_for(selector, state, timeout)` (m42), composing the event
+channel with describe-all re-reads so a remote suite waits
+attached/visible/hidden/stable like the kit does; the raw `request()` covers the rest.
 
 </details>
 
@@ -399,13 +403,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M39**       | The describe-all wire read: `DescribeAll` → `DescribedAll` (the m37 record's standing gap, closed) — the resolve-all walk's rows carrying the identity facts, one round trip instead of N; the kit's `describe_all()`, the TS `describeAll()`, the enriched REPL `all` rows with the pre-M39 fallback, golden-pinned + e2e |
 | **M40**       | The REPL bulk-read rows: `texts <get-args…>` + `values <get-args…>` (the m35 record's named follow-up — the m29/m31 kit readers' REPL half) — the set's content over the M39 `DescribeAll` domain, label-first vs value-first, the read-not-store rules and the pre-M39 per-row fallback, no wire change |
 | **M41**       | The TypeScript client's bulk reads: `allTextContents()` + `allValues()` (the m29/m31 kit readers' client half) — derivations over the M39 `describeAll()` round trip, the kit source orders pinned against the blessed vectors + e2e, no wire change |
+| **M42**       | The client-side wait: `ClientConn::wait_for(selector, state, timeout)` (the m21 record's named follow-up, closed) — the event channel + the describe-all re-reads composed client-side, attached/visible/hidden/stable over any door, the typed timeout naming state/locator/last-evaluation, the subscription window dropped on return, one budget row + the wire consumer example, no wire change |
+| **M43**       | The REPL wait row: `wait <state> <get-args…>` (the m42 seam's interactive half, the m35/m40 pattern) — the `timeout <ms>` budget, the satisfying-row / absence / typed-timeout renders, the `events on` filter restored after the wait's subscription window, `Connection` joining the client seam, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m41-client-bulk-reads.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m43-repl-wait-row.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
