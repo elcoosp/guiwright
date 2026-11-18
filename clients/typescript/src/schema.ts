@@ -42,6 +42,8 @@ export const RequestV1 = {
   Screenshot: 13,
   Snapshot: 14,
   Subscribe: 15,
+  /** §8.2 set read (M30): the count()/all() enumeration, no timeout. */
+  ResolveAll: 16,
 } as const;
 
 export const ClockV1 = {
@@ -139,6 +141,8 @@ export const ResponseV1 = {
   Event: 17,
   /** §7 event channel (M12): the subscription ack. */
   Subscribed: 18,
+  /** §8.2 set read (M30): every current match, document order. */
+  ResolvedAll: 19,
 } as const;
 
 export const ErrorCode = {
@@ -246,6 +250,14 @@ export interface Resolved {
   rect: [number, number, number, number] | null;
 }
 
+/** §8.2 set read row (M30): one match of a `ResolveAll` — the same facts
+ * `Resolved` carries, usable directly as an `action` node. */
+export interface ResolvedMatch {
+  node: NodeKey;
+  generation: number;
+  rect: [number, number, number, number] | null;
+}
+
 export type NodeKey =
   | { kind: "accesskit"; tree: string; node: number }  // tree = 32 hex chars (16 bytes)
   | { kind: "logical"; adapter: string; id: number };
@@ -330,7 +342,8 @@ export type GwpRequest =
   | { kind: "gesture"; cmd: GestureCmd }
   | { kind: "screenshot"; cmd: ScreenshotCmd }
   | { kind: "snapshot"; cmd: SnapshotCmd }
-  | { kind: "subscribe"; cmd: SubscribeCmd };
+  | { kind: "subscribe"; cmd: SubscribeCmd }
+  | { kind: "resolve_all"; selector: Selector };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -462,4 +475,5 @@ export type GwpResponse =
   | ({ kind: "shot" } & Shot)
   | ({ kind: "tree_dump" } & TreeDump)
   | { kind: "event"; event: EventV1 }
-  | { kind: "subscribed"; kinds: EventKind[] };
+  | { kind: "subscribed"; kinds: EventKind[] }
+  | { kind: "resolved_all"; matches: ResolvedMatch[] };
