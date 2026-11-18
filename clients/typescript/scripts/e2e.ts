@@ -138,6 +138,15 @@ try {
   );
   console.log("✓ resolve-all:", all.length, "matches in document order");
 
+  // --- hit-test (§8.3 mechanism as a public read, M32) ---
+  const hit = await client.hitTest(76.0, 32.0);
+  assert.ok(hit, "the demo fixture's Save button sits under (76, 32)");
+  assert.equal(hit.node.node, 2, "the Save button's identity");
+  assert.deepEqual(hit.rect, [16.0, 16.0, 136.0, 48.0]);
+  const miss = await client.hitTest(400.0, 220.0);
+  assert.equal(miss, null, "empty space answers null (the read is total)");
+  console.log("✓ hit-test: Save under (76, 32), null off-tree");
+
   // --- act (§8.4) ---
   const done = await client.action(resolved.node, resolved.generation, { kind: "click" });
   assert.equal(done.detail, "clicked");
