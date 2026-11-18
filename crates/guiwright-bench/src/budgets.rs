@@ -116,6 +116,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("not_assert", crate::samples::not_assert),
     ("count_compare", crate::samples::count_compare),
     ("locator_all", crate::samples::locator_all),
+    ("editable_assert", crate::samples::editable_assert),
+    ("text_contents", crate::samples::text_contents),
     (
         "kit_window_scoped_resolve",
         crate::samples::kit_window_scoped_resolve,
