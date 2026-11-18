@@ -77,6 +77,14 @@ test("golden manifest is the expected shape", () => {
     golden.responses.some((v: any) => v.name === "described_save_button"),
     "the M36 node-describe reply is pinned",
   );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "describe_all_buttons"),
+    "the M39 describe-all request is pinned",
+  );
+  assert.ok(
+    golden.responses.some((v: any) => v.name === "described_all_buttons"),
+    "the M39 describe-all reply is pinned",
+  );
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -217,6 +225,10 @@ test("requests encode byte-identical to the Rust wire", () => {
       node: { kind: "accesskit", tree: "01".repeat(16), node: 2 },
       generation: 0,
     }),
+    describe_all_buttons: () => ({
+      kind: "describe_all",
+      selector: { kind: "role", role: "Button", name: null },
+    }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -294,7 +306,6 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
   assert.deepEqual(byName(requests).slice(-10), [
-    "Bye",
     "Video",
     "Window",
     "Gesture",
@@ -304,6 +315,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "ResolveAll",
     "HitTest",
     "Describe",
+    "DescribeAll",
   ]);
   assert.deepEqual(
     Object.values(RequestV1),
@@ -312,7 +324,6 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const responses = schema.responses;
   assert.deepEqual(byName(responses).slice(-11), [
-    "VideoFile",
     "Windows",
     "WindowUsed",
     "GestureDone",
@@ -323,6 +334,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "ResolvedAll",
     "HitTest",
     "Described",
+    "DescribedAll",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
