@@ -939,6 +939,39 @@ impl<A: FrameworkAdapter> Session<A> {
         })
     }
 
+    /// The describe-all read (M39 — the m37 record's standing gap): the
+    /// non-strict enumeration of `selector`'s current match set, each row
+    /// carrying the [`Session::describe`] identity facts — the
+    /// [`Session::resolve_all`] walk's rows plus the facts, one pass
+    /// instead of one describe round trip per row. Snapshot semantics
+    /// (the m30 rule): the read never waits, an empty set answers with
+    /// an empty list. Scope discipline: the caller sets the window
+    /// scope before calling (the server's set/read/clear rendezvous, the
+    /// resolve-all arm's exact shape) — the walk narrows like every
+    /// resolve path, and the rows' generations are current (freshly
+    /// resolved, no stale-guard path).
+    pub fn describe_all(&mut self, selector: &Selector) -> Result<Vec<NodeDescription>, CoreError> {
+        self.pump();
+        let resolved = self.tree.resolve_all(selector)?;
+        Ok(resolved
+            .into_iter()
+            .map(|row| {
+                let n = self
+                    .tree
+                    .node(&row.key)
+                    .expect("resolve_all row is in the tree");
+                NodeDescription {
+                    key: row.key,
+                    generation: row.generation,
+                    role: format!("{:?}", n.role()),
+                    name: n.label(),
+                    value: n.value(),
+                    bounds: n.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
+                }
+            })
+            .collect())
+    }
+
     // --- Window targets (§16 v0.4 multi-window, M6) -----------------------
 
     /// The session's window targets (§16 v0.4): adapter-reported metadata
@@ -1825,6 +1858,46 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
         value: impl Into<guiwright_core::TextMatch>,
     ) -> Result<(), CoreError> {
         self.run(vec![Check::HasText(value.into())], "value")
+    }
+
+    /// `expect(locator).toHaveRole(role)` (§16 assertions row, M38): the
+    /// identity family's role row — the node's AccessKit role equals the
+    /// wanted role. The mismatch is waitable (a re-render can restate the
+    /// role, Playwright parity), the timeout error names the assertion,
+    /// the locator and the role the last evaluation found. Composes with
+    /// [`Self::not`].
+    pub fn to_have_role(self, role: accesskit::Role) -> Result<(), CoreError> {
+        self.run(vec![Check::Role(role)], "role")
+    }
+
+    /// `expect(locator).toHaveAccessibleName(name)` (§16 assertions row,
+    /// M38): the identity family's name row — the node's accessible name
+    /// (`label()`) matches, deliberately narrower than [`Self::to_have_text`]
+    /// (label-or-value): a text input's *value* never satisfies a name
+    /// assertion. The mismatch is waitable; a missing name stays Pending
+    /// (labels arrive with the node's restatement). Composes with
+    /// [`Self::not`].
+    pub fn to_have_accessible_name(
+        self,
+        name: impl Into<guiwright_core::TextMatch>,
+    ) -> Result<(), CoreError> {
+        self.run(vec![Check::Name(name.into())], "accessible name")
+    }
+
+    /// `expect(locator).toHaveAccessibleDescription(description)` (§16
+    /// assertions row, M38): the identity family's description row — the
+    /// node's accessible description (`description()`) matches. The
+    /// mismatch is waitable; a missing description stays Pending
+    /// (descriptions arrive with the node's restatement). Composes with
+    /// [`Self::not`].
+    pub fn to_have_accessible_description(
+        self,
+        description: impl Into<guiwright_core::TextMatch>,
+    ) -> Result<(), CoreError> {
+        self.run(
+            vec![Check::Description(description.into())],
+            "accessible description",
+        )
     }
 
     /// `expect(locator).toHaveCount(count)` — the selector-level assertion
