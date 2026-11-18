@@ -38,6 +38,13 @@ pub enum Check {
     /// `False` / `Mixed`, §8 check vocabulary — M20's `to_be_checked`
     /// assertions ride this row).
     Checked(Toggled),
+    /// The consumer's effective read-only state reports editable
+    /// (`!node.is_read_only()`, §8 check vocabulary — M28's
+    /// `to_be_editable` assertion rides this row).
+    Editable,
+    /// The consumer's effective read-only state reports read-only (the
+    /// negated pair — M28's `to_be_readonly` assertion).
+    ReadOnly,
 }
 
 impl Check {
@@ -58,6 +65,8 @@ impl Check {
                 Toggled::False => "unchecked".to_string(),
                 Toggled::Mixed => "mixed-checked".to_string(),
             },
+            Check::Editable => "editable".to_string(),
+            Check::ReadOnly => "read-only".to_string(),
         }
     }
 }
@@ -113,6 +122,8 @@ pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus
         Check::ReceivesEvents => receives_events_status(tree, key, &node),
         Check::HasText(m) => has_text_status(&node, m),
         Check::Checked(want) => checked_status(&node, *want),
+        Check::Editable => editable_status(&node, true),
+        Check::ReadOnly => editable_status(&node, false),
         Check::Focused => {
             if tree.focus() == Some(*key) {
                 CheckStatus::Pass
@@ -265,6 +276,32 @@ fn describe_toggled(state: Toggled) -> &'static str {
     }
 }
 
+/// §8.3 `Editable` / `ReadOnly` (the negated pair, M28): the consumer's
+/// effective read-only state matches the wanted one — [`Check::Editable`]
+/// passes while `!node.is_read_only()`, [`Check::ReadOnly`] while it
+/// holds. The effective state is the AccessKit `read_only` flag plus the
+/// consumer's role rules (`should_have_read_only_state_by_default` and
+/// the read-only-supported set), so it is total over every node: a
+/// button (no editable value) reports read-only — exactly the shape
+/// `expect(button).not().toBeEditable()` has in Playwright. Playwright
+/// parity on the wait: the state is waitable — an input that has not
+/// flipped yet stays Pending, and there is no fail-fast arm because the
+/// predicate cannot be "unsupported".
+fn editable_status(node: &NodeRef<'_>, want_editable: bool) -> CheckStatus {
+    let is_editable = !node.is_read_only();
+    if is_editable == want_editable {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Pending {
+            reason: if want_editable {
+                "node is read-only".to_string()
+            } else {
+                "node is editable".to_string()
+            },
+        }
+    }
+}
+
 /// The ordered checks Playwright runs before an action (§8.3), minus
 /// `Stable` when `force` is set (§8.3 "Force mode").
 pub fn action_checks(force: bool) -> Vec<Check> {
@@ -350,6 +387,60 @@ mod tests {
             evaluate(&svc, &save, &Check::ReceivesEvents),
             CheckStatus::Pass
         );
+    }
+
+    #[test]
+    fn editable_check_reflects_the_effective_readonly_state() {
+        // The M28 pair: the editable input passes Editable, the read-only
+        // input passes ReadOnly, and the wrong directions pend (waitable,
+        // Playwright parity — the predicate is total, so no fail-fast).
+        let fixture = Fixture::with_readonly();
+        let mut svc = TreeService::new();
+        svc.apply_update(fixture.initial_update());
+        let bio = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.editable_input.expect("readonly fixture"),
+        };
+        let serial = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.readonly_input.expect("readonly fixture"),
+        };
+        assert_eq!(evaluate(&svc, &bio, &Check::Editable), CheckStatus::Pass);
+        assert_eq!(evaluate(&svc, &serial, &Check::ReadOnly), CheckStatus::Pass);
+        assert!(
+            matches!(
+                evaluate(&svc, &serial, &Check::Editable),
+                CheckStatus::Pending { .. }
+            ),
+            "read-only input pends on editable"
+        );
+        assert!(
+            matches!(
+                evaluate(&svc, &bio, &Check::ReadOnly),
+                CheckStatus::Pending { .. }
+            ),
+            "editable input pends on read-only"
+        );
+    }
+
+    #[test]
+    fn a_button_reports_read_only_effective_state() {
+        // The consumer's effective state is total: a button does not
+        // support read-only, so it reports read-only (no editable value) —
+        // the shape `expect(button).not().toBeEditable()` has in
+        // Playwright. Both directions stay waitable.
+        let (svc, save) = service_with_save();
+        assert_eq!(evaluate(&svc, &save, &Check::ReadOnly), CheckStatus::Pass);
+        assert!(matches!(
+            evaluate(&svc, &save, &Check::Editable),
+            CheckStatus::Pending { .. }
+        ));
+    }
+
+    #[test]
+    fn editable_check_names_the_states_in_describe() {
+        assert_eq!(Check::Editable.describe(), "editable");
+        assert_eq!(Check::ReadOnly.describe(), "read-only");
     }
 
     #[test]
