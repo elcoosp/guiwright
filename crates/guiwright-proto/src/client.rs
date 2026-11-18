@@ -283,16 +283,26 @@ pub trait ClientConn: Send + 'static {
                         // `None` — the expiry path below.
                         let next = loop {
                             tokio::select! {
-                                event = self.next_event() => match event? {
-                                    GwpEvent::V1(EventV1::TreeChanged { .. }) => {
-                                        break Some(Wake::Tree)
+                                event = self.next_event() => {
+                                    // `GwpEvent` has the single `V1`
+                                    // variant, so this bind is
+                                    // irrefutable (the version check
+                                    // pattern the connection loop uses).
+                                    let GwpEvent::V1(event) = event?;
+                                    match event {
+                                        EventV1::TreeChanged { .. } => {
+                                            break Some(Wake::Tree)
+                                        }
+                                        EventV1::FramePresented { .. } => {
+                                            break Some(Wake::Frame)
+                                        }
+                                        // `Log` is never a wake: fall
+                                        // through to the next wake
+                                        // window (the loop body's tail).
+                                        EventV1::Log { .. } => {}
                                     }
-                                    GwpEvent::V1(EventV1::FramePresented { .. }) => {
-                                        break Some(Wake::Frame)
-                                    }
-                                    _ => continue,
-                                },
-                                _ = tokio::time::sleep_until(deadline) => break None,
+                                }
+                                () = tokio::time::sleep_until(deadline) => break None,
                             }
                         };
                         let Some(next_wake) = next else {
