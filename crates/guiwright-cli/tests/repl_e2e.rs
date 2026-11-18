@@ -394,6 +394,48 @@ async fn repl_snapshot_full_dump() {
     handle.shutdown();
 }
 
+/// The hit-test read through the REPL (M32): `hit <x> <y>` answers which
+/// node occupies the point (physical px, the same space `get`'s rects
+/// print), stores it as the current node (so `last` and the actions aim
+/// at it — the click-what-you-see debugging loop), and a miss is an info
+/// line, never an error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_hit_test_read() {
+    let path = socket_path("repl-hit.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The Save button's center: identity + generation + bounds, in the
+    // same shape `last` renders.
+    let out = rendered(&repl.step("hit 76 32").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("hit (76, 32) → accesskit#2"), "{out:?}");
+    assert!(out[0].contains("(generation 0)"), "{out:?}");
+    assert!(out[0].contains("rect=[16,16 → 136,48]"), "{out:?}");
+
+    // The hit stored the current node: `last` shows it and the action
+    // vocabulary aims at it — no second resolve.
+    assert!(ok_line(&repl.step("last").await).contains("accesskit#2"));
+    let click = repl.step("click").await;
+    assert!(
+        ok_line(&click).starts_with("accesskit#2: clicked (frame "),
+        "{click:?}"
+    );
+
+    // A miss is an info line (the read is total), and it does not disturb
+    // the current node.
+    let miss = rendered(&repl.step("hit 400 220").await);
+    assert_eq!(miss, vec!["nothing at (400, 220)"], "{miss:?}");
+    assert!(ok_line(&repl.step("last").await).contains("accesskit#2"));
+
+    handle.shutdown();
+}
+
 /// `help` lists every command family; `timeout` round-trips.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn help_and_timeout() {
