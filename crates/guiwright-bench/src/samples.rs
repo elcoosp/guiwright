@@ -1462,6 +1462,57 @@ pub fn drag_to() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- M34 sample (kit locator filter surface, §8.1 composition) --------------
+
+/// §15.1 `locator_filter`: one filtered chained resolve (M34) — the
+/// §8.1 filter vocabulary completed on the kit surface. The measured
+/// window is one composed `Locator` read on the button fixture:
+/// `group >> Button` narrowed by `has_not(Confirm)` — the core
+/// resolver's `All`-chain walk plus one `Filter { has_not }` pass (the
+/// per-candidate subtree probes), the composition every kit filter
+/// method produces. A snapshot read: no waiting, no strict mode, the
+/// `locator_all` row's shape with the subtree probes added.
+pub fn locator_filter() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::Selector;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+    use std::time::Instant;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("locator_filter", adapter);
+    app.wait_for_settle();
+    let confirm = Selector::role_named(Role::Button, "Confirm");
+
+    // Warm-up: the composed selector builds its chain + filter once; the
+    // measured loop reads the steady-state set.
+    let warm = app
+        .role_locator(Role::Group)
+        .locator(&Selector::role(Role::Button))
+        .has_not(&confirm)
+        .count()
+        .expect("warm filter read");
+    assert_eq!(warm, 3, "Save, Cancel, Invisible — Confirm excluded");
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let count = app
+            .role_locator(Role::Group)
+            .locator(&Selector::role(Role::Button))
+            .has_not(&confirm)
+            .count()
+            .expect("bench filter read");
+        assert_eq!(count, 3, "the composed set is stable");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 // --- M32 sample (wire hit-test, §8.3's mechanism over the door) --------------
 
 /// §15.1 `hit_test_wire`: one `HitTest` round-trip over the in-process
