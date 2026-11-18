@@ -356,5 +356,19 @@ p95_us = 2000
 notes = "the M29 bulk reader's steady-state cost on the button fixture: one non-strict resolve_all walk (the snapshot set read, the count_assert row's cost) plus one label/value read per match — four texts in document order; a snapshot read with no waiting, so the per-match cost rides the resolve_cached_index row and the set shape mirrors the locator_all row"
 m0_measurable = true
 sample = "text_contents"
-
-
+[[budget]]
+id = "resolve_all_wire"
+name = "Resolve-all bulk read, in-process door (4 matches)"
+p50_us = 600
+p95_us = 3000
+notes = "the M30 set read over the wire (the m22/m26/m29 records' named protocol half): one ResolveAll round-trip over the embedded door — the non-strict resolve_all walk plus four ResolvedMatchV1 rows marshalled back, strict mode never consulted; the resolve_remote_uds round-trip shape carrying the whole set instead of one row (a snapshot read, no waiting)"
+m0_measurable = true
+sample = "resolve_all_wire"
+[[budget]]
+id = "all_values"
+name = "Kit: one all_values() read (resolve_all + per-node value)"
+p50_us = 400
+p95_us = 2000
+notes = "the M31 value-first bulk read's steady-state cost on the button fixture: the text_contents row's walk with the per-node source order flipped (value first, label fallback — the getByValue source order); one non-strict resolve_all walk plus one value/label read per match, four values in document order; a snapshot read with no waiting, so the cost rides the resolve_cached_index row and the set shape mirrors the text_contents row"
+m0_measurable = true
+sample = "all_values"
