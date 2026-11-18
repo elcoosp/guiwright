@@ -212,6 +212,51 @@ async fn wait_visible_times_out_naming_the_state() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_spent_wait_leaves_the_connection_healthy() {
+    // The m44 read-half contract at the consumer level: a wait that
+    // expires — its deadline dropping `next_event` mid-conversation, and
+    // byte-level possibly mid-frame (the conn-level tests stage that
+    // hazard directly) — leaves the SAME connection serving the rest of
+    // the session. The expire path's unsubscribe and the follow-up round
+    // trips ride the buffered read half.
+    let (handle, connect) = spawn_fixture();
+    let mut client = connected(&connect).await;
+
+    let err = client
+        .wait_for(
+            named_button("Invisible"),
+            WaitState::Visible,
+            Duration::from_millis(120),
+        )
+        .await
+        .expect_err("an invisible node never satisfies a visible wait");
+    assert!(matches!(err, GwpError::WaitTimeout { .. }), "{err:?}");
+
+    // The spent wait dropped its subscription and the connection keeps
+    // answering: a liveness probe, then a full set read on the same door.
+    client.ping().await.expect("the connection still answers");
+    let rows = client
+        .describe_all(named_button("Save"))
+        .await
+        .expect("the set read rides the same door");
+    assert_eq!(rows.len(), 1, "the Save row answers after the spent wait");
+
+    // A second wait starts clean (no stale subscription, no stale
+    // events) and expires the same honest way.
+    let err = client
+        .wait_for(
+            named_button("Invisible"),
+            WaitState::Visible,
+            Duration::from_millis(120),
+        )
+        .await
+        .expect_err("the second wait expires the same way");
+    assert!(matches!(err, GwpError::WaitTimeout { .. }), "{err:?}");
+
+    handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wait_stable_satisfied_across_presented_frames() {
     let (handle, connect) = spawn_fixture();
     let mut client = connected(&connect).await;
