@@ -15,9 +15,10 @@ use std::fmt::Write;
 use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    AdapterInfoV1, ClockV1, ErrorCode, EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1,
-    InspectV1, MockV1, NodeKeyV1, PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1,
-    SemActionV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
+    AdapterInfoV1, ClockV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1, EventV1, GestureV1,
+    GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1, RequestV1, ResponseV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1,
+    VideoV1, WindowV1,
 };
 
 /// One output line of a REPL step.
@@ -231,6 +232,7 @@ impl Repl {
             "last" => Ok(vec![Self::render_current(self.current.as_ref())]),
             "get" => self.get_command(tokens).await,
             "hit" => self.hit_command(tokens).await,
+            "describe" => self.describe_command(tokens).await,
             "count" => self.count_command(tokens).await,
             "all" => self.all_command(tokens).await,
             "expect" => {
@@ -424,9 +426,22 @@ impl Repl {
         }
         match self.request(RequestV1::HitTest { x, y }).await? {
             ResponseV1::HitTest { hit: Some(match_) } => {
-                let describe = describe_node(&match_.node);
+                // The handle form is the action vocabulary (`last`, the
+                // actions aim at it) and the facts' fallback shape.
+                let handle = describe_node(&match_.node);
+                // The M37 enrichment: one `Describe` round trip behind the
+                // hit gives the row its role/name (the m32 record's named
+                // rendering gap). An enrichment failure degrades to the
+                // bare handle form — the hit itself is the read, and the
+                // facts ride one extra round trip (a node removed between
+                // the two reads is the honest case: the hit happened, the
+                // facts are gone).
+                let facts = self
+                    .describe_facts(&match_.node, match_.generation)
+                    .await
+                    .unwrap_or_else(|| handle.clone());
                 let mut rendered = format!(
-                    "hit ({x}, {y}) → {describe} (generation {})",
+                    "hit ({x}, {y}) → {facts} ({handle}) (generation {})",
                     match_.generation
                 );
                 if let Some([x0, y0, x1, y1]) = match_.rect {
@@ -436,7 +451,7 @@ impl Repl {
                     node: match_.node,
                     generation: match_.generation,
                     rect: match_.rect,
-                    describe,
+                    describe: handle,
                 });
                 Ok(vec![Line::Ok(rendered)])
             }
@@ -444,6 +459,70 @@ impl Repl {
                 Ok(vec![Line::Info(format!("nothing at ({x}, {y})"))])
             }
             other => Err(unexpected("HitTest", &other)),
+        }
+    }
+
+    /// `describe <get-args…>` (M37 — the m32/m36 records' named REPL
+    /// consumer): one node's identity facts — role, accessible name,
+    /// value, bounds — through the M36 `Describe` domain. The locator
+    /// resolves strict-mode first (the same surface `get` speaks, but
+    /// with the M35 read-pass's snapshot semantics — `timeout_ms: 0`, no
+    /// arrival wait; narrowing rides the selector), then the handle
+    /// answers the facts — the dump row's facts, one node instead of a
+    /// walk. A read, not a resolve-store: `last` and the actions keep
+    /// aiming where `get`/`hit` aimed (the M35 read rule), and a missing
+    /// match is the immediate strict-mode error, never a partial row.
+    async fn describe_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (selector, _describe) = parse_selector(
+            tokens
+                .get(1..)
+                .ok_or("`describe` needs a locator — role | text | label | testid | value")?,
+        )?;
+        let ResponseV1::Resolved {
+            node, generation, ..
+        } = self
+            .request(RequestV1::Resolve {
+                selector,
+                // The M35 snapshot-read rule: a debugging read never
+                // waits — an absent match errors immediately (the m36
+                // record's semantics, and `describe` is its REPL row).
+                timeout_ms: 0,
+            })
+            .await?
+        else {
+            return Err("`describe` resolves a locator first — unexpected Resolve reply".into());
+        };
+        let ResponseV1::Described(row) = self
+            .request(RequestV1::Describe(DescribeV1 {
+                node: node.clone(),
+                generation,
+            }))
+            .await?
+        else {
+            return Err("`describe` reads the resolved handle — unexpected Describe reply".into());
+        };
+        Ok(vec![Line::Ok(render_described(&row))])
+    }
+
+    /// The M37 hit-row enrichment's round trip: role/name for a handle,
+    /// `None` when the facts cannot ride (an old driver, a node that left
+    /// between the hit and the describe).
+    async fn describe_facts(&mut self, node: &NodeKeyV1, generation: u32) -> Option<String> {
+        match self
+            .request(RequestV1::Describe(DescribeV1 {
+                node: node.clone(),
+                generation,
+            }))
+            .await
+        {
+            Ok(ResponseV1::Described(row)) => {
+                let mut text = row.role;
+                if let Some(name) = row.name.as_deref() {
+                    let _ = write!(text, " {name:?}");
+                }
+                Some(text)
+            }
+            _ => None,
         }
     }
 
@@ -1039,6 +1118,7 @@ impl Repl {
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
             "  hit <x> <y>                 which node occupies the point (M32 hit-test read)",
+            "  describe <get-args…>        one node's identity facts (M37)",
             "  count <get-args…>           the set size, strict mode aside (M35 read pass)",
             "  all <get-args…>             the set rows, one line each (M35 read pass)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
@@ -1093,6 +1173,26 @@ fn describe_node(node: &NodeKeyV1) -> String {
         NodeKeyV1::AccessKit { node, .. } => format!("accesskit#{node}"),
         NodeKeyV1::Logical { adapter, id } => format!("{adapter}#{id}"),
     }
+}
+
+/// The M36 describe row, rendered for the REPL (M37): the dump row's
+/// facts — `Button "Save" (generation 0) rect=[…]`, the value form
+/// `TextInput "Email" value "…" …`. The value prints because it is the
+/// fact the `value` locator vocabulary matches (§8.1) — the same
+/// rendering the `snapshot full` rows use for content, one node.
+fn render_described(row: &DescribedV1) -> String {
+    let mut out = row.role.clone();
+    if let Some(name) = row.name.as_deref() {
+        let _ = write!(out, " {name:?}");
+    }
+    if let Some(value) = row.value.as_deref() {
+        let _ = write!(out, " value {value:?}");
+    }
+    let _ = write!(out, " (generation {})", row.generation);
+    if let Some([x0, y0, x1, y1]) = row.bounds {
+        let _ = write!(out, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+    }
+    out
 }
 
 /// Parse the `get`-shaped locator vocabulary shared by `get` (§8) and
