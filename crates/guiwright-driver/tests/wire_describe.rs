@@ -14,7 +14,7 @@ use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    DescribeV1, ErrorCode, NodeKeyV1, RequestV1, ResponseV1, SelectorV1,
+    DescribeAllV1, DescribeV1, ErrorCode, NodeKeyV1, RequestV1, ResponseV1, SelectorV1,
 };
 use guiwright_proto::{ClientConn, DuplexClient};
 
@@ -243,6 +243,87 @@ async fn the_client_sugar_rides_the_trait() {
     assert_eq!(row.role, "Label");
     assert_eq!(row.name.as_deref(), Some("Welcome, Ada"));
     assert_eq!(row.bounds, rect);
+
+    handle.shutdown();
+}
+
+// --- The describe-all read (M39) ---------------------------------------------
+
+#[tokio::test]
+async fn describe_all_carries_the_set_facts_in_document_order() {
+    let (handle, connect, _scripts) = spawn_fixture();
+    let mut client = connected(&connect).await;
+
+    // The set read carrying facts: every current match of the selector,
+    // document order, one round trip — the resolve-all walk's rows plus
+    // the Described identity facts (the m37 record's standing gap).
+    match client
+        .request(RequestV1::DescribeAll(DescribeAllV1 {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: None,
+            },
+        }))
+        .await
+        .expect("describe-all round-trip")
+    {
+        ResponseV1::DescribedAll { rows } => {
+            let names: Vec<Option<&str>> = rows.iter().map(|r| r.name.as_deref()).collect();
+            assert_eq!(
+                names,
+                vec![
+                    Some("Save"),
+                    Some("Cancel"),
+                    Some("Invisible"),
+                    Some("Confirm")
+                ],
+                "document order, hidden nodes included (the set-read rule)"
+            );
+            assert!(rows.iter().all(|r| r.role == "Button"));
+            assert_eq!(
+                rows[0].bounds,
+                Some([16.0, 16.0, 136.0, 48.0]),
+                "the resolve rect, restated"
+            );
+            assert!(rows.iter().all(|r| r.generation == 0), "rows are live");
+        }
+        other => panic!("expected DescribedAll, got {other:?}"),
+    }
+
+    // An empty set answers with an empty list — the set read is total,
+    // never an error (the m30 snapshot rule).
+    match client
+        .request(RequestV1::DescribeAll(DescribeAllV1 {
+            selector: SelectorV1::TestId("ghost".into()),
+        }))
+        .await
+        .expect("empty describe-all round-trip")
+    {
+        ResponseV1::DescribedAll { rows } => assert!(rows.is_empty()),
+        other => panic!("expected DescribedAll, got {other:?}"),
+    }
+
+    handle.shutdown();
+}
+
+#[tokio::test]
+async fn the_describe_all_sugar_rides_the_trait() {
+    let (handle, connect, _scripts) = spawn_fixture();
+    let mut client = connected(&connect).await;
+
+    // The ClientConn default method — the same surface every shipped
+    // client and downstream transport inherits (the describe pattern).
+    let rows = client
+        .describe_all(SelectorV1::Role {
+            role: "TextInput".into(),
+            name: None,
+        })
+        .await
+        .expect("the sugar round-trip");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].role, "TextInput");
+    assert_eq!(rows[0].name.as_deref(), Some("Email"));
+    assert_eq!(rows[0].value.as_deref(), Some("ada@example.dev"));
 
     handle.shutdown();
 }
