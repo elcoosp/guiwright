@@ -398,6 +398,27 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         Ok(app.run_scoped(window.as_deref(), move |session| session.resolve(&selector))?)
     }
 
+    /// The node-describe read (§8.1's identity facts, M36 — the m32
+    /// record's standing gap): resolve the locator (strict mode, the
+    /// same surface every locator action aims through) and read the
+    /// match's identity facts — role, accessible name, value, bounds.
+    /// The debugging read beside the bulk readers: `all_text_contents()`
+    /// (M29) answers "what does the set say", `describe()` answers "what
+    /// IS the node I just resolved" — the row the wire's `Describe`
+    /// domain (M36) serves remote clients. A read, not an action: like
+    /// [`Self::resolve`], nothing is recorded.
+    pub fn describe(self) -> Result<guiwright_driver::NodeDescription, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), move |session| {
+            let resolved = session.resolve(&selector)?;
+            session.describe(&resolved.key, resolved.generation)
+        })?)
+    }
+
     /// `locator.count()` — how many nodes match right now (§16
     /// assertions row, M22): the non-strict read beside
     /// `to_have_count`'s waitable assertion (Playwright parity). A read,
