@@ -111,3 +111,72 @@ fn a_missing_match_fails_the_read() {
         .expect_err("a locator that resolves nothing cannot describe");
     assert!(err.to_string().contains("no node matches"), "{err}");
 }
+
+// --- The describe-all read (M39) ---------------------------------------------
+
+#[test]
+fn describe_all_carries_the_set_facts_in_document_order() {
+    let mut app = fixture_app("kit_describe_all_set");
+    let rows = app
+        .role_locator(Role::Button)
+        .describe_all()
+        .expect("the set read");
+    // The buttons fixture's visible buttons: Save, Cancel (Invisible is
+    // hidden but the set read includes hidden nodes — the m29 rule; the
+    // disabled Confirm is a plain row too).
+    let names: Vec<Option<&str>> = rows.iter().map(|r| r.name.as_deref()).collect();
+    assert_eq!(
+        names,
+        vec![
+            Some("Save"),
+            Some("Cancel"),
+            Some("Invisible"),
+            Some("Confirm")
+        ],
+        "document order, hidden nodes included (the set-read family rule)"
+    );
+    assert!(
+        rows.iter().all(|r| r.role == "Button"),
+        "every row carries the identity facts"
+    );
+    assert_eq!(
+        rows[0].bounds,
+        Some([16.0, 16.0, 136.0, 48.0]),
+        "the bounds ride each row (the resolve rect, restated)"
+    );
+}
+
+#[test]
+fn describe_all_answers_an_empty_set_with_an_empty_list() {
+    let mut app = fixture_app("kit_describe_all_empty");
+    let rows = app
+        .get_by_text("No Such Node")
+        .describe_all()
+        .expect("the set read is total");
+    assert!(
+        rows.is_empty(),
+        "an empty set answers with an empty list, never an error"
+    );
+}
+
+#[test]
+fn describe_all_composes_with_narrowing_and_the_window_pin() {
+    let (mut app, _w1, w2) = multi_window_app("kit_describe_all_window");
+    // Narrowing: the group chain still scopes the walk.
+    let rows = app
+        .role_locator(Role::Button)
+        .first()
+        .describe_all()
+        .expect("the narrowed set read");
+    assert_eq!(rows.len(), 1, "the narrowing narrows the set");
+    assert_eq!(rows[0].name.as_deref(), Some("Save"), "document order");
+    // The window pin scopes the walk to the Preview subtree (the §16
+    // v0.4 rule — the set read narrows like every resolve path).
+    let mut preview = app.window(&w2).expect("Preview is a live target");
+    let pinned = preview
+        .role_locator(Role::Button)
+        .describe_all()
+        .expect("the pinned set read");
+    assert_eq!(pinned.len(), 1, "the Preview window carries one button");
+    assert_eq!(pinned[0].name.as_deref(), Some("Save"));
+}
