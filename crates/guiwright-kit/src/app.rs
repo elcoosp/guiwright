@@ -543,6 +543,28 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
             .collect())
     }
 
+    /// `locator.describe_all()` (§8.1's identity facts over the set read,
+    /// M39 — the m37 record's standing gap: "enumerating a set's facts
+    /// would open one `Describe` round trip per row"): the
+    /// [`Self::all_text_contents`] walk's rows carrying each match's
+    /// identity facts — role, accessible name, value, bounds — one pass
+    /// instead of one [`Self::describe`] round trip per row. The
+    /// debugging read beside the bulk readers: `all_text_contents()`
+    /// answers "what does the set say", `describe_all()` answers "what
+    /// IS everything in the set" — the row the wire's `DescribeAll`
+    /// domain (M39) serves remote clients. Snapshot semantics (the
+    /// `count()`/`all()` family rule): no strict mode, no waiting, an
+    /// empty set answers with an empty list, a window-pinned locator
+    /// reads only inside its subtree, and a read records nothing.
+    pub fn describe_all(self) -> Result<Vec<guiwright_driver::NodeDescription>, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), |session| session.describe_all(&selector))?)
+    }
+
     /// `locator.all_values()` (§16 assertions row — the m29 record's
     /// named follow-up: "`all_values()` (a value-first bulk read for
     /// form dumps) is a one-line variation of the same walk —
@@ -1662,6 +1684,37 @@ pub(crate) mod core_expect {
         }
         pub fn to_have_value(self, value: impl Into<TextMatch>) -> Result<(), CoreError> {
             self.builder.to_have_value(value)
+        }
+        /// `expect(locator).toHaveRole(role)` (§16 assertions row, M38) —
+        /// the identity family's role row: the node's AccessKit role
+        /// equals the wanted role. The mismatch is waitable (a re-render
+        /// can restate the role, Playwright parity); the timeout error
+        /// names the assertion, the locator and the role the last
+        /// evaluation found. Composes with [`Self::not`].
+        pub fn to_have_role(self, role: accesskit::Role) -> Result<(), CoreError> {
+            self.builder.to_have_role(role)
+        }
+        /// `expect(locator).toHaveAccessibleName(name)` (§16 assertions
+        /// row, M38) — the identity family's name row: the node's
+        /// accessible name (`label()`) matches, deliberately narrower
+        /// than [`Self::to_have_text`] (label-or-value): a text input's
+        /// *value* never satisfies a name assertion. The mismatch is
+        /// waitable; a missing name stays Pending (labels arrive with
+        /// the node's restatement). Composes with [`Self::not`].
+        pub fn to_have_accessible_name(self, name: impl Into<TextMatch>) -> Result<(), CoreError> {
+            self.builder.to_have_accessible_name(name)
+        }
+        /// `expect(locator).toHaveAccessibleDescription(description)` (§16
+        /// assertions row, M38) — the identity family's description row:
+        /// the node's accessible description (`description()`) matches.
+        /// The mismatch is waitable; a missing description stays Pending
+        /// (descriptions arrive with the node's restatement). Composes
+        /// with [`Self::not`].
+        pub fn to_have_accessible_description(
+            self,
+            description: impl Into<TextMatch>,
+        ) -> Result<(), CoreError> {
+            self.builder.to_have_accessible_description(description)
         }
         /// `expect(locator).toHaveCount(count)` (§16 assertions row, M22) —
         /// the selector-level assertion: how many nodes match, strict mode
