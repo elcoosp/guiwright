@@ -163,6 +163,23 @@ try {
   assert.ok(ghost, "a handle the tree does not know rejects (the Action boundary)");
   console.log("✓ node-describe: Save = Button \"Save\", ghost handle rejected");
 
+  // --- describe-all (§8.2 set read carrying facts, M39) ---
+  // The resolve-all walk's rows carrying the describe facts — one round
+  // trip instead of one describe per row (the m37 record's standing gap).
+  const describedAll = await client.describeAll({ kind: "role", role: "Button", name: null });
+  assert.equal(describedAll.length, 4, "the same walk resolveAll runs");
+  assert.deepEqual(
+    describedAll.map((r: any) => r.node.node),
+    [2, 3, 6, 7],
+    "document order, the count()/all() ordering",
+  );
+  assert.equal(describedAll[0].role, "Button");
+  assert.equal(describedAll[0].name, "Save");
+  assert.deepEqual(describedAll[0].bounds, [16.0, 16.0, 136.0, 48.0]);
+  const emptyAll = await client.describeAll({ kind: "test_id", id: "ghost" });
+  assert.deepEqual(emptyAll, [], "an empty set answers with an empty list (the m30 rule)");
+  console.log("✓ describe-all:", describedAll.length, "fact rows in document order, empty set total");
+
   // --- act (§8.4) ---
   const done = await client.action(resolved.node, resolved.generation, { kind: "click" });
   assert.equal(done.detail, "clicked");
