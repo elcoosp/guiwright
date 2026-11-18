@@ -24,10 +24,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use guiwright_proto::GwpError;
 use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
-    GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1,
-    ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1,
-    WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
+    EventV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1,
+    ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, VideoV1,
+    WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -916,6 +916,42 @@ fn handle_request<A: FrameworkAdapter>(
                     value: row.value,
                     bounds: row.bounds,
                 }),
+                Err(err) => error_response(err),
+            }
+        }
+        RequestV1::DescribeAll(DescribeAllV1 { selector }) => {
+            // The describe-all read over the wire (M39 — the m37
+            // record's standing gap: "enumerating a set's facts would
+            // open one Describe round trip per row"): the resolve-all
+            // walk's rows carrying the Described identity facts, one
+            // round trip instead of N. Snapshot semantics (the m30
+            // rule): the read never waits, an empty set answers with an
+            // empty list. The connection's window scope narrows the
+            // walk exactly like the ResolveAll arm runs it.
+            let scope = match window.as_deref() {
+                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => return error_response(err),
+                },
+                _ => None,
+            };
+            session.set_resolve_scope(scope);
+            let result = session.describe_all(&Selector::from(selector));
+            session.clear_resolve_scope();
+            match result {
+                Ok(rows) => ResponseV1::DescribedAll {
+                    rows: rows
+                        .into_iter()
+                        .map(|row| DescribedV1 {
+                            node: NodeKeyV1::from(row.key),
+                            generation: row.generation,
+                            role: row.role,
+                            name: row.name,
+                            value: row.value,
+                            bounds: row.bounds,
+                        })
+                        .collect(),
+                },
                 Err(err) => error_response(err),
             }
         }
