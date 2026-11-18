@@ -15,10 +15,10 @@ use std::fmt::Write;
 use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
-    AdapterInfoV1, ClockV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1, EventV1, GestureV1,
-    GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1, RequestV1, ResponseV1,
-    ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1,
-    VideoV1, WindowV1,
+    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
+    EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1,
+    RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1,
+    TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
 };
 
 /// One output line of a REPL step.
@@ -551,36 +551,62 @@ impl Repl {
     }
 
     /// `all <get-args…>` (M35): the set read as rows — one line per
-    /// match in document order, the same identity + generation + rect
-    /// rendering `last`/`hit` print, each row directly usable as the
+    /// match in document order, each row directly usable as the
     /// `Action` handle (the dump-row rule, M11). A read like `count`:
     /// no current-node store. An empty set is one info line — the read
     /// is total, never an error.
+    ///
+    /// The rows are the M39 enrichment (the m37 record's standing gap —
+    /// "enumerating a set's facts would open one `Describe` round trip
+    /// per row"): one `DescribeAll` round trip carries the identity
+    /// facts (role/name/value) beside the generation and rect, the
+    /// `describe` row's rendering at set width. A driver that predates
+    /// M39 degrades silently to the M35 rows (identity + generation +
+    /// rect over `ResolveAll`) — the m37 enrichment rule: the read
+    /// itself is the answer, the facts ride one round trip.
     async fn all_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
         let (selector, _) = parse_selector(
             tokens
                 .get(1..)
                 .ok_or("`all` needs a locator — role | text | label | testid | value")?,
         )?;
-        match self.request(RequestV1::ResolveAll { selector }).await? {
-            ResponseV1::ResolvedAll { matches } if matches.is_empty() => {
+        match self
+            .request(RequestV1::DescribeAll(DescribeAllV1 {
+                selector: selector.clone(),
+            }))
+            .await
+        {
+            Ok(ResponseV1::DescribedAll { rows }) if rows.is_empty() => {
                 Ok(vec![Line::Info("no matches".into())])
             }
-            ResponseV1::ResolvedAll { matches } => Ok(matches
+            Ok(ResponseV1::DescribedAll { rows }) => Ok(rows
                 .iter()
-                .map(|row| {
-                    let mut text = format!(
-                        "{} (generation {})",
-                        describe_node(&row.node),
-                        row.generation
-                    );
-                    if let Some([x0, y0, x1, y1]) = row.rect {
-                        let _ = write!(text, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
-                    }
-                    Line::Ok(text)
-                })
+                .map(|row| Line::Ok(render_described(row)))
                 .collect()),
-            other => Err(unexpected("ResolvedAll", &other)),
+            // The enrichment rides one round trip; a driver without the
+            // M39 domain falls back to the M35 walk (the m37 degrade
+            // rule — a graceful, documented fallback, not an error).
+            Err(_) => match self.request(RequestV1::ResolveAll { selector }).await? {
+                ResponseV1::ResolvedAll { matches } if matches.is_empty() => {
+                    Ok(vec![Line::Info("no matches".into())])
+                }
+                ResponseV1::ResolvedAll { matches } => Ok(matches
+                    .iter()
+                    .map(|row| {
+                        let mut text = format!(
+                            "{} (generation {})",
+                            describe_node(&row.node),
+                            row.generation
+                        );
+                        if let Some([x0, y0, x1, y1]) = row.rect {
+                            let _ = write!(text, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+                        }
+                        Line::Ok(text)
+                    })
+                    .collect()),
+                other => Err(unexpected("ResolvedAll", &other)),
+            },
+            Ok(other) => Err(unexpected("DescribedAll", &other)),
         }
     }
 
