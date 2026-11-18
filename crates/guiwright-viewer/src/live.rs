@@ -439,6 +439,7 @@ fn response_kind(response: &ResponseV1) -> &'static str {
         ResponseV1::ResolvedAll { .. } => "ResolvedAll",
         ResponseV1::HitTest { .. } => "HitTest",
         ResponseV1::Described(_) => "Described",
+        ResponseV1::DescribedAll { .. } => "DescribedAll",
     }
 }
 
