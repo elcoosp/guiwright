@@ -131,6 +131,10 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("node_describe", crate::samples::node_describe),
     ("identity_assert", crate::samples::identity_assert),
     ("describe_all_wire", crate::samples::describe_all_wire),
+    (
+        "client_wait_satisfied",
+        crate::samples::client_wait_satisfied,
+    ),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
