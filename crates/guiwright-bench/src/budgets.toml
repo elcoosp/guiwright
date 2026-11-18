@@ -424,3 +424,11 @@ p95_us = 4000
 notes = "the M39 describe-all set read over the wire (the m37 record's standing gap, closed): one DescribeAll round-trip over the embedded door — pump, the non-strict resolve_all walk (the resolve_cached_index index path), one consumer-tree node read per row (role Debug name, accessible label, value, bounds), one DescribedAll row-set marshalled back; the resolve_all_wire round-trip shape carrying four fact rows instead of four point rows — one round trip instead of one Describe per row (the m37 batch note's cost, retired)"
 m0_measurable = true
 sample = "describe_all_wire"
+[[budget]]
+id = "client_wait_satisfied"
+name = "Client-side wait_for, satisfied on entry (in-process door)"
+p50_us = 1500
+p95_us = 6000
+notes = "the m42 client-side wait's steady-state floor (the m21 record's named follow-up, closed): one ClientConn::wait_for satisfied on entry over the embedded door — the subscribe round-trip, the describe-all entry evaluation (the describe_all_wire round-trip shape) and the unsubscribe cleanup; the Save row satisfies on the first row set, so no wake and no re-read ride this number (the event-driven cost is the wire_event_delivery row's); a client-side composition of existing domains, no wire change"
+m0_measurable = true
+sample = "client_wait_satisfied"
