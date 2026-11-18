@@ -376,6 +376,11 @@
       "index": 17,
       "name": "HitTest",
       "payload": "{ x: f64, y: f64 } — the §8.3 hit-test read: which node occupies the point (physical px, the tree's bounds space — the dump rows' bounds, the resolve rects) → HitTest; the connection's window scope narrows the answer like the resolve paths, empty space answers None (the read is total, M32)"
+    },
+    {
+      "index": 18,
+      "name": "Describe",
+      "payload": "{ node: NodeKeyV1, generation: u32 varint } — the §8.1 node-describe read (M36): one node's identity facts for a handle the client already holds (a resolve/hit/dump row, the dump-row rule) → Described; handle-addressed, so no window scope applies (the Action boundary), and the generation guard is the Action boundary's — a stale handle is Error { StaleGeneration }, an unknown one Error { UnknownNode }"
     }
   ],
   "responses": [
@@ -483,6 +488,11 @@
       "index": 20,
       "name": "HitTest",
       "payload": "{ hit: option<ResolvedMatchV1 { node: NodeKeyV1, generation: u32 varint, rect: option<[f64; 4]> }> } — the node under the point, None on empty space / outside the aimed window's subtree (the read is total, never an error); the hit row is directly usable as an Action handle (M32)"
+    },
+    {
+      "index": 21,
+      "name": "Described",
+      "payload": "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]> } — the handle's identity facts (the dump row's facts, one node instead of a walk, M36); the handle echoes the request's and is directly usable as an Action handle"
     }
   ],
   "schema": "gwp-schema/v1",
