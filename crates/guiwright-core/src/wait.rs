@@ -640,6 +640,144 @@ mod tests {
             .expect_satisfied();
     }
 
+    // --- Identity assertions (§8 check vocabulary, M38) ----------------------
+
+    #[test]
+    fn role_check_passes_on_the_matching_role() {
+        let (tree, _) = setup();
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Role(Role::Button)],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_satisfied();
+    }
+
+    #[test]
+    fn role_check_stays_pending_on_a_role_mismatch() {
+        // Roles are waitable like every state check: a node restated with a
+        // different role (a framework re-render) flips the answer, so the
+        // mismatch never fails fast.
+        let (tree, _) = setup();
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Role(Role::CheckBox)],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn accessible_name_check_passes_on_the_label_only() {
+        let (tree, _) = setup();
+        let mut waiter = ChecksWaiter::new(
+            Selector::role(Role::TextInput),
+            vec![Check::Name(TextMatch::new("Email"))],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_satisfied();
+    }
+
+    #[test]
+    fn accessible_name_check_never_reads_the_value() {
+        // The M0 HasText read matches the label *or* the value; the M38
+        // identity read is name-only — the email input's value
+        // ("ada@example.dev") must not satisfy a name assertion.
+        let (tree, _) = setup();
+        let mut waiter = ChecksWaiter::new(
+            Selector::role(Role::TextInput),
+            vec![Check::Name(TextMatch::new("example.dev"))],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn accessible_name_check_waits_for_a_nameless_node() {
+        // A node that has not gained its label yet may gain one: the
+        // missing-name arm stays Pending (waitable), never fail-fast. The
+        // nameless button rides the fixture's extension band (NodeId(9)).
+        let fixture = Fixture::buttons();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        let mut nameless = accesskit::Node::new(Role::Button);
+        nameless.set_bounds(accesskit::Rect {
+            x0: 300.0,
+            y0: 16.0,
+            x1: 420.0,
+            y1: 48.0,
+        });
+        let mut group = accesskit::Node::new(Role::Group);
+        group.set_children([
+            fixture.save_button,
+            fixture.cancel_button,
+            fixture.welcome_label,
+            fixture.email_input,
+            fixture.hidden_button,
+            fixture.disabled_button,
+            NodeId(9),
+        ]);
+        tree.apply_update(accesskit::TreeUpdate {
+            nodes: vec![(NodeId(9), nameless), (NodeId(1), group)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        });
+        let nameless_key = NodeKey::AccessKit {
+            tree: TreeId::ROOT,
+            node: NodeId(9),
+        };
+        assert_eq!(
+            actionability::evaluate(
+                &tree,
+                &nameless_key,
+                &Check::Name(TextMatch::exact("Unnamed")),
+            ),
+            CheckStatus::Pending {
+                reason: "node has no accessible name yet".to_string(),
+            }
+        );
+        assert_eq!(
+            actionability::evaluate(&tree, &nameless_key, &Check::Role(Role::Button)),
+            CheckStatus::Pass
+        );
+    }
+
+    #[test]
+    fn accessible_description_check_passes_on_the_described_node() {
+        let fixture = Fixture::with_description();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Install"),
+            vec![Check::Description(TextMatch::new("latest build"))],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_satisfied();
+    }
+
+    #[test]
+    fn accessible_description_check_waits_when_absent() {
+        // The described fixture's other nodes carry no description: a
+        // missing description may arrive (waitable Pending), so the
+        // assertion on the base fixture stays Pending.
+        let fixture = Fixture::with_description();
+        let mut tree = TreeService::new();
+        tree.apply_update(fixture.initial_update());
+        let mut waiter = ChecksWaiter::new(
+            Selector::role_named(Role::Button, "Save"),
+            vec![Check::Description(TextMatch::new("anything"))],
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
     #[test]
     fn hidden_assertion_passes_when_node_missing() {
         let tree = TreeService::new();
