@@ -48,6 +48,58 @@ pub async fn read_frame<T: serde::de::DeserializeOwned, R: AsyncRead + Unpin>(
     Ok(postcard::from_bytes(&body)?)
 }
 
+/// The incremental frame reassembler's state (§7 multiplexing, M12):
+/// bytes in, frames out. The cancellation-safety contract both
+/// conversation halves share — the server connection loop's
+/// [`FrameReader`] and the client read half's
+/// [`crate::conn::ClientCore`] buffer hold this same state, so a future
+/// dropped mid-read never loses the bytes it already consumed (the
+/// server's `select!` since M12; the client's deadline races — the m42
+/// wait, the viewer live feed's pacing window — since M44).
+#[derive(Debug)]
+pub(crate) struct FrameBuffer {
+    /// Bytes read from the stream but not yet consumed as a frame.
+    buf: Vec<u8>,
+}
+
+impl FrameBuffer {
+    pub(crate) fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    /// Append one raw chunk read off the stream.
+    pub(crate) fn extend(&mut self, chunk: &[u8]) {
+        self.buf.extend_from_slice(chunk);
+    }
+
+    /// Pop one complete frame body when the buffer holds one.
+    /// `Ok(None)` = still mid-frame, keep reading; `Err` = the guarded
+    /// oversized prefix (the [`MAX_FRAME_BYTES`] guard).
+    pub(crate) fn try_take_frame(&mut self) -> Result<Option<Vec<u8>>, GwpError> {
+        if self.buf.len() < 4 {
+            return Ok(None);
+        }
+        let len = u32::from_le_bytes(self.buf[..4].try_into().expect("length prefix is 4 bytes"))
+            as usize;
+        if len > MAX_FRAME_BYTES {
+            return Err(GwpError::FrameTooLarge(len));
+        }
+        if self.buf.len() < 4 + len {
+            return Ok(None);
+        }
+        let mut body = self.buf.split_off(4);
+        let rest = body.split_off(len);
+        self.buf = rest;
+        Ok(Some(body))
+    }
+
+    /// Bytes read from the stream but not yet consumed as a frame
+    /// (the reassembler's Debug rendering).
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
+}
+
 /// Incremental frame reassembler (§7 multiplexing, M12): the server
 /// connection loop reads requests and pushed events **concurrently**
 /// (`tokio::select!`), so a partially-read frame must survive the future
@@ -56,8 +108,7 @@ pub async fn read_frame<T: serde::de::DeserializeOwned, R: AsyncRead + Unpin>(
 /// TypeScript client's `FrameReader` (clients/typescript/src/framing.ts).
 pub struct FrameReader<R> {
     stream: R,
-    /// Bytes read from the stream but not yet consumed as a frame.
-    buf: Vec<u8>,
+    buf: FrameBuffer,
 }
 
 impl<R: std::fmt::Debug> std::fmt::Debug for FrameReader<R> {
@@ -73,7 +124,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub fn new(stream: R) -> Self {
         Self {
             stream,
-            buf: Vec::new(),
+            buf: FrameBuffer::new(),
         }
     }
 
@@ -81,25 +132,8 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     /// future mid-read keeps partial bytes in the buffer for the next call.
     pub async fn next_frame(&mut self) -> Result<Vec<u8>, GwpError> {
         loop {
-            if self.buf.len() >= 4 {
-                let len =
-                    u32::from_le_bytes(self.buf[..4].try_into().expect("length prefix is 4 bytes"))
-                        as usize;
-                if len > MAX_FRAME_BYTES {
-                    return Err(GwpError::FrameTooLarge(len));
-                }
-                if self.buf.len() >= 4 + len {
-                    let body = self.buf.split_off(4);
-                    let body = {
-                        // `split_off(4)` moves everything past the prefix
-                        // into `body`; the frame is its first `len` bytes.
-                        let mut framed = body;
-                        let rest = framed.split_off(len);
-                        self.buf = rest;
-                        framed
-                    };
-                    return Ok(body);
-                }
+            if let Some(body) = self.buf.try_take_frame()? {
+                return Ok(body);
             }
             // Not enough buffered yet: pull one chunk from the stream.
             let mut chunk = [0u8; 4096];
@@ -110,7 +144,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
                     "connection closed mid-frame",
                 )));
             }
-            self.buf.extend_from_slice(&chunk[..n]);
+            self.buf.extend(&chunk[..n]);
         }
     }
 }
