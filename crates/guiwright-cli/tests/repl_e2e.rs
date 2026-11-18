@@ -475,17 +475,28 @@ async fn repl_read_vocabulary_count_and_all() {
         vec!["0 matches (Button \"Ghost\")"],
     );
 
-    // all: one row per match, document order — the same identity +
-    // generation + rect rendering `last`/`hit` print.
+    // all: one row per match, document order — the M39 enrichment (the
+    // m37 record's standing gap): one DescribeAll round trip carries the
+    // identity facts beside the generation and rect, the describe row's
+    // rendering at set width.
     let out = rendered(&repl.step("all role Button").await);
     assert_eq!(out.len(), 4, "{out:?}");
     assert_eq!(
-        out[0], "accesskit#2 (generation 0) rect=[16,16 → 136,48]",
-        "document order: Save first (node 2)"
+        out[0], "Button \"Save\" (generation 0) rect=[16,16 → 136,48]",
+        "document order: Save first (node 2), facts at row width"
     );
-    assert!(out[1].starts_with("accesskit#3 (generation 0)"), "{out:?}");
-    assert!(out[2].starts_with("accesskit#6 (generation 0)"), "{out:?}");
-    assert!(out[3].starts_with("accesskit#7 (generation 0)"), "{out:?}");
+    assert!(
+        out[1].starts_with("Button \"Cancel\" (generation 0)"),
+        "{out:?}"
+    );
+    assert!(
+        out[2].starts_with("Button \"Invisible\" (generation 0)"),
+        "{out:?}"
+    );
+    assert!(
+        out[3].starts_with("Button \"Confirm\" (generation 0)"),
+        "{out:?}"
+    );
 
     // An empty set is one info line (the read is total, never an error).
     assert_eq!(
