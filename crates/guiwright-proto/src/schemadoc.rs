@@ -34,8 +34,9 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// follows `Gesture` (M10, §7 render domain), `Snapshot` follows
 /// `Screenshot` (M11, tree dump), `Subscribe` follows `Snapshot`
 /// (M12, event channel), `ResolveAll` follows `Subscribe`
-/// (M30, §8.2's set read) and `HitTest` follows `ResolveAll`
-/// (M32, the hit-test read); the pinning tests enforce the order.
+/// (M30, §8.2's set read), `HitTest` follows `ResolveAll`
+/// (M32, the hit-test read) and `Describe` follows `HitTest`
+/// (M36, the node-describe read); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -75,14 +76,19 @@ const REQUESTS: &[Variant] = &[
         "HitTest",
         "{ x: f64, y: f64 } — the §8.3 hit-test read: which node occupies the point (physical px, the tree's bounds space — the dump rows' bounds, the resolve rects) → HitTest; the connection's window scope narrows the answer like the resolve paths, empty space answers None (the read is total, M32)",
     ),
+    v(
+        18,
+        "Describe",
+        "{ node: NodeKeyV1, generation: u32 varint } — the §8.1 node-describe read (M36): one node's identity facts for a handle the client already holds (a resolve/hit/dump row, the dump-row rule) → Described; handle-addressed, so no window scope applies (the Action boundary), and the generation guard is the Action boundary's — a stale handle is Error { StaleGeneration }, an unknown one Error { UnknownNode }",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
 /// `Bye` (M3), the M6 window replies append at 12–13, the M7
 /// `GestureDone` reply at 14, the M10 `Shot` reply at 15, the M11
 /// `TreeDump` reply at 16, the M12 event replies (`Event`,
-/// `Subscribed`) at 17–18, the M30 `ResolvedAll` reply at 19 and the
-/// M32 `HitTest` reply at 20.
+/// `Subscribed`) at 17–18, the M30 `ResolvedAll` reply at 19, the
+/// M32 `HitTest` reply at 20 and the M36 `Described` reply at 21.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -152,6 +158,11 @@ const RESPONSES: &[Variant] = &[
         20,
         "HitTest",
         "{ hit: option<ResolvedMatchV1 { node: NodeKeyV1, generation: u32 varint, rect: option<[f64; 4]> }> } — the node under the point, None on empty space / outside the aimed window's subtree (the read is total, never an error); the hit row is directly usable as an Action handle (M32)",
+    ),
+    v(
+        21,
+        "Described",
+        "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]> } — the handle's identity facts (the dump row's facts, one node instead of a walk, M36); the handle echoes the request's and is directly usable as an Action handle",
     ),
 ];
 
