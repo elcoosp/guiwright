@@ -105,6 +105,23 @@ impl<A: FrameworkAdapter> WindowHandle<'_, A> {
         }
     }
 
+    /// `window.hit_test(x, y)` (M32): the hit-test read aimed at this
+    /// window's subtree (§16 v0.4) — which node occupies the point, with
+    /// the same semantics [`App::hit_test`] documents, scoped: a hit
+    /// outside this window reads `None` (the pin rides the read, the
+    /// same scoping every resolve path takes), and a dead handle fails
+    /// with the typed `UnknownWindow` at aim time.
+    pub fn hit_test(
+        &mut self,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<guiwright_core::tree::Resolved>, crate::KitError> {
+        let handle = self.handle.clone();
+        self.app
+            .run_scoped(Some(&handle), move |session| session.hit_test(x, y))
+            .map_err(crate::KitError::Core)
+    }
+
     /// The window's raw-input surface, pre-pinned (§9): every injection
     /// lands in this window's pipeline without an explicit
     /// [`MouseHandle::in_window`].
