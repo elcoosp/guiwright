@@ -162,6 +162,27 @@ pub struct SnapshotNode {
     pub children: u32,
 }
 
+/// One node's identity facts (§7 describe domain, M36): the one-row read
+/// beside [`TreeDump`]'s whole-tree walk — the same facts a
+/// [`SnapshotNode`] carries, minus the walk (`children`). The wire reply
+/// ([`guiwright_proto::schema::DescribedV1`]) mirrors it field for field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NodeDescription {
+    /// The described node — the handle the read was asked with.
+    pub key: NodeKey,
+    /// The node's current resolve generation (the handle was live here —
+    /// the ABA guard the boundary enforced, §8.2 step 2).
+    pub generation: u32,
+    /// AccessKit role `Debug` name (`Button`, `TextInput`, …).
+    pub role: String,
+    /// Accessible name, when the node has one.
+    pub name: Option<String>,
+    /// Value (inputs), when the node carries one.
+    pub value: Option<String>,
+    /// Window-relative bounds, physical px (AccessKit convention).
+    pub bounds: Option<[f64; 4]>,
+}
+
 /// The full-tree dump (§7 tree-dump domain, M11): the whole logical tree
 /// as data, depth-first per window root (§16 v0.4 — disjoint subtrees, one
 /// walk per window target).
@@ -878,6 +899,44 @@ impl<A: FrameworkAdapter> Session<A> {
             generation: self.tree.generation(&key),
             bounds: self.tree.node(&key).and_then(|n| n.bounding_box()),
         }))
+    }
+
+    /// The node-describe read (§8.1's identity facts as a public read,
+    /// M36 — the m32 record's standing gap): one node's facts — role,
+    /// accessible name, value, bounds — for a handle the caller already
+    /// holds. A pump runs first (consistency, like `resolve`); the
+    /// boundary is the [`Session::apply_action`] guard's exact shape —
+    /// `generation` is the generation the handle was minted at, and a
+    /// node that left and re-entered the tree since has moved on
+    /// (`CoreError::StaleNode`), while a handle the tree does not know
+    /// is `CoreError::UnknownNode`. Handle-addressed, so no window
+    /// scope applies: the handle IS the node, unlike a point
+    /// (ambiguous) or a selector (the tree answers).
+    pub fn describe(
+        &mut self,
+        node: &NodeKey,
+        generation: u32,
+    ) -> Result<NodeDescription, CoreError> {
+        self.pump();
+        let resolved = Resolved {
+            key: *node,
+            generation,
+            bounds: None,
+        };
+        self.tree.check_generation(&resolved)?;
+        let current = self.tree.generation(node);
+        let n = self
+            .tree
+            .node(node)
+            .ok_or(CoreError::UnknownNode { key: *node })?;
+        Ok(NodeDescription {
+            key: *node,
+            generation: current,
+            role: format!("{:?}", n.role()),
+            name: n.label(),
+            value: n.value(),
+            bounds: n.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
+        })
     }
 
     // --- Window targets (§16 v0.4 multi-window, M6) -----------------------
