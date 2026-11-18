@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use accesskit::NodeId;
+use accesskit::Point;
 use guiwright_core::actionability::{Check, CheckStatus, action_checks};
 use guiwright_core::expect::DEFAULT_TIMEOUT;
 use guiwright_core::tree::{Resolved, TreeService};
@@ -853,6 +854,30 @@ impl<A: FrameworkAdapter> Session<A> {
     pub fn resolve_all(&mut self, selector: &Selector) -> Result<Vec<Resolved>, CoreError> {
         self.pump();
         self.tree.resolve_all(selector)
+    }
+
+    /// The hit-test read (§8.3's "receives events" mechanism as a public
+    /// read, M32): which node occupies the point — window-relative
+    /// physical px, the same space the tree's bounds speak (the dump
+    /// rows' `bounds`, the resolve rects), so a caller can hit inside a
+    /// rect it just resolved. A pump runs first (consistency, like
+    /// `resolve`); the session's resolve scope narrows the answer (the
+    /// §16 v0.4 scoping rule — the GWP server and the kit's window
+    /// handles set the scope around the call); empty space answers
+    /// `None` — the read is total, never an error. The hit carries the
+    /// same record the resolution pipeline returns (identity +
+    /// generation + bounds), directly usable as a pre-resolved action
+    /// handle.
+    pub fn hit_test(&mut self, x: f64, y: f64) -> Result<Option<Resolved>, CoreError> {
+        self.pump();
+        let key = self
+            .tree
+            .hit_test_scoped(Point::new(x, y), self.tree.scope());
+        Ok(key.map(|key| Resolved {
+            key,
+            generation: self.tree.generation(&key),
+            bounds: self.tree.node(&key).and_then(|n| n.bounding_box()),
+        }))
     }
 
     // --- Window targets (§16 v0.4 multi-window, M6) -----------------------
@@ -2557,5 +2582,32 @@ mod tests {
         session.video_stop().expect("stop");
         let err = session.video_stop().expect_err("second stop");
         assert!(err.to_string().contains("no video recording"), "{err}");
+    }
+
+    // --- The hit-test read (§8.3's mechanism as a public read, M32) -------
+
+    #[test]
+    fn hit_test_answers_the_node_under_the_point() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        let resolved = session
+            .hit_test(76.0, 32.0)
+            .expect("the read is total")
+            .expect("the save button sits under the point");
+        let NodeKey::AccessKit { node, .. } = resolved.key else {
+            panic!("accesskit fixture keys");
+        };
+        assert_eq!(node, fixture.save_button);
+        assert_eq!(resolved.generation, 0);
+        assert!(resolved.bounds.is_some(), "the bounds ride the read");
+    }
+
+    #[test]
+    fn hit_test_miss_reads_none() {
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        // Empty space is a valid answer — the read is total, never an
+        // error (the set read's totality rule, one point instead of a set).
+        assert!(session.hit_test(400.0, 220.0).expect("total").is_none());
     }
 }
