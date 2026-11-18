@@ -135,6 +135,40 @@ pub enum RequestV1 {
     /// [`ResponseV1::HitTest`]. Wire discipline: appended after
     /// `ResolveAll` (discriminant 17); see [`RequestV1::Video`].
     HitTest { x: f64, y: f64 },
+    /// Node-describe read (§8.1's identity facts as a public read, M36 —
+    /// the m32 record's standing gap: "role/name would ride a
+    /// node-describe domain that does not exist yet"): one node's facts —
+    /// role, accessible name, value, bounds — for a handle the client
+    /// already holds. The handle is the dump-row form (a resolve row, a
+    /// hit row, a dump row — each is directly usable as the `Describe`
+    /// node, M11's rule), so the read answers "what IS the node this
+    /// handle points at" for REPL rows and viewer-style clients without
+    /// a whole-subtree dump. A pump runs first (consistency, like
+    /// [`RequestV1::Resolve`]). The read is **handle-addressed, not
+    /// scoped**: unlike a point (ambiguous — [`RequestV1::HitTest`]
+    /// narrows) or a selector (the tree answers — the resolve paths
+    /// narrow), the handle IS the node, so no window scope applies — the
+    /// same boundary [`RequestV1::Action`] draws. The generation guard is
+    /// the Action boundary's too: a handle minted before the node left
+    /// and re-entered the tree is the typed
+    /// `Error { code: ErrorCode::StaleGeneration }`, a handle the tree
+    /// does not know is `ErrorCode::UnknownNode`. The reply is
+    /// [`ResponseV1::Described`]. Wire discipline: appended after
+    /// `HitTest` (discriminant 18); see [`RequestV1::Video`].
+    Describe(DescribeV1),
+}
+
+/// The node-describe read's request payload (§8.1, M36): the handle plus
+/// the generation it was minted at — the [`RequestV1::Action`] guard's
+/// exact shape, so every client that can act on a row can describe it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DescribeV1 {
+    /// The node identity (a dump-row handle: directly usable as the
+    /// [`RequestV1::Action`] node).
+    pub node: NodeKeyV1,
+    /// The node's resolve generation at mint time (the ABA guard, §8.2
+    /// step 2 — the boundary rejects a recycled id).
+    pub generation: u32,
 }
 
 /// `Snapshot { Full, Filtered }` (§7 tree domain, M11/M13). Extensible on
@@ -540,6 +574,36 @@ pub enum ResponseV1 {
         /// aimed window's subtree.
         hit: Option<ResolvedMatchV1>,
     },
+    /// Node-describe reply (§8.1's identity facts, M36): the handle's
+    /// role, accessible name, value and bounds in one row — the same
+    /// facts a [`SnapshotNodeV1`] dump row carries, one node instead of a
+    /// walk. The handle echoes the request's (a row is directly usable
+    /// as the [`RequestV1::Action`] node, the dump-row rule). Stale and
+    /// unknown handles ride the typed `Error` codes, never a partial
+    /// row. Append-only wire discipline — see [`RequestV1::Video`].
+    Described(DescribedV1),
+}
+
+/// One node's identity facts ([`ResponseV1::Described`], M36) — the
+/// one-row read beside the dump's whole-tree walk: role (the
+/// [`SelectorV1::Role`] vocabulary), accessible name, value (inputs) and
+/// window-relative physical bounds (the resolve rects' space).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DescribedV1 {
+    /// The described node — the request's handle, echoed.
+    pub node: NodeKeyV1,
+    /// The node's current resolve generation (the handle is live at this
+    /// generation — the guard the boundary enforced).
+    pub generation: u32,
+    /// AccessKit role `Debug` name (`Button`, `TextInput`, …).
+    pub role: String,
+    /// Accessible name, when the node has one.
+    pub name: Option<String>,
+    /// Value (inputs), when the node carries one.
+    pub value: Option<String>,
+    /// Window-relative bounds, physical px (AccessKit convention) — the
+    /// same rect [`ResponseV1::Resolved`] reports.
+    pub bounds: Option<[f64; 4]>,
 }
 
 /// One row of a [`ResponseV1::ResolvedAll`] (M30): the identity facts the
@@ -1368,6 +1432,17 @@ mod tests {
         );
         // M32 (the hit-test read): the hit-test domain appends after ResolveAll.
         assert_eq!(discriminant(&RequestV1::HitTest { x: 0.0, y: 0.0 }), 17);
+        // M36 (the node-describe read): the describe request appends after HitTest.
+        assert_eq!(
+            discriminant(&RequestV1::Describe(DescribeV1 {
+                node: NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                },
+                generation: 0
+            })),
+            18
+        );
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1527,6 +1602,26 @@ mod tests {
         );
         // M32 (the hit-test read): the hit-test reply appends after ResolvedAll.
         assert_eq!(discriminant(&ResponseV1::HitTest { hit: None }), 20);
+        // M36 (the node-describe read): the describe reply appends after HitTest.
+        assert_eq!(discriminant(&ResponseV1::Described(described_shell())), 21);
+    }
+
+    /// The M36 describe pin's payload — a `DescribedV1` shell whose fields
+    /// carry no information (the discriminant is the pinned fact; the
+    /// payload shape rides the struct itself). Split out of the pin list
+    /// so the append-only sequence stays one statement per milestone.
+    fn described_shell() -> DescribedV1 {
+        DescribedV1 {
+            node: NodeKeyV1::Logical {
+                adapter: String::new(),
+                id: 0,
+            },
+            generation: 0,
+            role: String::new(),
+            name: None,
+            value: None,
+            bounds: None,
+        }
     }
 
     /// Nested domain + `ErrorCode` indices, pinned for other-language clients.
