@@ -411,10 +411,15 @@ async fn repl_hit_test_read() {
         .expect("repl attaches");
 
     // The Save button's center: identity + generation + bounds, in the
-    // same shape `last` renders.
+    // same shape `last` renders. The M37 pass renders the role/name
+    // beside the handle — one `Describe` round trip behind the hit (the
+    // m32 record's named rendering gap, closed).
     let out = rendered(&repl.step("hit 76 32").await);
     assert_eq!(out.len(), 1, "{out:?}");
-    assert!(out[0].starts_with("hit (76, 32) → accesskit#2"), "{out:?}");
+    assert!(
+        out[0].starts_with("hit (76, 32) → Button \"Save\" (accesskit#2)"),
+        "{out:?}"
+    );
     assert!(out[0].contains("(generation 0)"), "{out:?}");
     assert!(out[0].contains("rect=[16,16 → 136,48]"), "{out:?}");
 
@@ -506,6 +511,63 @@ async fn repl_read_vocabulary_count_and_all() {
     );
     assert!(
         help_text.iter().any(|l| l.contains("all <get-args")),
+        "{help_text:?}"
+    );
+
+    handle.shutdown();
+}
+
+/// The node-describe REPL pass (M37 — the m32/m36 records' named REPL
+/// consumer: "the REPL renders the hit as the handle (`accesskit#2`) +
+/// rect — role/name would ride a node-describe domain"): the `describe`
+/// command reads one node's identity facts through the M36 `Describe`
+/// domain, and the `hit` row renders the role/name beside the handle.
+/// Both are reads in the M35 discipline: `last` and the action
+/// vocabulary keep aiming where `get`/`hit` aimed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_describe_read() {
+    let path = socket_path("repl-describe.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The identity facts in one row — the dump row's facts, one node
+    // instead of a walk (the M36 domain's REPL row).
+    assert_eq!(
+        rendered(&repl.step("describe role Button Save").await),
+        vec![r#"Button "Save" (generation 0) rect=[16,16 → 136,48]"#],
+        "{:?}",
+        rendered(&repl.step("describe role Button Save").await),
+    );
+
+    // The value an input carries rides the same read (the fact the
+    // `value` locator vocabulary matches).
+    assert_eq!(
+        rendered(&repl.step("describe role TextInput Email").await),
+        vec![r#"TextInput "Email" value "ada@example.dev" (generation 0) rect=[16,128 → 256,156]"#],
+    );
+
+    // A read, not a resolve-store: `describe` never re-aims the current
+    // node (the M35 read rule, unchanged for the M37 rows).
+    let get = repl.step("get role Button Save").await;
+    assert!(ok_line(&get).starts_with("resolved "), "{get:?}");
+    rendered(&repl.step("describe role TextInput Email").await);
+    assert!(ok_line(&repl.step("last").await).contains("\"Save\""));
+
+    // A missing match is the strict-mode error (the same surface `get`
+    // speaks), never a partial row.
+    let miss = rendered(&repl.step("describe role Button Ghost").await);
+    assert!(miss[0].starts_with("error:"), "{miss:?}");
+    assert!(miss[0].contains("no node matches"), "{miss:?}");
+
+    // The help lists the row (the vocabulary is discoverable).
+    let help_text: Vec<String> = rendered(&repl.step("help").await);
+    assert!(
+        help_text.iter().any(|l| l.contains("describe <get-args")),
         "{help_text:?}"
     );
 
