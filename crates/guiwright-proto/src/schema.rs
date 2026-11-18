@@ -122,6 +122,19 @@ pub enum RequestV1 {
     /// [`ResponseV1::ResolvedAll`]. Wire discipline: appended after
     /// `Subscribe` (discriminant 16); see [`RequestV1::Video`].
     ResolveAll { selector: SelectorV1 },
+    /// Hit-test read (§8.3's "receives events" mechanism as a public
+    /// read, M32): which node occupies the point — window-relative
+    /// physical px, the same space the tree's bounds speak (the dump
+    /// rows' `bounds`, the resolve rects), so a client can hit inside a
+    /// rect it just resolved. A pump runs first (consistency, like
+    /// [`RequestV1::Resolve`]); the connection's window scope narrows the
+    /// answer exactly like the resolve paths (a hit outside the aimed
+    /// window reads `None`); empty space answers `None` — the read is
+    /// total, never an error. Hidden nodes cannot answer (the same
+    /// `common_filter` the resolution pipeline applies). The reply is
+    /// [`ResponseV1::HitTest`]. Wire discipline: appended after
+    /// `ResolveAll` (discriminant 17); see [`RequestV1::Video`].
+    HitTest { x: f64, y: f64 },
 }
 
 /// `Snapshot { Full, Filtered }` (§7 tree domain, M11/M13). Extensible on
@@ -513,6 +526,19 @@ pub enum ResponseV1 {
         /// One row per match, document order (the `all()`/`count()`
         /// ordering).
         matches: Vec<ResolvedMatchV1>,
+    },
+    /// Hit-test reply (§8.3's mechanism as a public read, M32): the node
+    /// occupying the requested point as one [`ResolvedMatchV1`] row —
+    /// identity + generation + bounds, directly usable as an
+    /// [`RequestV1::Action`] handle (the dump-row rule, M11) — or `None`
+    /// for empty space (and for a hit outside the connection's window
+    /// scope, §16 v0.4). The read is total: a miss is a valid answer,
+    /// never an error. Append-only wire discipline — see
+    /// [`RequestV1::Video`].
+    HitTest {
+        /// The node under the point, `None` on empty space / outside the
+        /// aimed window's subtree.
+        hit: Option<ResolvedMatchV1>,
     },
 }
 
@@ -1214,6 +1240,37 @@ mod tests {
         }
     }
 
+    /// §7 hit-test read round-trip (M32): the point request and the
+    /// `HitTest` reply (a `ResolvedMatchV1` row on a hit, `None` on a
+    /// miss) survive postcard both ways.
+    #[test]
+    fn hit_test_domain_roundtrip() {
+        let requests = [GwpRequest::V1(RequestV1::HitTest { x: 76.0, y: 32.0 })];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [
+            GwpResponse::V1(ResponseV1::HitTest {
+                hit: Some(ResolvedMatchV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0u8; 16],
+                        node: 2,
+                    },
+                    generation: 0,
+                    rect: Some([16.0, 16.0, 136.0, 48.0]),
+                }),
+            }),
+            GwpResponse::V1(ResponseV1::HitTest { hit: None }),
+        ];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
     /// postcard encodes enum variants as a varint of the variant index, so
     /// **variant order is the wire format**. §7 "old clients get clean
     /// errors" → within a `V1` envelope variants are append-only: pre-M3
@@ -1309,6 +1366,8 @@ mod tests {
             }),
             16
         );
+        // M32 (the hit-test read): the hit-test domain appends after ResolveAll.
+        assert_eq!(discriminant(&RequestV1::HitTest { x: 0.0, y: 0.0 }), 17);
     }
 
     /// Response variant indices, pinned for other-language clients.
@@ -1466,6 +1525,8 @@ mod tests {
             }),
             19
         );
+        // M32 (the hit-test read): the hit-test reply appends after ResolvedAll.
+        assert_eq!(discriminant(&ResponseV1::HitTest { hit: None }), 20);
     }
 
     /// Nested domain + `ErrorCode` indices, pinned for other-language clients.
