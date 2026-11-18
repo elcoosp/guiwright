@@ -1,4 +1,5 @@
-//! Shared synthetic AccessKit tree fixtures.
+//! Shared synthetic AccessKit tree fixtures + the core-internal
+//! `expect` entry (the test-support door, M34's micro-debt pass).
 //!
 //! These model the `TreeUpdate`s a Level-1 adapter emits (window → panel →
 //! buttons/labels/inputs). They are used by core tests, the driver's mock
@@ -8,6 +9,20 @@
 use accesskit::{Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate};
 
 use crate::key::NodeKey;
+
+/// The core-internal `expect(locator).to_*` entry (M34's micro-debt
+/// pass): a builder whose `to_*` methods evaluate now
+/// (`Expectation::check_now(&tree)`) or retry-until-timeout through
+/// [`crate::wait`]. Core's own waiter tests build it here — the product
+/// surface is the session's `ExpectBuilder` (driver), which drives the
+/// same waiters through the session loop.
+pub fn expect(locator: crate::selector::Selector) -> crate::expect::ExpectBuilder {
+    crate::expect::ExpectBuilder {
+        locator,
+        timeout: crate::expect::DEFAULT_TIMEOUT,
+        negated: false,
+    }
+}
 
 /// A fixture definition: builds both the initial full update and scripted
 /// incremental updates against it.
