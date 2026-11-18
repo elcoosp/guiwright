@@ -250,6 +250,19 @@ export class GwpClient {
     return resp.matches;
   }
 
+  /** Hit-test over the wire (§8.3 mechanism as a public read, M32): which
+   * node occupies the point — physical px in the tree's bounds space (the
+   * same space `resolve` rects and dump rows report). The connection's
+   * window scope narrows the answer; empty space answers `null` — the
+   * read is total, never an error. The hit is directly usable as an
+   * `action` node. */
+  async hitTest(x: number, y: number): Promise<ResolvedMatch | null> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "hit_test", x, y });
+    if (resp.kind !== "hit_test") throw new Error(`expected HitTest, got ${resp.kind}`);
+    return resp.hit;
+  }
+
   async action(
     node: NodeKey,
     generation: number,
