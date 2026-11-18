@@ -346,6 +346,51 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         Ok(collected)
     }
 
+    /// `locator.all_text_contents()` (§16 assertions row — the m26
+    /// record's open kit gap: "bulk *content* reads … a dedicated bulk
+    /// reader lands when a suite asks for it"): read the text of every
+    /// match in document order as one snapshot — the [`Self::all`]
+    /// enumeration's set read mapped to data instead of visitors, the
+    /// same non-strict `resolve_all` walk [`Self::count`] takes.
+    ///
+    /// Semantics (the snapshot-read family rules):
+    ///
+    /// * the set is a **snapshot read**: an empty set reads to an empty
+    ///   `Vec`, and a node that arrives later joins the next read (no
+    ///   waiting — [`Locator::wait_for`] or an assertion covers that);
+    /// * each match contributes the text the text locators match — the
+    ///   accessible label first, then the value (the `HasText` check's
+    ///   source order), so `get_by_text(t)` matches imply `t` appears in
+    ///   this read; a node with neither reads as an empty string, keeping
+    ///   positions stable;
+    /// * hidden nodes are included (the `all()`/`count()` set semantics —
+    ///   nothing filters the walk);
+    /// * a window-pinned locator reads only inside its subtree (the pin
+    ///   rides the walk, §16 v0.4).
+    ///
+    /// Like [`Self::count`], the read is not a replayable step: nothing
+    /// is recorded — no codegen line, no trace action (the trace's tree
+    /// snapshots carry the same facts). Actions on a [`Self::all`] visitor
+    /// remain the way to record per-item steps.
+    pub fn all_text_contents(self) -> Result<Vec<String>, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let matches =
+            app.run_scoped(window.as_deref(), |session| session.resolve_all(&selector))?;
+        let tree = app.session.tree();
+        Ok(matches
+            .iter()
+            .map(|m| {
+                tree.node(&m.key)
+                    .and_then(|n| n.label().or_else(|| n.value()))
+                    .unwrap_or_default()
+            })
+            .collect())
+    }
+
     /// `locator.screenshot(name, bless)` — the §10 element screenshot
     /// (M9): resolve (auto-wait), render the window frame once, **crop it
     /// by the resolved node's physical bounds** (§10 "crop from the window
@@ -1358,6 +1403,25 @@ pub(crate) mod core_expect {
         }
         pub fn to_be_checked_mixed(self) -> Result<(), CoreError> {
             self.builder.to_be_checked_mixed()
+        }
+        /// `expect(locator).toBeEditable()` (§16 assertions row, M28): the
+        /// consumer's effective read-only state reports editable — the
+        /// AccessKit `read_only` flag plus the role rules the consumer
+        /// applies. The mismatch is waitable (Playwright parity: an input
+        /// that has not flipped yet stays Pending), the timeout error
+        /// names the assertion, the locator and the state the last
+        /// evaluation found. Composes with [`Self::not`].
+        pub fn to_be_editable(self) -> Result<(), CoreError> {
+            self.builder.to_be_editable()
+        }
+        /// `expect(locator).to_be_readonly()` (§16 assertions row, M28) —
+        /// the editable check's negated pair as a direct assertion: the
+        /// same effective state, so a button (no editable value) reads
+        /// read-only exactly as Playwright's
+        /// `expect(button).not().toBeEditable()` does. Composes with
+        /// [`Self::not`].
+        pub fn to_be_readonly(self) -> Result<(), CoreError> {
+            self.builder.to_be_readonly()
         }
         pub fn to_have_text(self, text: impl Into<TextMatch>) -> Result<(), CoreError> {
             self.builder.to_have_text(text)
