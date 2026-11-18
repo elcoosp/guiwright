@@ -20,6 +20,7 @@ import {
   type NodeKey,
   NodeKeyV1,
   RequestV1,
+  type ResolvedMatch,
   type Selector,
   SelectorV1,
   SemActionV1,
@@ -78,6 +79,11 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       enc.u32(RequestV1.Resolve);
       encodeSelector(enc, req.selector);
       enc.u64(req.timeout_ms);
+      break;
+    case "resolve_all":
+      // §8.2 set read (M30): the enumeration never waits — selector only.
+      enc.u32(RequestV1.ResolveAll);
+      encodeSelector(enc, req.selector);
       break;
     case "action":
       enc.u32(RequestV1.Action);
@@ -535,6 +541,21 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       const kinds: EventKind[] = [];
       for (let i = 0; i < n; i += 1) kinds.push(decodeEventKind(dec));
       return { kind: "subscribed", kinds };
+    }
+    case 19: {
+      // §8.2 set read reply (M30): one ResolvedMatch row per match,
+      // document order.
+      const n = dec.varint();
+      const matches: ResolvedMatch[] = [];
+      for (let i = 0; i < n; i += 1) {
+        const node = decodeNodeKey(dec);
+        const generation = dec.u32();
+        const rect = dec.optionTag()
+          ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
+          : null;
+        matches.push({ node, generation, rect });
+      }
+      return { kind: "resolved_all", matches };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
