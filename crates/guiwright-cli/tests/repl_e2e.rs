@@ -1253,3 +1253,91 @@ async fn repl_events_command_flushes_between_commands() {
 
     handle.shutdown();
 }
+
+/// The REPL wait row (m43 — the m42 client-side wait's interactive half,
+/// the m35/m40 one-milestone-per-surface pattern): `wait <state>
+/// <get-args…>` rides the `ClientConn::wait_for` seam over a real socket
+/// — attached/visible/hidden/stable, the `timeout <ms>` budget, the
+/// typed timeout naming the state and the last evaluation, and the
+/// `events on` filter restored after the wait's subscription window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_wait_rows_wait_on_the_client_seam() {
+    let path = socket_path("repl-wait.sock");
+    // The log tail is on: the `events on` row subscribes the Log kind too
+    // (the m14 vocabulary), so the restore check below exercises the real
+    // filter the interactive flow carries.
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        guiwright_driver::ServerOptions {
+            log_tail: true,
+            ..guiwright_driver::ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // A positive state answers one ok line naming the satisfying row —
+    // the handle form the action vocabulary aims with.
+    let out = rendered(&repl.step("wait visible role Button Save").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("wait visible — "), "{out:?}");
+    assert!(out[0].contains(r#"accesskit#2 "Save""#), "{out:?}");
+
+    // Hidden is satisfied by absence (the fixture's "Invisible" button
+    // carries no bounds) — the answer says so, not an error.
+    let out = rendered(&repl.step("wait hidden role Button Invisible").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("satisfied by absence"), "{out:?}");
+
+    // A spent budget: the typed timeout — state, locator, last evaluation
+    // (the failures-name-names discipline over the REPL surface).
+    assert_eq!(
+        rendered(&repl.step("timeout 150").await)[0],
+        "timeout = 150 ms"
+    );
+    let out = rendered(&repl.step("wait visible role Button Invisible").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait visible timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(out[0].contains("no bounds"), "{out:?}");
+
+    // The state word is validated: one error line, the session usable.
+    let out = rendered(&repl.step("wait shiny role Button Save").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+
+    // The wait owns the event filter for its duration — an `events on`
+    // filter keeps flowing after (the row restores it, best effort).
+    assert_eq!(
+        rendered(&repl.step("timeout 5000").await)[0],
+        "timeout = 5000 ms"
+    );
+    rendered(&repl.step("events on").await);
+    rendered(&repl.step("wait visible role Button Save").await);
+    // The restored filter arms the server's frame-cadence pump (§7, M12);
+    // give it a few ticks so the next drain has something honest to flush.
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let out = rendered(&repl.step("ping").await);
+    assert!(
+        out.iter().any(|l| l.starts_with("event ")),
+        "the `events on` stream keeps flowing after a wait: {out:?}"
+    );
+
+    // A read, not a resolve-store: `last` keeps the node `get` aimed at.
+    rendered(&repl.step("get role Button Cancel").await);
+    rendered(&repl.step("wait visible role Button Save").await);
+    assert!(ok_line(&repl.step("last").await).contains("\"Cancel\""));
+
+    // The help lists the row (the vocabulary is discoverable).
+    let help_text = rendered(&repl.step("help").await);
+    assert!(
+        help_text.iter().any(|l| l.contains("wait <state>")),
+        "{help_text:?}"
+    );
+
+    handle.shutdown();
+}
