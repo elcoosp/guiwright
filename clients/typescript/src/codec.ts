@@ -7,6 +7,7 @@
 import {
   type CapsV1,
   ClockV1,
+  type DescribedNode,
   type ClockCmd,
   ErrorCode,
   GwpRequest,
@@ -95,6 +96,12 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       enc.u32(RequestV1.Describe);
       encodeNodeKey(enc, req.node);
       enc.u32(req.generation);
+      break;
+    case "describe_all":
+      // §8.2 set read carrying facts (M39): the ResolveAll payload's
+      // exact shape — the walk enumerates, the rows carry the facts.
+      enc.u32(RequestV1.DescribeAll);
+      encodeSelector(enc, req.selector);
       break;
     case "action":
       enc.u32(RequestV1.Action);
@@ -580,6 +587,14 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
         : null;
       return { kind: "described", node, generation, role, name, value, bounds };
     }
+    case 22: {
+      // §8.2 set read reply carrying facts (M39): one DescribedNode row
+      // per match, document order (the m37 record's standing gap).
+      const n = dec.varint();
+      const rows: DescribedNode[] = [];
+      for (let i = 0; i < n; i += 1) rows.push(decodeDescribedNode(dec));
+      return { kind: "described_all", rows };
+    }
     default:
       throw new Error(`unknown response variant ${variant}`);
   }
@@ -664,6 +679,18 @@ function decodeResolvedMatch(dec: Decoder): ResolvedMatch {
     ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
     : null;
   return { node, generation, rect };
+}
+
+function decodeDescribedNode(dec: Decoder): DescribedNode {
+  const node = decodeNodeKey(dec);
+  const generation = dec.u32();
+  const role = dec.str();
+  const name = dec.optionTag() ? dec.str() : null;
+  const value = dec.optionTag() ? dec.str() : null;
+  const bounds = dec.optionTag()
+    ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
+    : null;
+  return { node, generation, role, name, value, bounds };
 }
 
 function decodeSnapshotNode(dec: Decoder): SnapshotNodeV1 {
