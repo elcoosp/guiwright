@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { GwpClient, GwpRejected } from "../src/client.ts";
+import { GwpClient, GwpRejected, GwpWaitTimeout } from "../src/client.ts";
 import { Encoder } from "../src/postcard.ts";
 
 /** Hex → bytes (the golden vectors' wire form, the codec tests' shape). */
@@ -359,6 +359,207 @@ test("the bulk reads derive the kit source orders from the describe-all rows (M4
       "no values on the vector — the label fallback answers (the m31 rule)",
     );
 
+    await client.close();
+  } finally {
+    server.close();
+  }
+});
+
+/** The M45 wait server: handshake, then subscribe acks, describe-all
+ * replies from a script (in order), one optional pushed event, and the
+ * request log the subscription-ownership assertions read. The bulk-read
+ * server's shape, widened for the wait's conversation. */
+function startWaitServer(
+  bodies: Uint8Array[],
+  pushAfterFirstDescribe: Uint8Array | null,
+): Promise<{
+  port: number;
+  requests: string[];
+  close: () => void;
+}> {
+  const requests: string[] = [];
+  let describes = 0;
+  let pushed = false;
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        const variant = chunk[5];
+        const reply = (payload: Uint8Array) => {
+          const frame = new Uint8Array(4 + payload.length);
+          const view = new DataView(frame.buffer);
+          view.setUint32(0, payload.length, true);
+          frame.set(payload, 4);
+          socket.write(frame);
+        };
+        if (variant === 0) {
+          requests.push("hello");
+          const enc = new Encoder();
+          enc.u32(0); // GwpResponse::V1
+          enc.u32(0); // Welcome
+          enc.u32(1); // proto_version
+          enc.str("mock-session");
+          enc.u64(1);
+          enc.u64(2);
+          enc.str("mock");
+          enc.str("fixture");
+          enc.str("0.1");
+          for (const bit of [true, false, true, false, false, true]) enc.bool(bit);
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 15) {
+          // Subscribe(On|Off) → the ack echoing the filter (§7, M12).
+          const on = chunk[6] === 0;
+          requests.push(on ? "subscribe_on" : "subscribe_off");
+          const enc = new Encoder();
+          enc.u32(0).u32(18);
+          if (on) {
+            enc.seqLen(2).u32(0).u32(1); // tree_changed + frame_presented
+          } else {
+            enc.seqLen(0);
+          }
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 19) {
+          // DescribeAll → the next scripted body; optionally push a
+          // TreeChanged event after the first reply (the wake leg).
+          requests.push(`describe_${describes}`);
+          const body = bodies[Math.min(describes, bodies.length - 1)];
+          describes += 1;
+          reply(body);
+          if (pushAfterFirstDescribe !== null && describes === 1 && !pushed) {
+            pushed = true;
+            socket.write(pushAfterFirstDescribe);
+          }
+          return;
+        }
+        if (variant === 9) {
+          // Bye → Bye (the clean close, §7's last word).
+          requests.push("bye");
+          reply(Uint8Array.from([0, 10]));
+          socket.end();
+          return;
+        }
+        requests.push(`unexpected_variant_${variant}`);
+        // Ping → Pong keeps any post-wait probe honest.
+        if (variant === 1) {
+          requests.push("ping");
+          reply(Uint8Array.from([0, 1]));
+          return;
+        }
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as net.AddressInfo).port;
+      resolve({ port, requests, close: () => server.close() });
+    });
+  });
+}
+
+test("waitFor(visible) is satisfied on entry and drops the subscription (M45)", async () => {
+  // The blessed cross-language contract again: the M39 vector is what a
+  // real Rust server answers DescribeAll with; its Save row carries
+  // bounds, so the visible wait is satisfied on the entry read.
+  const golden = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "golden.json"), "utf8"),
+  );
+  const described = golden.responses.find(
+    (v: { name: string }) => v.name === "described_all_buttons",
+  );
+  const frame = hexToBytes(described.frame_hex);
+  const server = await startWaitServer([frame.subarray(4)], null);
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    const row = await client.waitFor(
+      { kind: "role", role: "Button", name: { text: "Save", exact: true, ignore_case: false } },
+      "visible",
+    );
+    assert.equal(row?.name, "Save");
+    assert.deepEqual(row?.bounds, [16, 16, 136, 48]);
+
+    // The subscription window dropped on return (§7/M12 ownership).
+    assert.ok(server.requests.includes("subscribe_off"), "the wait unsubscribed on return");
+    await client.close();
+  } finally {
+    server.close();
+  }
+});
+
+test("waitFor wakes on the event channel and re-reads (M45)", async () => {
+  // The composition the m42 record named: empty set → a pushed
+  // TreeChanged wake → the re-read answers. No polling anywhere — the
+  // wake arrives because the wait subscribed.
+  const golden = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "golden.json"), "utf8"),
+  );
+  const described = golden.responses.find(
+    (v: { name: string }) => v.name === "described_all_buttons",
+  );
+  const frame = hexToBytes(described.frame_hex);
+  // Empty DescribedAll (count 0), then the blessed rows on the wake.
+  const empty = new Encoder();
+  empty.u32(0).u32(22).seqLen(0);
+  const wake = new Encoder();
+  wake.u32(0).u32(17).u32(0).u64(7); // Event(TreeChanged{seq:7})
+  const wakeFrame = new Uint8Array(4 + wake.finish().length);
+  new DataView(wakeFrame.buffer).setUint32(0, wake.finish().length, true);
+  wakeFrame.set(wake.finish(), 4);
+
+  const server = await startWaitServer([empty.finish(), frame.subarray(4)], wakeFrame);
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    const row = await client.waitFor({ kind: "role", role: "Button", name: null }, "visible", 2000);
+    assert.equal(row?.name, "Save", "the re-read after the tree wake satisfied the wait");
+
+    await client.close();
+  } finally {
+    server.close();
+  }
+});
+
+test("waitFor expiry is the typed timeout and the door stays healthy (M45)", async () => {
+  // Nothing ever answers the selector: the spent budget rejects with
+  // GwpWaitTimeout naming the state, the locator and the last
+  // evaluation — and the SAME connection keeps answering afterwards
+  // (the m44 read-half contract on the TS side: FrameReader always
+  // buffered; the subscription drops best-effort on expiry).
+  const empty = new Encoder();
+  empty.u32(0).u32(22).seqLen(0);
+  const server = await startWaitServer([empty.finish()], null);
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    await assert.rejects(
+      () =>
+        client.waitFor(
+          {
+            kind: "role",
+            role: "Button",
+            name: { text: "Ghost", exact: true, ignore_case: false },
+          },
+          "visible",
+          120,
+        ),
+      (err) => {
+        assert.ok(err instanceof GwpWaitTimeout, "the typed wait timeout");
+        assert.equal(err.state, "visible");
+        assert.equal(err.timeoutMs, 120);
+        assert.match(err.selector, /getByRole\("Button", "Ghost"\)/);
+        assert.match(err.message, /timed out after 120 ms/);
+        assert.match(err.lastEvaluation, /no match/);
+        return true;
+      },
+    );
+
+    // The expired wait left the subscription dropped and the door alive.
+    assert.ok(server.requests.includes("subscribe_off"), "the expiry unsubscribed");
+    await client.ping();
     await client.close();
   } finally {
     server.close();
