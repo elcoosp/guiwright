@@ -1246,6 +1246,77 @@ pub fn locator_all() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- Editable-assertion sample (§16 assertions row, M28) ---------------------
+
+/// §16 assertions row, M28: one `to_be_editable()` kit assertion on the
+/// read-only fixture's editable input — the effective-read-only-state
+/// assertion's steady-state cost: one strict resolve (auto-wait index
+/// path) plus the `is_read_only()` evaluation through the session's
+/// zero-polling wait. The assertion completes on the initial evaluation,
+/// so this is the floor every editable/read-only assertion adds on top of
+/// the `resolve_cached_index` row — the same shape as the M20 checked row
+/// (a state check rides an existing waiter, no new machinery).
+pub fn editable_assert() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::with_readonly();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("editable_assert", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        guiwright_kit::expect(app.get_by_role(Role::TextInput, "Bio"))
+            .to_be_editable()
+            .expect("bench assertion holds");
+    }
+    start.elapsed() / ITERATIONS
+}
+
+// --- Bulk text-read sample (§16 assertions row, M29) -------------------------
+
+/// §16 assertions row, M29 (the m26 record's open kit gap): one
+/// `role_locator(Role::Button).all_text_contents()` over the button
+/// fixture — one non-strict `resolve_all` walk (the snapshot set read,
+/// the `count_assert`/`locator_all` rows' cost) plus one label/value read
+/// per match. The launch and settle stay outside the measured span; the
+/// measured operation is one full set read, the hot path every
+/// enumerate-and-collect flow rides. The per-match text read is an index
+/// walk over the same consumer tree the resolution used — no extra
+/// pumping, no waiter.
+pub fn text_contents() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("text_contents", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let texts = app
+            .role_locator(Role::Button)
+            .all_text_contents()
+            .expect("bench set read");
+        assert_eq!(texts.len(), 4, "the fixture's four buttons");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 // --- Kit window-handle sample (§16 v0.4 over the kit, M6 kit half) -----------
 /// §16 v0.4 multi-window, kit side: one `app.window(handle).get_by_role(…)
 /// .resolve()` through the window-handle surface — aim (validated against
