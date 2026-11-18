@@ -338,3 +338,23 @@ p95_us = 2000
 notes = "the m22/m25 records' open kit gap closed: one non-strict resolve_all walk (the snapshot set read, the count_assert row's cost) plus one index-pinned strict resolve per visited item (the .nth(i) pin, each with its own pump) — four visits on the button fixture; a snapshot read with no waiting, so the per-item cost rides the resolve_cached_index row"
 m0_measurable = true
 sample = "locator_all"
+
+[[budget]]
+id = "editable_assert"
+name = "Kit: one to_be_editable() assertion (resolve + evaluate)"
+p50_us = 100
+p95_us = 500
+notes = "the M28 editable-state assertion's steady-state cost on the read-only fixture: one strict resolve (auto-wait index path) plus the consumer's effective read-only evaluation through the session's zero-polling wait — the assertion completes on the initial evaluation, so this is the floor every editable/read-only assertion adds on top of a resolve; the same shape as the checked_assert row (a state check rides an existing waiter, no new machinery)"
+m0_measurable = true
+sample = "editable_assert"
+
+[[budget]]
+id = "text_contents"
+name = "Kit: one all_text_contents() read (resolve_all + per-node text)"
+p50_us = 400
+p95_us = 2000
+notes = "the M29 bulk reader's steady-state cost on the button fixture: one non-strict resolve_all walk (the snapshot set read, the count_assert row's cost) plus one label/value read per match — four texts in document order; a snapshot read with no waiting, so the per-match cost rides the resolve_cached_index row and the set shape mirrors the locator_all row"
+m0_measurable = true
+sample = "text_contents"
+
+
