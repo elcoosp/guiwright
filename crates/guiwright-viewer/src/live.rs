@@ -437,6 +437,7 @@ fn response_kind(response: &ResponseV1) -> &'static str {
         ResponseV1::Event(_) => "Event",
         ResponseV1::Subscribed { .. } => "Subscribed",
         ResponseV1::ResolvedAll { .. } => "ResolvedAll",
+        ResponseV1::HitTest { .. } => "HitTest",
     }
 }
 
