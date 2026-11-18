@@ -8,9 +8,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as net from "node:net";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 import { GwpClient, GwpRejected } from "../src/client.ts";
 import { Encoder } from "../src/postcard.ts";
+
+/** Hex → bytes (the golden vectors' wire form, the codec tests' shape). */
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
 
 /** A minimal hand-rolled GWP server: Welcome → Pong → clock reply → Bye. */
 function startMockServer(): Promise<{ port: number; close: () => void }> {
@@ -250,5 +260,107 @@ test("subscribe + nextEvent demux pushed events from responses (§7, M12)", asyn
   } finally {
     server.close();
     server.closeAllConnections?.();
+  }
+});
+
+/** The M41 bulk-read server: handshake, then the DescribeAll request
+ * (variant 19) is answered with the blessed `described_all_buttons`
+ * frame — the real Rust server's M39 reply, replayed byte-for-byte. */
+function startBulkReadServer(replyBody: Uint8Array): Promise<{
+  port: number;
+  close: () => void;
+}> {
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        const variant = chunk[5];
+        const reply = (payload: Uint8Array) => {
+          const frame = new Uint8Array(4 + payload.length);
+          const view = new DataView(frame.buffer);
+          view.setUint32(0, payload.length, true);
+          frame.set(payload, 4);
+          socket.write(frame);
+        };
+        if (variant === 0) {
+          // Hello → Welcome{...} — the hand-encoded postcard the other
+          // tests speak (§7: the handshake must land first).
+          const enc = new Encoder();
+          enc.u32(0); // GwpResponse::V1
+          enc.u32(0); // Welcome
+          enc.u32(1); // proto_version
+          enc.str("mock-session");
+          enc.u64(1);
+          enc.u64(2);
+          enc.str("mock");
+          enc.str("fixture");
+          enc.str("0.1");
+          for (const bit of [true, false, true, false, false, true]) enc.bool(bit);
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 19) {
+          // DescribeAll → the blessed DescribedAll rows.
+          reply(replyBody);
+          return;
+        }
+        if (variant === 9) {
+          // Bye → Bye (the clean close, §7's last word).
+          reply(Uint8Array.from([0, 10]));
+          socket.end();
+          return;
+        }
+        // Anything else → Error{Internal} (the other tests' fallback).
+        const enc = new Encoder();
+        enc.u32(0).u32(9);
+        enc.u32(7);
+        enc.str("not implemented in the bulk-read mock server");
+        reply(Array.from(enc.finish()));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as net.AddressInfo).port;
+      resolve({
+        port,
+        close: () => {
+          server.close();
+          server.closeAllConnections?.();
+        },
+      });
+    });
+  });
+}
+
+test("the bulk reads derive the kit source orders from the describe-all rows (M41)", async () => {
+  // The golden file is the blessed cross-language contract: the M39
+  // vector is what a real Rust server answers DescribeAll with.
+  const golden = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "golden.json"), "utf8"),
+  );
+  const described = golden.responses.find(
+    (v: { name: string }) => v.name === "described_all_buttons",
+  );
+  const frame = hexToBytes(described.frame_hex);
+  const server = await startBulkReadServer(frame.subarray(4));
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    // texts: the m29 source order — label first, value fallback. The
+    // vector is the 2-row byte-pin fixture (the real 4-button walk is
+    // the e2e leg's), its rows carry no values, so both reads answer
+    // the names in document order — `values` through the label
+    // fallback (the m31 rule).
+    const texts = await client.allTextContents({ kind: "role", role: "Button", name: null });
+    assert.deepEqual(texts, ["Save", "Cancel"]);
+    const values = await client.allValues({ kind: "role", role: "Button", name: null });
+    assert.deepEqual(
+      values,
+      ["Save", "Cancel"],
+      "no values on the vector — the label fallback answers (the m31 rule)",
+    );
+
+    await client.close();
+  } finally {
+    server.close();
   }
 });
