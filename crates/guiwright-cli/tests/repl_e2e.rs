@@ -436,6 +436,82 @@ async fn repl_hit_test_read() {
     handle.shutdown();
 }
 
+/// The REPL read-vocabulary pass (M35 — the m30 record's named REPL gap:
+/// "`get`, `count` does not exist either; a REPL row lands with the
+/// REPL's own read-vocabulary pass"): `count <get-args…>` answers the
+/// set size and `all <get-args…>` enumerates the set rows — both reads
+/// over the M30 `ResolveAll` domain, strict mode never consulted, the
+/// current node untouched (a read, not a resolve-store), an empty set a
+/// valid answer (the snapshot rule, never an error).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_read_vocabulary_count_and_all() {
+    let path = socket_path("repl-reads.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // count: the set size in one line — the fixture's four buttons (the
+    // set read is non-strict: hidden + disabled included), singular and
+    // empty forms included.
+    assert_eq!(
+        rendered(&repl.step("count role Button").await),
+        vec!["4 matches (Button)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button Save").await),
+        vec!["1 match (Button \"Save\")"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button Ghost").await),
+        vec!["0 matches (Button \"Ghost\")"],
+    );
+
+    // all: one row per match, document order — the same identity +
+    // generation + rect rendering `last`/`hit` print.
+    let out = rendered(&repl.step("all role Button").await);
+    assert_eq!(out.len(), 4, "{out:?}");
+    assert_eq!(
+        out[0], "accesskit#2 (generation 0) rect=[16,16 → 136,48]",
+        "document order: Save first (node 2)"
+    );
+    assert!(out[1].starts_with("accesskit#3 (generation 0)"), "{out:?}");
+    assert!(out[2].starts_with("accesskit#6 (generation 0)"), "{out:?}");
+    assert!(out[3].starts_with("accesskit#7 (generation 0)"), "{out:?}");
+
+    // An empty set is one info line (the read is total, never an error).
+    assert_eq!(
+        rendered(&repl.step("all role Button Ghost").await),
+        vec!["no matches"],
+    );
+
+    // A read, not a resolve-store: `last` keeps the node `get` aimed at
+    // (the get's selector describe, not the reads' set rows).
+    let get = repl.step("get role Button Save").await;
+    assert!(ok_line(&get).starts_with("resolved "), "{get:?}");
+    assert_eq!(
+        rendered(&repl.step("count role Button").await),
+        vec!["4 matches (Button)"],
+    );
+    assert!(ok_line(&repl.step("last").await).contains("\"Save\""));
+
+    // The help lists the new reads (the vocabulary is discoverable).
+    let help_text: Vec<String> = rendered(&repl.step("help").await);
+    assert!(
+        help_text.iter().any(|l| l.contains("count <get-args")),
+        "{help_text:?}"
+    );
+    assert!(
+        help_text.iter().any(|l| l.contains("all <get-args")),
+        "{help_text:?}"
+    );
+
+    handle.shutdown();
+}
+
 /// `help` lists every command family; `timeout` round-trips.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn help_and_timeout() {
