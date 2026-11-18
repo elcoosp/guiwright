@@ -27,7 +27,8 @@
 
 |                                         |                                                                                                                                                                                                          |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 🎭 **Playwright-shaped API**            | `get_by_*` locators with strict mode, actionability-gated actions, `expect(...)` retry-until-timeout assertions, `.not()`, `wait_for`, `all()`, count reads — [the parity map](#the-playwright-surface). |
+| 🎭 **Playwright-shaped API**            | `get_by_*` locators with strict mode, actionability-gated actions, `expect(...)` retry-until-timeout assertions, `.not()`, `wait_for`, `all()`, count reads,
+editable/readonly assertions, bulk text reads — [the parity map](#the-playwright-surface). |
 | ⏱️ **Event-driven auto-wait**           | Attached / visible / stable / enabled / receives-events checks, woken by tree diffs and presented frames. **A waiter fed no events does no work** — no polling, no sleeps.                               |
 | 🌳 **Real trees, real input**           | Selectors resolve against the framework's AccessKit tree; clicks and keys go through its actual input pipeline at frame boundaries.                                                                      |
 | 🔌 **One contract, four doors**         | The same `FrameworkAdapter` runs in-process for tests and over GWP on UDS / TCP / WebSocket / an in-process duplex — identical semantics everywhere.                                                     |
@@ -134,8 +135,10 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | `expect().toHaveCount` / `count()`                                            | `to_have_count(n)` / `count()`                                                       | the strict-mode escape hatch — waitable in both directions, `count()` a snapshot read (M22)             |
 | —                                                                             | `to_have_count_greater_than` / `to_have_count_less_than`                             | one-sided count comparators, compose with `.not()` (M25 extension)                                      |
 | `expect().not()`                                                              | `.not().to_*()`                                                                      | one `NotWaiter` decorator inverts the whole vocabulary; strict-mode violations still fail (M24)         |
+| `expect().toBeEditable`                                                       | `to_be_editable` / **`to_be_readonly`**                                              | the consumer's effective read-only state — flag, role defaults, unsupported roles (M28 extension)       |
 | `locator.waitFor(state)`                                                      | `wait_for(state)`                                                                    | `attached` / `visible` / `hidden` / `stable` (M21)                                                      |
 | `locator.all()`                                                               | `all(\|item\| …)`                                                                    | document order, each match an nth-pinned locator handed to the visitor — the borrow-and-act shape (M26) |
+| `locator.allTextContents()`                                                   | `all_text_contents()`                                                                | one snapshot read per set: document order, the same text the text locators match (M29)                  |
 | `page.screenshot` / `locator.screenshot`                                      | `app.screenshot` / `locator.screenshot`                                              | one render pass, element crops cut by resolved bounds — never re-render                                 |
 | `mouse` / `keyboard`                                                          | GWP `Gesture` domain; TS `mouse` / `keyboard`                                        | click / drag / wheel / key / type, driver-synthesized from the adapter's pacing table (M7)              |
 
@@ -370,14 +373,14 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M15–M16**   | The WebSocket and in-process duplex doors; the `Transport` seam for custom listeners                                                                                            |
 | **M17**       | Wire `Action` honors `force`/`timeout_ms` — the act-time gate with named stuck checks                                                                                           |
 | **M18 / M23** | The viewer's live mode over any door + mid-session scrubber HTML (`gwtrace/v1 (live)`)                                                                                          |
-| **M19–M27**   | The kit parity stream: `press`/`check`/`focus`/`blur` · tri-state assertions · `wait_for` · `count` + comparators · `.not()` · `all()` · the `held_on` satisfied-state accessor |
+| **M19–M29**   | The kit parity stream: `press`/`check`/`focus`/`blur` · tri-state assertions · `wait_for` · `count` + comparators · `.not()` · `all()` · the `held_on` satisfied-state accessor · the editable/read-only pair · the `all_text_contents()` bulk read |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m27-waiter-held-on.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m29-bulk-text-reads.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
