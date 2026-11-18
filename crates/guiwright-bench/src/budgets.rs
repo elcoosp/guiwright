@@ -123,6 +123,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         crate::samples::kit_window_scoped_resolve,
     ),
     ("wire_window_targets", crate::samples::wire_window_targets),
+    ("resolve_all_wire", crate::samples::resolve_all_wire),
+    ("all_values", crate::samples::all_values),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
