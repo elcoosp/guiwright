@@ -129,6 +129,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("drag_to", crate::samples::drag_to),
     ("locator_filter", crate::samples::locator_filter),
     ("node_describe", crate::samples::node_describe),
+    ("identity_assert", crate::samples::identity_assert),
+    ("describe_all_wire", crate::samples::describe_all_wire),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
