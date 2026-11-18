@@ -251,14 +251,24 @@ impl Selector {
         }
     }
 
-    /// Chained descendant locator sugar (`locator(locator)`).
-    pub fn descendant_of(self, outer: Selector) -> Selector {
-        let mut chain = match outer {
+    /// `locator.locator(child)` sugar (M34) — the chained-descendant
+    /// narrowing in **composition order**: resolve `self`, then search
+    /// each match's subtree for `inner` (§8.1 `Selector::All` chain,
+    /// Playwright's `locator.locator()`).
+    pub fn then_descendant(self, inner: Selector) -> Selector {
+        let mut chain = match self {
             Selector::All(chain) => chain,
             other => vec![other],
         };
-        chain.push(self);
+        chain.push(inner);
         Selector::All(chain)
+    }
+
+    /// Chained descendant locator sugar (`locator(locator)`): `self`
+    /// resolves inside `outer`'s subtree — [`Self::then_descendant`] with
+    /// the arguments flipped to match the "is a descendant of" reading.
+    pub fn descendant_of(self, outer: Selector) -> Selector {
+        outer.then_descendant(self)
     }
 
     /// Stable, pretty rendering used in errors and traces.
