@@ -25,8 +25,8 @@ use guiwright_proto::GwpError;
 use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1,
-    NodeKeyV1, PROTO_VERSION, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1,
-    SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
+    NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1,
+    SemActionV1, SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -832,6 +832,36 @@ fn handle_request<A: FrameworkAdapter>(
                 Ok(None) => ResponseV1::Error {
                     code: ErrorCode::Internal,
                     message: "resolve satisfied by absence".into(),
+                },
+                Err(err) => error_response(err),
+            }
+        }
+        RequestV1::ResolveAll { selector } => {
+            // The §8.2 set read over the wire (M30): the same walk the
+            // kit's `count()`/`all()` run — non-strict, never waiting, so
+            // an empty set answers with an empty list (the read is total,
+            // never an error). Window scope rides the same discipline the
+            // Resolve arm runs.
+            let scope = match window.as_deref() {
+                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => return error_response(err),
+                },
+                _ => None,
+            };
+            session.set_resolve_scope(scope);
+            let result = session.resolve_all(&Selector::from(selector));
+            session.clear_resolve_scope();
+            match result {
+                Ok(matches) => ResponseV1::ResolvedAll {
+                    matches: matches
+                        .into_iter()
+                        .map(|resolved| ResolvedMatchV1 {
+                            node: NodeKeyV1::from(resolved.key),
+                            generation: resolved.generation,
+                            rect: resolved.bounds.map(rect_to_array),
+                        })
+                        .collect(),
                 },
                 Err(err) => error_response(err),
             }
