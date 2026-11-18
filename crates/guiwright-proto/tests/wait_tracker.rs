@@ -7,7 +7,6 @@
 //! check table. The wire composition (subscribe → evaluate → wake →
 //! re-read) is `driver/tests/wire_wait.rs`'s leg.
 
-use guiwright_proto::client::ClientConn;
 use guiwright_proto::schema::{DescribedV1, NodeKeyV1};
 use guiwright_proto::wait::{Eval, WaitState, WaitTracker};
 
@@ -46,7 +45,7 @@ fn attached_stays_pending_on_an_empty_set() {
     let mut tracker = WaitTracker::new(WaitState::Attached);
     match tracker.evaluate(&[]) {
         Eval::Pending { reason } => assert!(reason.contains("no match"), "{reason:?}"),
-        other => panic!("expected pending, got {other:?}"),
+        other @ Eval::Satisfied(_) => panic!("expected pending, got {other:?}"),
     }
 }
 
@@ -56,7 +55,7 @@ fn visible_requires_non_empty_bounds() {
     let hidden_only = vec![row(6, "Invisible", None)];
     match tracker.evaluate(&hidden_only) {
         Eval::Pending { reason } => assert!(reason.contains("no bounds"), "{reason:?}"),
-        other => panic!("expected pending, got {other:?}"),
+        other @ Eval::Satisfied(_) => panic!("expected pending, got {other:?}"),
     }
 
     let visible = vec![row(2, "Save", Some(SAVE_BOUNDS))];
@@ -127,13 +126,15 @@ fn stable_resets_when_the_bounds_change() {
     let moved = vec![row(2, "Save", Some([16.0, 96.0, 136.0, 128.0]))];
     match tracker.observe_frame(&moved) {
         Eval::Pending { reason } => assert!(reason.contains("next frame"), "{reason:?}"),
-        other => panic!("expected a reset, got {other:?}"),
+        other @ Eval::Satisfied(_) => panic!("expected a reset, got {other:?}"),
     }
     match tracker.observe_frame(&moved) {
         Eval::Satisfied(Some(satisfied)) => {
-            assert_eq!(satisfied.bounds, Some([16.0, 96.0, 136.0, 128.0]))
+            assert_eq!(satisfied.bounds, Some([16.0, 96.0, 136.0, 128.0]));
         }
-        other => panic!("expected the moved row, got {other:?}"),
+        other @ (Eval::Pending { .. } | Eval::Satisfied(None)) => {
+            panic!("expected the moved row, got {other:?}")
+        }
     }
 }
 
@@ -155,7 +156,7 @@ fn stable_repins_when_the_pinned_row_leaves_the_set() {
     ];
     match tracker.observe_frame(&changed) {
         Eval::Pending { reason } => assert!(reason.contains("re-pinned"), "{reason:?}"),
-        other => panic!("expected a re-pin, got {other:?}"),
+        other @ Eval::Satisfied(_) => panic!("expected a re-pin, got {other:?}"),
     }
     // One identical frame on the new pin is a baseline, not a pass — the
     // reset is real, not cosmetic.
@@ -166,7 +167,9 @@ fn stable_repins_when_the_pinned_row_leaves_the_set() {
     ));
     match tracker.observe_frame(&cancel_only) {
         Eval::Satisfied(Some(satisfied)) => assert_eq!(satisfied.node, cancel_only[0].node),
-        other => panic!("expected the new pin, got {other:?}"),
+        other @ (Eval::Pending { .. } | Eval::Satisfied(None)) => {
+            panic!("expected the new pin, got {other:?}")
+        }
     }
 }
 
@@ -176,7 +179,7 @@ fn stable_stays_pending_without_a_visible_row() {
     let hidden_only = vec![row(6, "Invisible", None)];
     match tracker.evaluate(&hidden_only) {
         Eval::Pending { reason } => assert!(reason.contains("no visible"), "{reason:?}"),
-        other => panic!("expected pending, got {other:?}"),
+        other @ Eval::Satisfied(_) => panic!("expected pending, got {other:?}"),
     }
     assert!(matches!(
         tracker.observe_frame(&hidden_only),
