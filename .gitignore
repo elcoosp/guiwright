@@ -24,3 +24,7 @@ target/guiwright/
 ship.toml
 .github/pr-body.md
 docs/launch.md
+
+# handoff artifacts (ship ceremony, not repo files)
+/ship.toml
+/.github/pr-body.md
