@@ -21,7 +21,7 @@ import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
-import { GwpClient, GwpRejected } from "../src/client.ts";
+import { GwpClient, GwpRejected, GwpWaitTimeout } from "../src/client.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolvePath(here, "..", "..", "..");
@@ -296,6 +296,34 @@ try {
   } else {
     console.log("✓ events: subscribed + unsubscribed (no event within 2s — the app was quiescent)");
   }
+
+  // --- the client-side wait: locator.waitFor over a real door (M45) ---
+  // Satisfied on entry (the fixture's Save is laid out), then the typed
+  // expiry against a locator that never matches — the same connection
+  // keeps driving afterwards (the m44 read-half contract).
+  const waitRow = await client.waitFor(
+    { kind: "role", role: "Button", name: { text: "Save", exact: true, ignore_case: true } },
+    "visible",
+    2000,
+  );
+  assert.equal(waitRow?.name, "Save", "the visible wait is satisfied on entry");
+  assert.ok((waitRow?.bounds ?? [0, 0, 0, 0])[2] > 0, "the satisfying row is laid out");
+  await assert.rejects(
+    () =>
+      client.waitFor(
+        { kind: "text", match: { text: "Never", exact: true, ignore_case: false } },
+        "visible",
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed wait timeout");
+      assert.match((err as GwpWaitTimeout).message, /timed out after 200 ms/);
+      assert.match((err as GwpWaitTimeout).selector, /getByText/);
+      return true;
+    },
+  );
+  await client.ping(); // the spent wait left the door healthy
+  console.log("✓ waitFor: satisfied on entry + the typed expiry — door healthy (M45)");
 
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
