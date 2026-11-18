@@ -372,3 +372,21 @@ p95_us = 2000
 notes = "the M31 value-first bulk read's steady-state cost on the button fixture: the text_contents row's walk with the per-node source order flipped (value first, label fallback — the getByValue source order); one non-strict resolve_all walk plus one value/label read per match, four values in document order; a snapshot read with no waiting, so the cost rides the resolve_cached_index row and the set shape mirrors the text_contents row"
 m0_measurable = true
 sample = "all_values"
+
+[[budget]]
+id = "hit_test_wire"
+name = "Hit-test read, in-process door (Save center)"
+p50_us = 500
+p95_us = 2500
+notes = "the M32 hit-test read over the wire (the §8.3 receives-events mechanism as a public read): one HitTest round-trip over the embedded door — pump, the consumer's node_at_point walk at the Save button's center under the common filter, one ResolvedMatchV1 row marshalled back; a total read (empty space answers None, no error, the warm-up's miss probe pins the shape), so the floor is the resolve_remote_uds round-trip shape carrying one row instead of a selector walk"
+m0_measurable = true
+sample = "hit_test_wire"
+
+[[budget]]
+id = "drag_to"
+name = "Kit: one locator drag_to (both ends attached + synthesized drag)"
+p50_us = 100
+p95_us = 500
+notes = "the M33 locator drag's steady-state cost on the button fixture: two Attached-gated auto-wait resolves (the source locator's own window context, one coordinate space — the wire Resolve discipline on both ends), the bounds-center pair, the Gesture::Drag synthesis under the adapter's pacing table and one rendezvous pump; the kit_input_click gesture shape plus a second gated resolve — the floor every locator drag adds on top of the raw-input drag"
+m0_measurable = true
+sample = "drag_to"
