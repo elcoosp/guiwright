@@ -31,41 +31,93 @@ struct EchoHandler {
     handshakes: Arc<AtomicUsize>,
 }
 
+/// The scripted reply table, shared by both handler shapes (the conn.rs
+/// test-double pattern: one conversation, one event-carrying variant).
+fn scripted_response(request: &RequestV1) -> ResponseV1 {
+    match request {
+        RequestV1::Hello { .. } => ResponseV1::Welcome {
+            proto_version: PROTO_VERSION,
+            session_id: "seam-test".into(),
+            tree_seq: 1,
+            frame_seq: 0,
+            adapter: AdapterInfoV1 {
+                name: "mock".into(),
+                framework: "fixture".into(),
+                framework_version: "0".into(),
+                caps: CapsV1::default(),
+            },
+        },
+        RequestV1::Ping => ResponseV1::Pong,
+        RequestV1::Subscribe(guiwright_proto::schema::SubscribeV1::On { kinds }) => {
+            ResponseV1::Subscribed {
+                kinds: kinds.clone(),
+            }
+        }
+        RequestV1::Subscribe(guiwright_proto::schema::SubscribeV1::Off) => {
+            ResponseV1::Subscribed { kinds: Vec::new() }
+        }
+        RequestV1::Bye => ResponseV1::Bye,
+        _ => ResponseV1::Error {
+            code: ErrorCode::Unsupported,
+            message: "not implemented in the seam echo handler".into(),
+        },
+    }
+}
+
 impl Handler for EchoHandler {
     fn handle(
         &mut self,
         request: RequestV1,
     ) -> impl std::future::Future<Output = ResponseV1> + Send {
-        let response = match request {
-            RequestV1::Hello { .. } => {
-                self.handshakes.fetch_add(1, Ordering::SeqCst);
-                ResponseV1::Welcome {
-                    proto_version: PROTO_VERSION,
-                    session_id: "seam-test".into(),
-                    tree_seq: 1,
-                    frame_seq: 0,
-                    adapter: AdapterInfoV1 {
-                        name: "mock".into(),
-                        framework: "fixture".into(),
-                        framework_version: "0".into(),
-                        caps: CapsV1::default(),
-                    },
-                }
-            }
-            RequestV1::Ping => ResponseV1::Pong,
-            RequestV1::Subscribe(guiwright_proto::schema::SubscribeV1::On { kinds }) => {
-                ResponseV1::Subscribed { kinds }
-            }
-            RequestV1::Subscribe(guiwright_proto::schema::SubscribeV1::Off) => {
-                ResponseV1::Subscribed { kinds: Vec::new() }
-            }
-            RequestV1::Bye => ResponseV1::Bye,
-            _ => ResponseV1::Error {
-                code: ErrorCode::Unsupported,
-                message: "not implemented in the seam echo handler".into(),
-            },
-        };
+        if matches!(request, RequestV1::Hello { .. }) {
+            self.handshakes.fetch_add(1, Ordering::SeqCst);
+        }
+        let response = scripted_response(&request);
         async move { response }
+    }
+}
+
+/// The echo handler with a live event channel (the M12 shape): each
+/// connection gets its own queue; the test holds the sender clone.
+struct EmittingEchoHandler {
+    handshakes: Arc<AtomicUsize>,
+    rx: Option<tokio::sync::mpsc::Receiver<guiwright_proto::schema::GwpEvent>>,
+}
+
+impl EmittingEchoHandler {
+    fn new(
+        handshakes: Arc<AtomicUsize>,
+    ) -> (
+        Self,
+        tokio::sync::mpsc::Sender<guiwright_proto::schema::GwpEvent>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::channel(duplex::EVENT_QUEUE_CAPACITY);
+        (
+            Self {
+                handshakes,
+                rx: Some(rx),
+            },
+            tx,
+        )
+    }
+}
+
+impl Handler for EmittingEchoHandler {
+    fn handle(
+        &mut self,
+        request: RequestV1,
+    ) -> impl std::future::Future<Output = ResponseV1> + Send {
+        if matches!(request, RequestV1::Hello { .. }) {
+            self.handshakes.fetch_add(1, Ordering::SeqCst);
+        }
+        let response = scripted_response(&request);
+        async move { response }
+    }
+
+    fn event_stream(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::Receiver<guiwright_proto::schema::GwpEvent>> {
+        self.rx.take()
     }
 }
 
@@ -158,6 +210,56 @@ async fn the_seam_serves_the_embedded_door() {
     let mut client = DuplexClient::connect(&connect).await.expect("connect");
     exercise(&mut client).await;
     assert_eq!(handshakes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn deadline_raced_event_reads_keep_the_door_conversation_aligned() {
+    // The m42 wait + the viewer live feed's consumer shape over a real
+    // door (M44): `next_event` raced against a deadline — a quiet window
+    // expires, the next window lands the pushed event — and the
+    // conversation continues. The byte-level mid-frame staging (the
+    // consumed-prefix hazard) is the conn.rs unit tests' leg; this test
+    // pins the composed behavior on the embedded door.
+    use guiwright_proto::schema::{EventV1, GwpEvent};
+    use std::time::Duration;
+
+    let (listener, connect) = duplex::channel();
+    let handshakes = Arc::new(AtomicUsize::new(0));
+    let (handler, tx) = EmittingEchoHandler::new(Arc::clone(&handshakes));
+    let mut handler = Some(handler);
+    tokio::spawn(async move {
+        duplex::serve(listener, move || {
+            handler.take().expect("the test opens one connection")
+        })
+        .await;
+    });
+
+    let mut client = DuplexClient::connect(&connect).await.expect("connect");
+    client.handshake("seam-test/0.1").await.expect("handshake");
+    client
+        .subscribe(&[EventKindV1::TreeChanged])
+        .await
+        .expect("subscribe");
+
+    // A quiet window expires — the deadline drops the pending read.
+    let quiet = tokio::time::timeout(Duration::from_millis(30), client.next_event()).await;
+    assert!(quiet.is_err(), "no event was pushed: the window expires");
+
+    // The next event lands whole, and the round trips keep flowing.
+    tx.send(GwpEvent::V1(EventV1::TreeChanged { seq: 1 }))
+        .await
+        .expect("the handler queue is alive");
+    let event = tokio::time::timeout(Duration::from_secs(2), client.next_event())
+        .await
+        .expect("the pushed event arrives whole after the expired window")
+        .expect("the event decodes");
+    let GwpEvent::V1(EventV1::TreeChanged { seq: 1 }) = event else {
+        panic!("expected the pushed TreeChanged, got {event:?}");
+    };
+
+    client.ping().await.expect("the conversation continues");
+    let bye = client.request(RequestV1::Bye).await.expect("bye");
+    assert_eq!(bye, ResponseV1::Bye);
 }
 
 #[tokio::test]
