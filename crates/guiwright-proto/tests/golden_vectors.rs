@@ -16,9 +16,9 @@
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GestureV1, InputEventV1,
-    InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1,
-    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1,
-    VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
+    InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResolvedMatchV1,
+    ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1,
+    TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -266,13 +266,28 @@ fn multi_window_gesture_requests() -> Vec<(&'static str, RequestV1)> {
     ]
 }
 
+/// M30 (§8.2's set read): the resolve-all request — the enumeration over
+/// the wire, no timeout (it never waits).
+fn resolve_all_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "resolve_all_role",
+        RequestV1::ResolveAll {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: None,
+            },
+        },
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
         .into_iter()
         .chain(action_input_requests())
         .chain(service_requests())
-        .chain(multi_window_gesture_requests());
+        .chain(multi_window_gesture_requests())
+        .chain(resolve_all_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -357,6 +372,23 @@ fn core_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
             }),
         ),
         (
+            "resolved",
+            ResponseV1::Resolved {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0x01; 16],
+                    node: 2,
+                },
+                generation: 0,
+                rect: Some([0.0, 0.0, 120.0, 32.0]),
+            },
+            serde_json::json!({
+                "kind": "resolved",
+                "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 2},
+                "generation": 0,
+                "rect": [0.0, 0.0, 120.0, 32.0],
+            }),
+        ),
+        (
             "action_done",
             ResponseV1::ActionDone {
                 frame_seq: 18,
@@ -365,6 +397,41 @@ fn core_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
             serde_json::json!({"kind": "action_done", "frame_seq": 18, "detail": "clicked"}),
         ),
     ]
+}
+
+/// M30 (§8.2's set read): the resolve-all reply — two rows, the same
+/// per-match facts the single `Resolved` reply carries.
+fn resolve_all_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "resolved_all",
+        ResponseV1::ResolvedAll {
+            matches: vec![
+                ResolvedMatchV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 2,
+                    },
+                    generation: 0,
+                    rect: Some([0.0, 0.0, 120.0, 32.0]),
+                },
+                ResolvedMatchV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 3,
+                    },
+                    generation: 0,
+                    rect: Some([0.0, 40.0, 120.0, 72.0]),
+                },
+            ],
+        },
+        serde_json::json!({
+            "kind": "resolved_all",
+            "matches": [
+                {"node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 2}, "generation": 0, "rect": [0.0, 0.0, 120.0, 32.0]},
+                {"node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 3}, "generation": 0, "rect": [0.0, 40.0, 120.0, 72.0]},
+            ],
+        }),
+    )]
 }
 
 /// Clock / mock / codegen / error service responses.
@@ -571,6 +638,7 @@ fn tree_dump_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
 fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
     let responses = core_responses()
         .into_iter()
+        .chain(resolve_all_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
