@@ -20,12 +20,16 @@
 //! every impl, shipped or downstream, inherits them for free.
 
 use std::future::Future;
+use std::time::{Duration, Instant};
+
+use guiwright_core::Selector;
 
 use crate::GwpError;
 use crate::schema::{
-    AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, GwpEvent, RequestV1,
-    ResolvedMatchV1, ResponseV1, SelectorV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1, GwpEvent,
+    NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1, WindowInfoV1, WindowV1,
 };
+use crate::wait::{Eval, WaitState, WaitTracker};
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
 ///
@@ -159,7 +163,7 @@ pub trait ClientConn: Send + 'static {
     /// honesty an [`RequestV1::Action`] on the row would meet.
     fn describe(
         &mut self,
-        node: crate::schema::NodeKeyV1,
+        node: NodeKeyV1,
         generation: u32,
     ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
         async move {
@@ -199,6 +203,135 @@ pub trait ClientConn: Send + 'static {
             }
         }
     }
+
+    /// The client-side wait (m42 — the m21 record's named follow-up):
+    /// Playwright's `locator.waitFor(state)` for remote suites. Composes
+    /// the §7 event channel with the M39 describe-all re-reads — subscribe
+    /// to `TreeChanged`/`FramePresented`, evaluate the state against the
+    /// rows (the [`crate::wait::WaitTracker`] rules), and re-read on every
+    /// wake until the state holds or `timeout` expires. No wire change:
+    /// the wait rides existing domains byte-for-byte; every
+    /// [`ClientConn`] impl inherits it.
+    ///
+    /// **Answers.** The positive states answer with the row that
+    /// satisfied them — directly usable as an `RequestV1::Action` handle
+    /// (the dump-row rule, M11). `Hidden` answers `Ok(None)`: absence is
+    /// the satisfying fact. The timeout is the typed
+    /// [`GwpError::WaitTimeout`], naming the state, the locator and the
+    /// last evaluation — never a wire answer.
+    ///
+    /// **Subscription ownership.** The wait installs the
+    /// `TreeChanged` + `FramePresented` filter for its duration and
+    /// drops it on return, both on success and on expiry (a consumer
+    /// that never drains its events must not stay subscribed — the
+    /// driver only pumps at frame cadence while subscribers exist). A
+    /// connection running its own long-lived subscription (the viewer's
+    /// live feed) should not hand the same connection to a wait: the
+    /// one-event-consumer rule the §7 channel already states. Events
+    /// that interleave the wait's own requests are buffered by the
+    /// connection state machine and consumed by the wait itself, so no
+    /// wake is lost mid-wait.
+    ///
+    /// # Errors
+    ///
+    /// Protocol failures (`subscribe`, the describe-all round trips,
+    /// `next_event`) propagate as-is — a driver that predates M39
+    /// answers `DescribeAll` with the typed `Unsupported` and the wait
+    /// surfaces that rejection rather than degrading (the m41 fail-fast
+    /// rule). A spent budget answers [`GwpError::WaitTimeout`].
+    fn wait_for(
+        &mut self,
+        selector: SelectorV1,
+        state: WaitState,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Option<DescribedV1>, GwpError>> + Send {
+        async move {
+            // The locator string for the timeout line (the kit's render
+            // vocabulary — `getByRole(Button, "Save")` — one conversion,
+            // not one per re-read).
+            let rendered = Selector::from(selector.clone()).render();
+
+            // The wait owns the event filter for its duration. A driver
+            // that rejects Log-less subscriptions answers the same
+            // `Subscribed` ack every door speaks.
+            self.subscribe(&[EventKindV1::TreeChanged, EventKindV1::FramePresented])
+                .await?;
+
+            let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);
+            let mut tracker = WaitTracker::new(state);
+            // The entry read is a tree-time evaluation; frame wakes re-pin
+            // and — only for `Stable` — confirm.
+            let mut wake = Wake::Tree;
+            loop {
+                let rows = self.describe_all(selector.clone()).await?;
+                let eval = match wake {
+                    Wake::Tree => tracker.evaluate(&rows),
+                    Wake::Frame => tracker.observe_frame(&rows),
+                };
+                match eval {
+                    Eval::Satisfied(row) => {
+                        self.unsubscribe().await?;
+                        return Ok(row);
+                    }
+                    Eval::Pending { reason } => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(expire(self, state, rendered, timeout, reason).await);
+                        }
+                        // The event wait: a tree wake re-decides the state,
+                        // a frame wake may confirm `Stable`, `Log` records
+                        // are never wakes, and a spent budget answers
+                        // `None` — the expiry path below.
+                        let next = loop {
+                            tokio::select! {
+                                event = self.next_event() => match event? {
+                                    GwpEvent::V1(EventV1::TreeChanged { .. }) => {
+                                        break Some(Wake::Tree)
+                                    }
+                                    GwpEvent::V1(EventV1::FramePresented { .. }) => {
+                                        break Some(Wake::Frame)
+                                    }
+                                    _ => continue,
+                                },
+                                _ = tokio::time::sleep_until(deadline) => break None,
+                            }
+                        };
+                        let Some(next_wake) = next else {
+                            return Err(expire(self, state, rendered, timeout, reason).await);
+                        };
+                        wake = next_wake;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Which event ended the last event-wait: a tree change re-decides the
+/// state, a presented frame may confirm `Stable`. `Log` records are
+/// never wakes; expiry is `None` and ends the wait.
+enum Wake {
+    Tree,
+    Frame,
+}
+
+/// Build the typed timeout and drop the wait's subscription (best
+/// effort — the timeout outcome is the answer; a failed cleanup leaves
+/// the filter on, surfaced by the next conversation).
+async fn expire<C: ClientConn + ?Sized>(
+    client: &mut C,
+    state: WaitState,
+    selector: String,
+    timeout: Duration,
+    last: String,
+) -> GwpError {
+    let outcome = GwpError::WaitTimeout {
+        state: state.describe(),
+        selector,
+        timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        last,
+    };
+    let _ = client.unsubscribe().await;
+    outcome
 }
 
 impl ClientConn for crate::uds::Client {
