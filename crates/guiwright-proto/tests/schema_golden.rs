@@ -79,6 +79,7 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["requests"][13]["name"], "Screenshot");
     assert_eq!(doc["requests"][14]["name"], "Snapshot");
     assert_eq!(doc["requests"][15]["name"], "Subscribe");
+    assert_eq!(doc["requests"][16]["name"], "ResolveAll");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
     assert_eq!(doc["responses"][12]["name"], "Windows");
@@ -88,6 +89,7 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["responses"][16]["name"], "TreeDump");
     assert_eq!(doc["responses"][17]["name"], "Event");
     assert_eq!(doc["responses"][18]["name"], "Subscribed");
+    assert_eq!(doc["responses"][19]["name"], "ResolvedAll");
 
     // The error-code table is flat on the wire: appending UnknownWindow
     // keeps the pre-M6 codes byte-identical.
@@ -125,13 +127,14 @@ fn response_variants() -> usize {
         | ResponseV1::Shot { .. }
         | ResponseV1::TreeDump { .. }
         | ResponseV1::Event(_)
-        | ResponseV1::Subscribed { .. } => 19usize,
+        | ResponseV1::Subscribed { .. }
+        | ResponseV1::ResolvedAll { .. } => 20usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    16 + match RequestV1::Ping {
+    17 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -147,7 +150,8 @@ fn request_variants() -> usize {
         | RequestV1::Gesture(_)
         | RequestV1::Screenshot(_)
         | RequestV1::Snapshot(_)
-        | RequestV1::Subscribe(_) => 0,
+        | RequestV1::Subscribe(_)
+        | RequestV1::ResolveAll { .. } => 0,
     }
 }
 
