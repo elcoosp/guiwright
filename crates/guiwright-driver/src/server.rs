@@ -866,6 +866,35 @@ fn handle_request<A: FrameworkAdapter>(
                 Err(err) => error_response(err),
             }
         }
+        RequestV1::HitTest { x, y } => {
+            // The hit-test read over the wire (M32): the §8.3 mechanism as
+            // a debugging read — which node occupies the point (physical
+            // px, the tree's bounds space). The connection's window scope
+            // narrows the answer (the §16 v0.4 scoping rule — a hit
+            // outside the aimed window reads None, the same discipline the
+            // resolve paths run); empty space answers None, never an error
+            // (the read is total).
+            let scope = match window.as_deref() {
+                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
+                    Ok(scope) => scope,
+                    Err(err) => return error_response(err),
+                },
+                _ => None,
+            };
+            session.set_resolve_scope(scope);
+            let result = session.hit_test(x, y);
+            session.clear_resolve_scope();
+            match result {
+                Ok(hit) => ResponseV1::HitTest {
+                    hit: hit.map(|resolved| ResolvedMatchV1 {
+                        node: NodeKeyV1::from(resolved.key),
+                        generation: resolved.generation,
+                        rect: resolved.bounds.map(rect_to_array),
+                    }),
+                },
+                Err(err) => error_response(err),
+            }
+        }
         RequestV1::Action {
             node,
             generation,
