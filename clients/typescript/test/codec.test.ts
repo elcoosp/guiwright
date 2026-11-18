@@ -52,6 +52,14 @@ test("golden manifest is the expected shape", () => {
   assert.equal(golden.schema, "gwp-golden/v1");
   assert.ok(golden.requests.length >= 24, "every request variant is pinned");
   assert.ok(golden.responses.length >= 18, "every response variant is pinned");
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "resolve_all_role"),
+    "the M30 resolve-all request is pinned",
+  );
+  assert.ok(
+    golden.responses.some((v: any) => v.name === "resolved_all"),
+    "the M30 resolve-all reply is pinned",
+  );
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -182,6 +190,10 @@ test("requests encode byte-identical to the Rust wire", () => {
       cmd: { kind: "on", kinds: ["tree_changed", "frame_presented"] },
     }),
     subscribe_off: () => ({ kind: "subscribe", cmd: { kind: "off" } }),
+    resolve_all_role: () => ({
+      kind: "resolve_all",
+      selector: { kind: "role", role: "Button", name: null },
+    }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -258,7 +270,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-7), [
+  assert.deepEqual(byName(requests).slice(-8), [
     "Bye",
     "Video",
     "Window",
@@ -266,6 +278,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "Screenshot",
     "Snapshot",
     "Subscribe",
+    "ResolveAll",
   ]);
   assert.deepEqual(
     Object.values(RequestV1),
@@ -273,7 +286,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-8), [
+  assert.deepEqual(byName(responses).slice(-9), [
     "VideoFile",
     "Windows",
     "WindowUsed",
@@ -282,6 +295,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "TreeDump",
     "Event",
     "Subscribed",
+    "ResolvedAll",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
