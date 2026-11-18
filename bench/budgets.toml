@@ -390,3 +390,12 @@ p95_us = 500
 notes = "the M33 locator drag's steady-state cost on the button fixture: two Attached-gated auto-wait resolves (the source locator's own window context, one coordinate space — the wire Resolve discipline on both ends), the bounds-center pair, the Gesture::Drag synthesis under the adapter's pacing table and one rendezvous pump; the kit_input_click gesture shape plus a second gated resolve — the floor every locator drag adds on top of the raw-input drag"
 m0_measurable = true
 sample = "drag_to"
+
+[[budget]]
+id = "locator_filter"
+name = "Kit: one filtered chained resolve (group >> buttons, minus Confirm)"
+p50_us = 600
+p95_us = 3000
+notes = "the M34 filter surface's steady-state cost on the button fixture: the locator_all row's non-strict resolve_all walk composed through the core resolver's All-chain (the head resolved, then one descendants pass per link) plus one Filter { has_not } pass (one subtree probe per candidate); a snapshot read with no waiting, so the floor is the chain walk plus the inverted-filter probes — the composition every kit has_not/locator method produces"
+m0_measurable = true
+sample = "locator_filter"
