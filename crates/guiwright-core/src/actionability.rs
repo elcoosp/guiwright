@@ -45,6 +45,17 @@ pub enum Check {
     /// The consumer's effective read-only state reports read-only (the
     /// negated pair — M28's `to_be_readonly` assertion).
     ReadOnly,
+    /// The node's AccessKit role equals the wanted role (§8 check
+    /// vocabulary — M38's `to_have_role` assertion rides this row).
+    Role(accesskit::Role),
+    /// The node's accessible *name* matches — `label()` only (§8 check
+    /// vocabulary — M38's `to_have_accessible_name` assertion). Narrower
+    /// than [`Check::HasText`], which covers label-or-value.
+    Name(TextMatch),
+    /// The node's accessible description matches — `description()` only
+    /// (§8 check vocabulary — M38's `to_have_accessible_description`
+    /// assertion).
+    Description(TextMatch),
 }
 
 impl Check {
@@ -67,8 +78,18 @@ impl Check {
             },
             Check::Editable => "editable".to_string(),
             Check::ReadOnly => "read-only".to_string(),
+            Check::Role(role) => format!("role {}", role_debug_name(*role)),
+            Check::Name(m) => format!("has accessible name {}", render(m)),
+            Check::Description(m) => format!("has accessible description {}", render(m)),
         }
     }
+}
+
+/// The AccessKit role's debug-style name (`Role::Button` → `"Button"`),
+/// matching the describe/dump vocabulary (the M36 rows) so assertion
+/// failures read the same words the tree rows print.
+fn role_debug_name(role: accesskit::Role) -> String {
+    format!("{role:?}")
 }
 
 fn render(m: &TextMatch) -> String {
@@ -124,6 +145,9 @@ pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus
         Check::Checked(want) => checked_status(&node, *want),
         Check::Editable => editable_status(&node, true),
         Check::ReadOnly => editable_status(&node, false),
+        Check::Role(want) => role_status(&node, *want),
+        Check::Name(m) => name_status(&node, m),
+        Check::Description(m) => description_status(&node, m),
         Check::Focused => {
             if tree.focus() == Some(*key) {
                 CheckStatus::Pass
@@ -264,6 +288,62 @@ fn checked_status(node: &NodeRef<'_>, want: Toggled) -> CheckStatus {
         },
         None => CheckStatus::Failed {
             reason: "node exposes no checked state (not a checkable role)".to_string(),
+        },
+    }
+}
+
+/// §8.3 `Role` (the M38 identity family): the node's AccessKit role
+/// equals the wanted role. The mismatch stays Pending (waitable — a
+/// framework re-render can restate the node's role), never fail-fast:
+/// unlike the checked state there is no role set a node provably cannot
+/// expose.
+fn role_status(node: &NodeRef<'_>, want: accesskit::Role) -> CheckStatus {
+    let role = node.role();
+    if role == want {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Pending {
+            reason: format!(
+                "role is {}, expected {}",
+                role_debug_name(role),
+                role_debug_name(want)
+            ),
+        }
+    }
+}
+
+/// §8.3 `Name` (the M38 identity family): the node's accessible *name*
+/// matches — `label()` only, never the value (that broader read is
+/// [`Check::HasText`]). A missing name is waitable (labels arrive with
+/// the node's restatement), never fail-fast.
+fn name_status(node: &NodeRef<'_>, m: &TextMatch) -> CheckStatus {
+    match node.label() {
+        Some(label) if m.matches(&label) => CheckStatus::Pass,
+        Some(label) => CheckStatus::Pending {
+            reason: format!("accessible name is {:?}, expected {}", label, render(m)),
+        },
+        None => CheckStatus::Pending {
+            reason: "node has no accessible name yet".to_string(),
+        },
+    }
+}
+
+/// §8.3 `Description` (the M38 identity family): the node's accessible
+/// description matches — `description()` only. A missing description is
+/// waitable (descriptions arrive with the node's restatement), never
+/// fail-fast.
+fn description_status(node: &NodeRef<'_>, m: &TextMatch) -> CheckStatus {
+    match node.description() {
+        Some(description) if m.matches(&description) => CheckStatus::Pass,
+        Some(description) => CheckStatus::Pending {
+            reason: format!(
+                "accessible description is {:?}, expected {}",
+                description,
+                render(m)
+            ),
+        },
+        None => CheckStatus::Pending {
+            reason: "node has no accessible description yet".to_string(),
         },
     }
 }
