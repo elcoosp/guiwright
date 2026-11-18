@@ -569,7 +569,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 
 - Micro (criterion): codec round-trips, diff apply, index build on synthetic 10 k-node trees, LZ4 blobs, hash throughput.
 - Macro: scripted 200-action session on the egui demo app and a synthetic masonry app (1 k nodes): end-to-end action latency histogram, suite wall-clock for 1 000 asserts, memory profile.
-- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor, the count-assert floor, the kit and wire window rows, the negated-assertion floor, the count-comparator floor, the locator-all enumeration, the editable-assertion floor, the bulk text read, the resolve-all wire read, the value-first read, the hit-test wire read, the locator drag, the locator-filter composition — 43 rows today), each bound to a sample in `check_budgets`.
+- Perf guards in CI: p95 budget regressions fail the build (budgets stored in `bench/budgets.toml`). §15.1's eleven rows are the design baseline; the canonical table has grown a row per milestone since (gesture, kit input, wire screenshots, dumps, events, log tail, ws/in-process ping, the wire action path, the live-feed sync, the checked-assert floor, the count-assert floor, the kit and wire window rows, the negated-assertion floor, the count-comparator floor, the locator-all enumeration, the editable-assertion floor, the bulk text read, the resolve-all wire read, the value-first read, the hit-test wire read, the locator drag, the locator-filter composition, the node-describe wire read — 44 rows today), each bound to a sample in `check_budgets`.
 
 ---
 
@@ -591,10 +591,10 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 | Multi-window / tabs | targets per window (all frameworks support multi-window; freya-testing single-window initially) | M6 |
 | Headless CI | §11 | MVP |
 | Error context (call log, DOM snapshot on failure) | error embeds tree snapshot + trace link | MVP |
-| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under, M14 log kind), M32 (`hit` — the m32 record), M35 (`count`/`all` — the m30 record's read-vocabulary pass) |
+| REPL / debugging | `guiwright repl` over GWP | M4 (M6 window commands, M7 input, M8 inspect, M10 screenshot, M11 dump, M12 events on/off, M13 snapshot under, M14 log kind), M32 (`hit` — the m32 record), M35 (`count`/`all` — the m30 record's read-vocabulary pass), M37 (`describe` + the enriched `hit` row — the m36 record's client half) |
 | Live event stream (server-push) | §7 event channel: `Subscribe { On | Off }`, events ride `ResponseV1::Event`; the `Log` kind rides the per-session `tracing` tap | M12 (logs M14) |
 | Component testing | embedded mode = widget-level (Simulator/RenderRoot/harness) | MVP |
-| Other-language clients | GWP over TCP/UDS/WS + the in-process embedded door; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust); M16 (embedded door + public `Transport` seam); M30 (the set read over the wire: `resolveAll()` + golden vectors); M32 (the point read over the wire: `hitTest()` + golden vectors) |
+| Other-language clients | GWP over TCP/UDS/WS + the in-process embedded door; schema-published | M3 (TypeScript client + e2e); M15 (WS served in Rust); M16 (embedded door + public `Transport` seam); M30 (the set read over the wire: `resolveAll()` + golden vectors); M32 (the point read over the wire: `hitTest()` + golden vectors); M36 (the node-describe read over the wire: `describe()` + golden vectors) |
 
 ---
 
