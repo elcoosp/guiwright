@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use accesskit::Role;
 use guiwright_core::actionability::{Check, action_checks};
-use guiwright_core::expect::expect;
 use guiwright_core::selector::Selector;
 use guiwright_core::test_util::Fixture;
+use guiwright_core::test_util::expect;
 use guiwright_core::tree::TreeService;
 use guiwright_core::wait::{ChecksWaiter, WaitOutcome, Waiter, WaiterEvent};
 
