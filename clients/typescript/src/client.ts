@@ -20,6 +20,7 @@ export { PROTO_VERSION } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
 import {
   type ClockCmd,
+  type DescribedNode,
   type EventKind,
   type EventV1,
   type GwpRequest,
@@ -261,6 +262,19 @@ export class GwpClient {
     const resp = await this.request({ kind: "hit_test", x, y });
     if (resp.kind !== "hit_test") throw new Error(`expected HitTest, got ${resp.kind}`);
     return resp.hit;
+  }
+
+  /** Node-describe over the wire (§8.1 identity facts, M36 — the m32
+   * record's standing gap): one node's role, accessible name, value and
+   * bounds for a handle the client already holds (a `resolveAll` row, a
+   * hit row, a dump row). Handle-addressed, so no window scope applies;
+   * a stale or unknown handle rejects with the typed `error` code the
+   * `action` on the same handle would meet. */
+  async describe(node: NodeKey, generation: number): Promise<DescribedNode> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "describe", node, generation });
+    if (resp.kind !== "described") throw new Error(`expected Described, got ${resp.kind}`);
+    return resp;
   }
 
   async action(
