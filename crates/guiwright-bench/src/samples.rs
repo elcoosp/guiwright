@@ -75,9 +75,9 @@ pub fn resolve_cached_index() -> Duration {
     })
 }
 
-/// §15.1 "Tree diff apply (1k nodes)" — consumer `ChangeHandler` fan-out.
-/// §15.1 "Tree diff apply (1k nodes)" — measures only the apply; setup is
-/// excluded by measuring `Instant::now()` after the tree is built.
+/// §15.1 "Tree diff apply (1k nodes)" — consumer `ChangeHandler` fan-out,
+/// measuring only the apply; setup is excluded by measuring
+/// `Instant::now()` after the tree is built.
 pub fn tree_diff_apply_1k() -> Duration {
     let mut svc = thousand_node_tree();
     let update = rename_export_500_update();
@@ -1857,6 +1857,72 @@ pub fn describe_all_wire() -> Duration {
                 }
                 other => unreachable!("expected DescribedAll, got {other:?}"),
             }
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- Client-side wait sample (the m21 follow-up over the wire, m42) ---------
+
+/// §15.1 `client_wait_satisfied`: one `ClientConn::wait_for` satisfied on
+/// entry over the in-process door (m42 — the m21 record's named follow-up,
+/// closed): the subscribe round-trip, the describe-all entry evaluation and
+/// the unsubscribe cleanup — the steady-state floor every remote wait adds.
+/// The Save button is visible from the start, so the wait completes on the
+/// first row set: no wake, no re-read (the event-driven cost is the
+/// `wire_event_delivery` row's, not this one's).
+pub fn client_wait_satisfied() -> Duration {
+    const ITERATIONS: u32 = 32;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::{SelectorV1, TextMatchV1};
+    use guiwright_proto::wait::WaitState;
+    use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let save = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+        // Warm-up: one full satisfied wait (subscription window, entry
+        // evaluation, cleanup) pins the row shape once.
+        let warm = client
+            .wait_for(save.clone(), WaitState::Visible, Duration::from_secs(1))
+            .await
+            .expect("warm wait");
+        let warm = warm.expect("a positive state answers its row");
+        assert_eq!(warm.name.as_deref(), Some("Save"));
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .wait_for(save.clone(), WaitState::Visible, Duration::from_secs(1))
+                .await
+                .expect("bench wait");
+            let done = done.expect("a positive state answers its row");
+            assert_eq!(done.name.as_deref(), Some("Save"), "still the Save row");
         }
         (started.elapsed() / ITERATIONS, handle)
     });
