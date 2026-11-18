@@ -399,3 +399,12 @@ p95_us = 3000
 notes = "the M34 filter surface's steady-state cost on the button fixture: the locator_all row's non-strict resolve_all walk composed through the core resolver's All-chain (the head resolved, then one descendants pass per link) plus one Filter { has_not } pass (one subtree probe per candidate); a snapshot read with no waiting, so the floor is the chain walk plus the inverted-filter probes — the composition every kit has_not/locator method produces"
 m0_measurable = true
 sample = "locator_filter"
+
+[[budget]]
+id = "node_describe"
+name = "Node-describe read, in-process door (Save handle)"
+p50_us = 500
+p95_us = 2500
+notes = "the M36 node-describe read over the wire (the m32 record's standing gap, closed): one Describe round-trip over the embedded door — pump, the Action-boundary generation guard, one consumer-tree node read (role Debug name, accessible label, value, bounds), one DescribedV1 row marshalled back; handle-addressed (no scope walk, no selector), so the floor is the hit_test_wire round-trip shape carrying one row instead of a point walk"
+m0_measurable = true
+sample = "node_describe"
