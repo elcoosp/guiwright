@@ -132,6 +132,10 @@
     {
       "frame_hex": "12000000001100000000000053400000000000004040",
       "name": "hit_test_save_center"
+    },
+    {
+      "frame_hex": "15000000001200010101010101010101010101010101010200",
+      "name": "describe_save_handle"
     }
   ],
   "responses": [
@@ -287,6 +291,28 @@
       },
       "frame_hex": "03000000001400",
       "name": "hit_test_miss"
+    },
+    {
+      "decoded": {
+        "bounds": [
+          16.0,
+          16.0,
+          136.0,
+          48.0
+        ],
+        "generation": 0,
+        "kind": "described",
+        "name": "Save",
+        "node": {
+          "kind": "accesskit",
+          "node": 2,
+          "tree": "01010101010101010101010101010101"
+        },
+        "role": "Button",
+        "value": null
+      },
+      "frame_hex": "4400000000150001010101010101010101010101010101020006427574746f6e01045361766500010000000000003040000000000000304000000000000061400000000000004840",
+      "name": "described_save_button"
     },
     {
       "decoded": {
