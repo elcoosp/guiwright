@@ -23,8 +23,8 @@ use std::future::Future;
 
 use crate::GwpError;
 use crate::schema::{
-    AdapterInfoV1, DescribeV1, DescribedV1, EventKindV1, GwpEvent, RequestV1, ResolvedMatchV1,
-    ResponseV1, SelectorV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, GwpEvent, RequestV1,
+    ResolvedMatchV1, ResponseV1, SelectorV1, WindowInfoV1, WindowV1,
 };
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
@@ -170,6 +170,31 @@ pub trait ClientConn: Send + 'static {
                 ResponseV1::Described(described) => Ok(described),
                 other => Err(GwpError::Protocol(format!(
                     "Describe answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// The describe-all read over the wire (M39 — the m37 record's
+    /// standing gap): every current match of `selector` carrying its
+    /// identity facts — the [`Self::resolve_all`] walk's rows plus the
+    /// [`Self::describe`] facts, one round trip instead of N. Non-strict
+    /// and never waiting, so an empty set answers with an empty list.
+    /// Rows are directly usable as `RequestV1::Action` handles (the
+    /// dump-row rule, M11). The connection's window scope (§16 v0.4)
+    /// narrows the walk exactly like [`Self::resolve_all`].
+    fn describe_all(
+        &mut self,
+        selector: SelectorV1,
+    ) -> impl Future<Output = Result<Vec<DescribedV1>, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::DescribeAll(DescribeAllV1 { selector }))
+                .await?
+            {
+                ResponseV1::DescribedAll { rows } => Ok(rows),
+                other => Err(GwpError::Protocol(format!(
+                    "DescribeAll answered by {other:?}"
                 ))),
             }
         }
