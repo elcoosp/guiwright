@@ -634,6 +634,80 @@ pub fn wire_action_click() -> Duration {
     measured.max(Duration::from_nanos(1))
 }
 
+// --- M30 sample (wire resolve-all, §8.2's set read over the door) -----------
+
+/// §15.1 `resolve_all_wire`: one `ResolveAll` round-trip over the
+/// in-process door (M30) — the m22/m26/m29 records' named protocol half,
+/// the kit's `count()`/`all()` set read over GWP. The measured window is
+/// the non-strict enumeration of the four-button fixture: the selector
+/// conversion, the `resolve_all` walk and the per-match `ResolvedMatchV1`
+/// rows marshalled back — no waiting (the snapshot read never waits, so
+/// the floor is one rendezvous + one walk, the `resolve_remote_uds`
+/// round-trip shape carrying four rows instead of one).
+pub fn resolve_all_wire() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::schema::{ResponseV1, SelectorV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let selector = SelectorV1::Role {
+            role: "Button".into(),
+            name: None,
+        };
+
+        for _ in 0..4 {
+            let done = client
+                .request(guiwright_proto::schema::RequestV1::ResolveAll {
+                    selector: selector.clone(),
+                })
+                .await
+                .expect("warm set read");
+            match done {
+                ResponseV1::ResolvedAll { matches } => {
+                    assert_eq!(matches.len(), 4, "the fixture's four buttons");
+                }
+                other => unreachable!("expected ResolvedAll, got {other:?}"),
+            }
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .request(guiwright_proto::schema::RequestV1::ResolveAll {
+                    selector: selector.clone(),
+                })
+                .await
+                .expect("bench set read");
+            match done {
+                ResponseV1::ResolvedAll { matches } => {
+                    assert_eq!(matches.len(), 4, "the fixture's four buttons");
+                }
+                other => unreachable!("expected ResolvedAll, got {other:?}"),
+            }
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
 /// §15.7 micro-suite guard (M3): the §10 video backpressure hot path —
 /// hash-equality dedup + bounded ring push per presented frame. The
 /// measured window is the `push_frame` loop only (encoding runs on the
@@ -1313,6 +1387,41 @@ pub fn text_contents() -> Duration {
             .all_text_contents()
             .expect("bench set read");
         assert_eq!(texts.len(), 4, "the fixture's four buttons");
+    }
+    start.elapsed() / ITERATIONS
+}
+
+// --- M31 sample (the value-first bulk read, the m29 record's named gap) -----
+
+/// §15.1 `all_values`: one `all_values()` read (M31) — the m29 record's
+/// named follow-up: the `text_contents` row's walk with the per-node
+/// source order flipped (value first, label fallback). The measured
+/// operation is one full set read over the button fixture: one
+/// non-strict `resolve_all` walk plus one value/label read per match —
+/// the same cost shape as the `text_contents` row (the flip is a
+/// client-side accessor choice, not a session path).
+pub fn all_values() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("all_values", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let values = app
+            .role_locator(Role::Button)
+            .all_values()
+            .expect("bench value read");
+        assert_eq!(values.len(), 4, "the fixture's four buttons");
     }
     start.elapsed() / ITERATIONS
 }
