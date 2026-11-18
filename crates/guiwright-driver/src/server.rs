@@ -24,9 +24,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use guiwright_proto::GwpError;
 use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1,
-    NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1,
-    SemActionV1, SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
+    GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1,
+    WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -892,6 +893,29 @@ fn handle_request<A: FrameworkAdapter>(
                         rect: resolved.bounds.map(rect_to_array),
                     }),
                 },
+                Err(err) => error_response(err),
+            }
+        }
+        RequestV1::Describe(DescribeV1 { node, generation }) => {
+            // The node-describe read over the wire (M36 — the m32
+            // record's standing gap): one node's identity facts for a
+            // handle the client holds (a resolve/hit/dump row, the
+            // dump-row rule). Handle-addressed, so no window scope
+            // applies — the Action boundary, not the resolve scoping
+            // (a point is ambiguous, a selector the tree answers; the
+            // handle IS the node). The generation guard is the Action
+            // arm's: stale (`StaleGeneration`) and unknown
+            // (`UnknownNode`) handles ride the typed errors.
+            let key: NodeKey = node.into();
+            match session.describe(&key, generation) {
+                Ok(row) => ResponseV1::Described(DescribedV1 {
+                    node: NodeKeyV1::from(row.key),
+                    generation: row.generation,
+                    role: row.role,
+                    name: row.name,
+                    value: row.value,
+                    bounds: row.bounds,
+                }),
                 Err(err) => error_response(err),
             }
         }
