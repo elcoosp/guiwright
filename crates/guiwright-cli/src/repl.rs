@@ -230,6 +230,7 @@ impl Repl {
             }
             "last" => Ok(vec![Self::render_current(self.current.as_ref())]),
             "get" => self.get_command(tokens).await,
+            "hit" => self.hit_command(tokens).await,
             "expect" => {
                 // The runner's assertion wording over the same resolve
                 // path (M5): like `get`, stores the current node, but
@@ -394,6 +395,53 @@ impl Repl {
                 Ok(vec![Line::Ok(rendered)])
             }
             other => Err(unexpected("Resolved", &other)),
+        }
+    }
+
+    // --- hit-test read (§8.3's mechanism over the wire, M32) ---------------
+
+    /// `hit <x> <y>`: which node occupies the point — physical px, the
+    /// same space `get`'s rects print, so the coordinates of a resolve
+    /// reply can be fed straight back. A hit stores the current node (so
+    /// `last` and the actions aim at it — the click-what-you-see loop);
+    /// a miss is an info line, not an error (the read is total), and it
+    /// leaves the current node untouched.
+    async fn hit_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let x = tokens
+            .get(1)
+            .ok_or("`hit` needs x and y — e.g. `hit 76 32`")?
+            .parse::<f64>()
+            .map_err(|_| format!("`x` is not a number: {}", tokens[1]))?;
+        let y = tokens
+            .get(2)
+            .ok_or("`hit` needs x and y — e.g. `hit 76 32`")?
+            .parse::<f64>()
+            .map_err(|_| format!("`y` is not a number: {}", tokens[2]))?;
+        if tokens.len() > 3 {
+            return Err("`hit` takes exactly two arguments — `hit <x> <y>`".into());
+        }
+        match self.request(RequestV1::HitTest { x, y }).await? {
+            ResponseV1::HitTest { hit: Some(match_) } => {
+                let describe = describe_node(&match_.node);
+                let mut rendered = format!(
+                    "hit ({x}, {y}) → {describe} (generation {})",
+                    match_.generation
+                );
+                if let Some([x0, y0, x1, y1]) = match_.rect {
+                    let _ = write!(rendered, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+                }
+                self.current = Some(CurrentNode {
+                    node: match_.node,
+                    generation: match_.generation,
+                    rect: match_.rect,
+                    describe,
+                });
+                Ok(vec![Line::Ok(rendered)])
+            }
+            ResponseV1::HitTest { hit: None } => {
+                Ok(vec![Line::Info(format!("nothing at ({x}, {y})"))])
+            }
+            other => Err(unexpected("HitTest", &other)),
         }
     }
 
@@ -930,6 +978,7 @@ impl Repl {
             "  get role <Role> [name]      resolve a locator (strict mode)",
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
+            "  hit <x> <y>                 which node occupies the point (M32 hit-test read)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
@@ -970,6 +1019,17 @@ fn canonical_role(role: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+/// The client-side handle form of a wire node identity (`accesskit#2`,
+/// `iced#7`) — the same shape the core's `NodeKey::describe` renders
+/// server-side. The hit-test reply carries no selector, so the handle is
+/// the describe.
+fn describe_node(node: &NodeKeyV1) -> String {
+    match node {
+        NodeKeyV1::AccessKit { node, .. } => format!("accesskit#{node}"),
+        NodeKeyV1::Logical { adapter, id } => format!("{adapter}#{id}"),
     }
 }
 
