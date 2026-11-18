@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 
 use accesskit::Role;
+use guiwright_core::actionability::Check;
 use guiwright_core::selector::{Selector, TextMatch};
 use guiwright_core::tree::Resolved;
 use guiwright_core::{CoreError, NodeKey};
@@ -23,6 +24,7 @@ use guiwright_driver::adapter::{AdapterError, ClockCmd, FrameworkAdapter, SemAct
 use guiwright_driver::clock::ClockReport;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::session::Session;
+use guiwright_driver::{Gesture, codegen_call, codegen_line};
 
 use crate::input::{KeyboardHandle, MouseHandle};
 use crate::window::WindowHandle;
@@ -253,6 +255,92 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
             session.perform_action(&selector, SemAction::Blur, &ActionOpts::default())
         })?;
         app.record_scoped_action("blur", &recorded, None, window.as_deref());
+        Ok(outcome)
+    }
+
+    /// `locator.drag_to(target)` (§16 actions row — the m19 parity
+    /// stream's named drag item, M33): the Playwright
+    /// `locator.dragTo(target)` shape, adapted to the kit's
+    /// borrow-and-act doctrine. Both ends resolve with strict mode and
+    /// auto-wait in **one window context** — the source locator's own
+    /// (its pin, §16 v0.4; unscoped locators aim the whole tree): each
+    /// end waits `Attached` on the zero-polling loop (the wire
+    /// `Resolve` discipline), then the drag runs from the source's
+    /// bounds center to the target's — one [`Gesture::Drag`] through
+    /// the session's synthesis, the adapter's pacing table ratcheting
+    /// the pointer path (§9), one rendezvous pump applying it.
+    ///
+    /// The target is a [`Selector`], not a locator value, and that is
+    /// the honest contract twice over: every locator holds the `&mut
+    /// App` it acts through (the [`Self::all`] rule — two locator
+    /// values, two mutable borrows of one app, cannot coexist), and a
+    /// drag is one gesture in one window's coordinate space, so the aim
+    /// resolves exactly where the source does. A cross-window drag has
+    /// no coordinate answer here by construction: the aim resolves
+    /// inside the source's subtree or it fails with the strict-mode
+    /// `NoMatch` that names the miss.
+    ///
+    /// A drag needs geometry: the resolved bounds' centers steer it —
+    /// the same coordinate space the Hover path feeds the input
+    /// pipeline (§9: the adapter owns any scale conversion) — so a node
+    /// without bounds is the honest §10 error, not an empty drag. A
+    /// failed aim synthesizes no input (the drag never starts). The
+    /// applied gesture records exactly like the raw-input surface (§13
+    /// over §9): the raw `mouse.drag(...)` kit line while a codegen
+    /// recording runs, plus one `drag_to` trace event naming both ends.
+    pub fn drag_to(self, target: &Selector) -> Result<guiwright_driver::GestureOutcome, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let deadline = std::time::Instant::now() + guiwright_core::expect::DEFAULT_TIMEOUT;
+        // Both ends in the source's window context: the pin scopes the
+        // aim exactly like the source (one gesture, one coordinate
+        // space). The gate is Attached — arrival auto-waits, the same
+        // discipline the wire's Resolve arm runs; geometry is the next
+        // line's contract.
+        let source = app
+            .run_scoped(window.as_deref(), |session| {
+                session.wait_for(&selector, vec![Check::Attached], deadline)
+            })?
+            .into_node()?;
+        let (from_x, from_y) = drag_center(source.bounds, &selector)?;
+        let resolved_target = app
+            .run_scoped(window.as_deref(), |session| {
+                session.wait_for(target, vec![Check::Attached], deadline)
+            })?
+            .into_node()?;
+        let (to_x, to_y) = drag_center(resolved_target.bounds, target)?;
+
+        let gesture = Gesture::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            button: guiwright_driver::PointerButton::Primary,
+        };
+        // Rendered before the batch moves (the §13-over-§9 rule), landed
+        // after the rendezvous pump confirms it.
+        let rendered = if app.codegen_active() {
+            Some(codegen_call(&gesture))
+        } else {
+            None
+        };
+        let outcome = app.session.perform_gesture(gesture, window.as_deref())?;
+        app.record_event(
+            "drag_to",
+            format!(
+                "{} → {} ({})",
+                selector.render(),
+                target.render(),
+                outcome.detail
+            ),
+        );
+        if let Some((surface, call, warning)) = rendered {
+            let line = codegen_line(surface, &call, window.as_deref());
+            app.record_input_code(line, warning);
+        }
         Ok(outcome)
     }
 
@@ -899,6 +987,23 @@ impl<A: FrameworkAdapter> App<A> {
         Ok(out)
     }
 
+    /// `app.key_of(&selector)` helper's sibling read (M32): the hit-test
+    /// read (§8.3's "receives events" mechanism as a public read) — which
+    /// node occupies the point. Coordinates are window-relative physical
+    /// px, the same space the tree's bounds speak (the resolve rects, the
+    /// dump rows' bounds), so a test can hit inside a rect it just
+    /// resolved. The whole-tree surface: a hit in any window's subtree
+    /// answers; aim one window with [`App::window`] +
+    /// [`WindowHandle::hit_test`]. A miss answers `None` — the read is
+    /// total, never an error; the hit is the same [`Resolved`] record the
+    /// resolution pipeline returns (identity + generation + bounds),
+    /// directly usable as a pre-resolved action handle. Nothing is
+    /// recorded: like [`Locator::resolve`], a read without an action is
+    /// not a replayable step.
+    pub fn hit_test(&mut self, x: f64, y: f64) -> Result<Option<Resolved>, KitError> {
+        Ok(self.session.hit_test(x, y)?)
+    }
+
     /// The window screenshot assertion (§10): render on demand, diff
     /// against the per-platform baseline, bless on demand — the element
     /// form is [`App::get_by_*` → `Locator::screenshot`].
@@ -1366,6 +1471,23 @@ impl<A: FrameworkAdapter> VideoHandle<'_, A> {
         );
         Ok(summary)
     }
+}
+
+/// The drag endpoint's center (M33): the resolved bounds' midpoint — an
+/// unbounded node is an honest error, not an empty drag (the §10
+/// element-crop rule's shape: "no bounds — nothing to crop" reads the
+/// same way here).
+fn drag_center(
+    bounds: Option<accesskit::Rect>,
+    selector: &Selector,
+) -> Result<(f64, f64), KitError> {
+    let rect = bounds.ok_or_else(|| {
+        KitError::Core(CoreError::other(format!(
+            "{} has no bounds — nowhere to drag (§10)",
+            selector.render()
+        )))
+    })?;
+    Ok((rect.x0.midpoint(rect.x1), rect.y0.midpoint(rect.y1)))
 }
 
 /// `expect(app.get_by_text("Welcome, Ada")).to_be_visible()` (§16
