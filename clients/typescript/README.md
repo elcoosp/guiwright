@@ -64,6 +64,9 @@ The full domain vocabulary on `GwpClient` (each maps 1:1 onto a GWP request):
 | Screenshots (M10) | `screenshotWindow()`, `screenshotElement(...)` |
 | Tree dumps (M11/M13) | `treeDump()`, `treeDumpUnder(selector, timeoutMs?)` |
 | Event channel (M12/M14) | `subscribe(kinds)`, `nextEvent()`, `unsubscribe()` |
+| Set read (M30) | `resolveAll(selector)` — identities + rects, document order, no wait |
+| Point read (M32) | `hitTest(x, y)` — the node under the point, `null` on a miss |
+| Liveness / misc | `ping()`, `gesture(...)` (the `mouse`/`keyboard` helper's request), `close()` |
 
 ## Tests
 
