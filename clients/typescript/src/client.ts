@@ -277,6 +277,19 @@ export class GwpClient {
     return resp;
   }
 
+  /** Describe-all over the wire (§8.2 set read carrying facts, M39 — the
+   * m37 record's standing gap): every current match of `selector` with
+   * its identity facts — the `resolveAll` walk's rows plus the `describe`
+   * facts, one round trip instead of N. Non-strict and never waiting; an
+   * empty set answers with an empty list. The connection's window scope
+   * narrows the walk exactly like `resolveAll`. */
+  async describeAll(selector: Selector): Promise<DescribedNode[]> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "describe_all", selector });
+    if (resp.kind !== "described_all") throw new Error(`expected DescribedAll, got ${resp.kind}`);
+    return resp.rows;
+  }
+
   async action(
     node: NodeKey,
     generation: number,
