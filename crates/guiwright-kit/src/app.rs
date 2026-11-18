@@ -105,6 +105,49 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         self
     }
 
+    /// `locator.filter({ hasNot })` narrowing (§16 locators row — the m34
+    /// filter surface): keep only the matches whose **subtree** — the node
+    /// included — contains no node matching `inner` (the inverted
+    /// [`Self::has_text`], which reads the same subtree walk in the
+    /// positive). The inner selector is a full [`Selector`]: a role+name
+    /// constraint, a test id, a nested chain — a text probe only when
+    /// built as one.
+    ///
+    /// The rule that makes the inversion honest: a leaf's subtree is
+    /// itself, so `get_by_role(Role::Button, "Save").has_not(&Selector::
+    /// role(Role::Button))` excludes Save — `has_not(button)` keeps only
+    /// the containers that hold no button. Like every narrowing, it
+    /// composes ([`Self::first`]/[`Self::nth`] wrap the composed selector
+    /// in another filter, the resolver nests them), rides the window pin
+    /// (§16 v0.4), and is consulted at act time by the same strict-mode
+    /// resolve every locator action runs.
+    pub fn has_not(mut self, inner: &Selector) -> Self {
+        self.selector = self.selector.has_not(inner.clone());
+        self
+    }
+
+    /// `locator.locator(child)` (§16 locators row — the m34 filter
+    /// surface): the Playwright chained-descendant shape — resolve the
+    /// locator's own set first, then narrow to `child` nodes inside each
+    /// match's subtree, document order kept (`all`/`count` enumerate the
+    /// same composed set). Chaining composes: `.locator(&a).locator(&b)`
+    /// builds the `a >> b` chain, `first`/`nth`/`has_text`/`has_not` wrap
+    /// it in filters, and the window pin scopes the whole composition.
+    ///
+    /// The child is a [`Selector`], not a locator value, and that is the
+    /// borrow rule again (the [`Self::all`] and [`Self::drag_to`]
+    /// doctrine): every locator holds the `&mut App` it acts through, so
+    /// two locator values cannot coexist — the selector form composes by
+    /// value. Actions through the chained locator ride the same
+    /// strict-mode resolve + actionability gate as any locator action;
+    /// an empty chain answer is the valid snapshot read (`count()`
+    /// answers 0), a failed act-time resolve is the strict-mode error
+    /// naming the miss.
+    pub fn locator(mut self, child: &Selector) -> Self {
+        self.selector = self.selector.then_descendant(child.clone());
+        self
+    }
+
     /// `locator.click()` — actionability-checked, auto-waits (§8.3–§8.4).
     pub fn click(self) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
         let Self {
