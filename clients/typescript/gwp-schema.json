@@ -366,6 +366,11 @@
       "index": 15,
       "name": "Subscribe",
       "payload": "SubscribeV1 (see domains.subscribe)"
+    },
+    {
+      "index": 16,
+      "name": "ResolveAll",
+      "payload": "{ selector: SelectorV1 } — the §8.2 set read (the kit's count()/all() walk, non-strict, never waits) → ResolvedAll; the connection's window scope narrows the walk exactly like Resolve (M30)"
     }
   ],
   "responses": [
@@ -463,6 +468,11 @@
       "index": 18,
       "name": "Subscribed",
       "payload": "{ kinds: seq<EventKindV1> } — the subscription ack, echoing the deduplicated kinds now active on this connection (empty after Off)"
+    },
+    {
+      "index": 19,
+      "name": "ResolvedAll",
+      "payload": "{ matches: seq<ResolvedMatchV1 { node: NodeKeyV1, generation: u32 varint, rect: option<[f64; 4]> }> } — every current match, document order (the count()/all() ordering); each row is directly usable as an Action handle (the dump-row rule, M11); an empty set answers with an empty list (M30)"
     }
   ],
   "schema": "gwp-schema/v1",
