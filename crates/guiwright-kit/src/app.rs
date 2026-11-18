@@ -391,6 +391,54 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
             .collect())
     }
 
+    /// `locator.all_values()` (§16 assertions row — the m29 record's
+    /// named follow-up: "`all_values()` (a value-first bulk read for
+    /// form dumps) is a one-line variation of the same walk —
+    /// deliberately not added until a suite asks for it"): read the
+    /// value of every match in document order as one snapshot — the
+    /// [`Self::all_text_contents`] read with the source order flipped
+    /// for form semantics.
+    ///
+    /// The flip is the whole point: `all_text_contents` reads what the
+    /// *text locators* match (label first — the `HasText` check's
+    /// source order), while a form dump wants what the form *carries*.
+    /// Each match contributes its value first, falling back to the
+    /// label — the `getByValue` source order — so the fixture's Email
+    /// input reads `ada@example.dev` here and `Email` there, and the
+    /// two reads can never silently agree on the wrong datum.
+    ///
+    /// Everything else is the snapshot-read family rules, unchanged:
+    ///
+    /// * the set is the same non-strict `resolve_all` walk (no strict
+    ///   mode, no waiting — [`Locator::wait_for`] or an assertion
+    ///   covers arrivals);
+    /// * hidden nodes are included, a window-pinned locator reads only
+    ///   inside its subtree, narrowing scopes the read;
+    /// * a node with neither value nor label reads as an empty string,
+    ///   keeping `Vec` positions 1:1 with the document order the set
+    ///   read established.
+    ///
+    /// Like every read, nothing is recorded (no codegen line, no trace
+    /// action — the trace's tree snapshots carry the same facts).
+    pub fn all_values(self) -> Result<Vec<String>, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let matches =
+            app.run_scoped(window.as_deref(), |session| session.resolve_all(&selector))?;
+        let tree = app.session.tree();
+        Ok(matches
+            .iter()
+            .map(|m| {
+                tree.node(&m.key)
+                    .and_then(|n| n.value().or_else(|| n.label()))
+                    .unwrap_or_default()
+            })
+            .collect())
+    }
+
     /// `locator.screenshot(name, bless)` — the §10 element screenshot
     /// (M9): resolve (auto-wait), render the window frame once, **crop it
     /// by the resolved node's physical bounds** (§10 "crop from the window
