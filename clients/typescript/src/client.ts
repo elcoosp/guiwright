@@ -27,6 +27,7 @@ import {
   type GestureCmd,
   type InputEvent,
   type MockCmd,
+  type ResolvedMatch,
   type Selector,
   type SemAction,
   type NodeKey,
@@ -236,6 +237,17 @@ export class GwpClient {
     });
     if (resp.kind !== "resolved") throw new Error(`expected Resolved, got ${resp.kind}`);
     return { node: resp.node, generation: resp.generation, rect: resp.rect };
+  }
+
+  /** Resolve-all over the wire (§8.2 set read, M30): every current match
+   * of the selector, document order — the kit's `count()`/`all()` walk.
+   * Non-strict and never waiting: an empty set answers with an empty
+   * list. Rows are directly usable as `action` nodes. */
+  async resolveAll(selector: Selector): Promise<ResolvedMatch[]> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "resolve_all", selector });
+    if (resp.kind !== "resolved_all") throw new Error(`expected ResolvedAll, got ${resp.kind}`);
+    return resp.matches;
   }
 
   async action(
