@@ -60,7 +60,7 @@ centers. No wire change, no session change, no core change.
 ## 3. Surface
 
 - `crates/guiwright-kit/src/app.rs` — `Locator::drag_to(target:
-  Selector)` + the `drag_center` helper (the bounds-midpoint read
+  &Selector)` + the `drag_center` helper (the bounds-midpoint read
   with the §10 error shape).
 
 ## 4. Tests
