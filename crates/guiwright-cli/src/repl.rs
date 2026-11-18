@@ -235,6 +235,8 @@ impl Repl {
             "describe" => self.describe_command(tokens).await,
             "count" => self.count_command(tokens).await,
             "all" => self.all_command(tokens).await,
+            "texts" => self.texts_command(tokens).await,
+            "values" => self.values_command(tokens).await,
             "expect" => {
                 // The runner's assertion wording over the same resolve
                 // path (M5): like `get`, stores the current node, but
@@ -607,6 +609,126 @@ impl Repl {
                 other => Err(unexpected("ResolvedAll", &other)),
             },
             Ok(other) => Err(unexpected("DescribedAll", &other)),
+        }
+    }
+
+    /// `texts <get-args…>` (M40 — the m35 record's named follow-up: "a
+    /// `texts <get-args…>` row lands when a debugging session asks for
+    /// it — one more client-side rendering over the same domain"): the
+    /// set's *content* read, the m29 kit reader's REPL half. Each row is
+    /// the match's text in document order — the accessible name first,
+    /// the value as the fallback (the source order the text locators
+    /// match, the `HasText` check's read) — beside the handle form the
+    /// action vocabulary aims with. One `DescribeAll` round trip (M39):
+    /// the walk's rows already carry the name and the value, so the read
+    /// costs what `all` costs — the m35 batch note's one-`Describe`-per-
+    /// row objection is retired by the domain that shipped after it.
+    ///
+    /// A read like `count`/`all`: no current-node store, strict mode
+    /// aside (the non-strict walk, hidden and disabled included), an
+    /// empty set answers one info line — never an error. A node with
+    /// neither name nor value renders `""`, keeping row positions 1:1
+    /// with the document order the set read established (the m31 rule).
+    async fn texts_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        self.bulk_content_command(tokens, false).await
+    }
+
+    /// `values <get-args…>` (M40 — the m31 kit reader's REPL half, the
+    /// m35 record's named follow-up): the [`Self::texts_command`] read
+    /// with the source order flipped for form semantics — the value
+    /// first, the accessible name as the fallback (the `getByValue`
+    /// source order) — so the fixture's Email input answers
+    /// `"ada@example.dev"` here and `"Email"` to `texts`, and the two
+    /// reads can never silently agree on the wrong datum. Everything
+    /// else is the same shape: one `DescribeAll` round trip, the
+    /// snapshot-read family rules, `""` for a node with neither fact.
+    async fn values_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        self.bulk_content_command(tokens, true).await
+    }
+
+    /// The shared bulk-content assembly: both rows differ only in the
+    /// source order they read the `DescribedV1` facts with (and the
+    /// [`NotWaiter`]-free shape — the read is a snapshot, no waiter).
+    /// `value_first` selects the m31 order over the m29 one.
+    ///
+    /// The fallback is the m35 batch note's cost shape, honestly kept:
+    /// a driver that predates the M39 domain cannot answer the content
+    /// in one round trip, so the read degrades to the `ResolveAll` walk
+    /// plus one `Describe` per row — the exact cost the m35 record
+    /// named when it left the rows out. A row whose `Describe` fails
+    /// (the node left between the reads — the m37 honest case) renders
+    /// `""` rather than dropping the row: positions stay 1:1 with the
+    /// walk.
+    async fn bulk_content_command(
+        &mut self,
+        tokens: &[String],
+        value_first: bool,
+    ) -> Result<Vec<Line>, String> {
+        let (selector, _describe) = parse_selector(
+            tokens
+                .get(1..)
+                .ok_or("needs a locator — role | text | label | testid | value")?,
+        )?;
+        match self
+            .request(RequestV1::DescribeAll(DescribeAllV1 {
+                selector: selector.clone(),
+            }))
+            .await
+        {
+            Ok(ResponseV1::DescribedAll { rows }) if rows.is_empty() => {
+                Ok(vec![Line::Info("no matches".into())])
+            }
+            Ok(ResponseV1::DescribedAll { rows }) => Ok(rows
+                .iter()
+                .map(|row| Line::Ok(render_bulk_row(row, value_first)))
+                .collect()),
+            // The facts ride one round trip on an M39 driver; a driver
+            // without the domain falls back to the per-row walk (the
+            // m37 degrade rule — a graceful, documented fallback, not
+            // an error).
+            Err(_) => match self.request(RequestV1::ResolveAll { selector }).await? {
+                ResponseV1::ResolvedAll { matches } if matches.is_empty() => {
+                    Ok(vec![Line::Info("no matches".into())])
+                }
+                ResponseV1::ResolvedAll { matches } => {
+                    let mut lines = Vec::with_capacity(matches.len());
+                    for match_ in &matches {
+                        let row = self.describe_row(&match_.node, match_.generation).await;
+                        let (name, value) =
+                            row.map_or((None, None), |row| (row.name, row.value));
+                        let content = if value_first {
+                            value.or(name).unwrap_or_default()
+                        } else {
+                            name.or(value).unwrap_or_default()
+                        };
+                        lines.push(Line::Ok(format!(
+                            "{} {content:?}",
+                            describe_node(&match_.node)
+                        )));
+                    }
+                    Ok(lines)
+                }
+                other => Err(unexpected("ResolvedAll", &other)),
+            },
+            Ok(other) => Err(unexpected("DescribedAll", &other)),
+        }
+    }
+
+    /// The per-row facts fetch for the pre-M39 fallback: the whole
+    /// `DescribedV1` a `Describe` round trip answers, `None` when the
+    /// facts cannot ride (a node that left between the reads — the m37
+    /// honest case; the caller renders `""` rather than dropping the
+    /// row, keeping positions 1:1 with the walk).
+    async fn describe_row(&mut self, node: &NodeKeyV1, generation: u32) -> Option<DescribedV1> {
+        match self
+            .request(RequestV1::Describe(DescribeV1 {
+                node: node.clone(),
+                generation,
+            }))
+            .await
+        {
+            Ok(ResponseV1::Described(row)) => Some(row),
+            _ => None,
         }
     }
 
@@ -1147,6 +1269,8 @@ impl Repl {
             "  describe <get-args…>        one node's identity facts (M37)",
             "  count <get-args…>           the set size, strict mode aside (M35 read pass)",
             "  all <get-args…>             the set rows, one line each (M35 read pass)",
+            "  texts <get-args…>           the set's text content, label first (M40)",
+            "  values <get-args…>          the set's values, value first (M40)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
@@ -1219,6 +1343,23 @@ fn render_described(row: &DescribedV1) -> String {
         let _ = write!(out, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
     }
     out
+}
+
+/// The M40 bulk-content row, rendered for the REPL: the handle form the
+/// action vocabulary aims with (`accesskit#2`), the match's text in the
+/// reader's source order quoted the way the dump rows quote content.
+/// `value_first` selects the m31 order (value, label fallback) over the
+/// m29 one (label, value fallback); a node with neither fact renders
+/// `""` — row positions stay 1:1 with the walk (the m31 rule).
+fn render_bulk_row(row: &DescribedV1, value_first: bool) -> String {
+    let name = row.name.as_deref();
+    let value = row.value.as_deref();
+    let content = if value_first {
+        value.or(name).unwrap_or_default()
+    } else {
+        name.or(value).unwrap_or_default()
+    };
+    format!("{} {content:?}", describe_node(&row.node))
 }
 
 /// Parse the `get`-shaped locator vocabulary shared by `get` (§8) and
