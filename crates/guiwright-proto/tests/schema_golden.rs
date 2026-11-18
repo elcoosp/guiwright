@@ -129,13 +129,14 @@ fn response_variants() -> usize {
         | ResponseV1::Event(_)
         | ResponseV1::Subscribed { .. }
         | ResponseV1::ResolvedAll { .. }
-        | ResponseV1::HitTest { .. } => 21usize,
+        | ResponseV1::HitTest { .. }
+        | ResponseV1::Described(_) => 22usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    18 + match RequestV1::Ping {
+    19 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -153,7 +154,8 @@ fn request_variants() -> usize {
         | RequestV1::Snapshot(_)
         | RequestV1::Subscribe(_)
         | RequestV1::ResolveAll { .. }
-        | RequestV1::HitTest { .. } => 0,
+        | RequestV1::HitTest { .. }
+        | RequestV1::Describe(_) => 0,
     }
 }
 
