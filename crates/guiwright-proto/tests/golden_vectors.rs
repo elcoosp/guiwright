@@ -280,6 +280,15 @@ fn resolve_all_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M32 (the hit-test read): the point request — physical px in the
+/// tree's bounds space, no timeout (the read is total, it never waits).
+fn hit_test_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "hit_test_save_center",
+        RequestV1::HitTest { x: 76.0, y: 32.0 },
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -287,7 +296,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(action_input_requests())
         .chain(service_requests())
         .chain(multi_window_gesture_requests())
-        .chain(resolve_all_requests());
+        .chain(resolve_all_requests())
+        .chain(hit_test_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -432,6 +442,38 @@ fn resolve_all_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)>
             ],
         }),
     )]
+}
+
+/// M32 (the hit-test read): the hit reply — one row on a hit (the same
+/// per-match facts the resolve-all rows carry), `None` on a miss.
+fn hit_test_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![
+        (
+            "hit_test_hit",
+            ResponseV1::HitTest {
+                hit: Some(ResolvedMatchV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 2,
+                    },
+                    generation: 0,
+                    rect: Some([16.0, 16.0, 136.0, 48.0]),
+                }),
+            },
+            serde_json::json!({
+                "kind": "hit_test",
+                "hit": {"node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 2}, "generation": 0, "rect": [16.0, 16.0, 136.0, 48.0]},
+            }),
+        ),
+        (
+            "hit_test_miss",
+            ResponseV1::HitTest { hit: None },
+            serde_json::json!({
+                "kind": "hit_test",
+                "hit": null,
+            }),
+        ),
+    ]
 }
 
 /// Clock / mock / codegen / error service responses.
@@ -639,6 +681,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
     let responses = core_responses()
         .into_iter()
         .chain(resolve_all_responses())
+        .chain(hit_test_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
