@@ -1710,6 +1710,28 @@ impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
         )
     }
 
+    /// `expect(locator).toBeEditable()` (§16 assertions row, M28): the
+    /// consumer's effective read-only state reports editable — the
+    /// AccessKit `read_only` flag plus the role rules the consumer applies
+    /// (`should_have_read_only_state_by_default` and the read-only-
+    /// supported set). The mismatch is waitable (an input that has not
+    /// flipped yet stays Pending — the predicate is total, so there is no
+    /// fail-fast arm), and the timeout error names the assertion, the
+    /// locator and the state the last evaluation found.
+    pub fn to_be_editable(self) -> Result<(), CoreError> {
+        self.run(vec![Check::Editable], "editable")
+    }
+
+    /// `expect(locator).not().toBeEditable()` as a direct assertion (M28):
+    /// the negated pair's positive form — read-only — rides the same
+    /// effective state (flag, role defaults, unsupported roles), so a
+    /// button reads read-only exactly as Playwright's
+    /// `expect(button).not().toBeEditable()` does. Composes with
+    /// [`Self::not`] for the inverse (`not().to_be_readonly()`).
+    pub fn to_be_readonly(self) -> Result<(), CoreError> {
+        self.run(vec![Check::ReadOnly], "read-only")
+    }
+
     pub fn to_have_text(self, text: impl Into<guiwright_core::TextMatch>) -> Result<(), CoreError> {
         self.run(vec![Check::HasText(text.into())], "text")
     }
