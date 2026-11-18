@@ -1662,3 +1662,94 @@ pub fn wire_window_targets() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+// --- Node-describe sample (§8.1 over the wire, M36) -------------------------
+/// §15.1 `node_describe`: one `Describe` round-trip over the in-process
+/// door (M36) — the m32 record's standing gap, closed: one node's
+/// identity facts (role/name/value/bounds) for a handle the client holds.
+/// The measured window is one round trip on the Save button's resolve row:
+/// pump, the generation guard, one consumer-tree node read, one
+/// `DescribedV1` row marshalled back — no waiting (a handle-addressed
+/// read; the warm-up's resolve mints the handle the loop describes).
+pub fn node_describe() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::schema::{DescribeV1, RequestV1, ResponseV1, SelectorV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        // Warm-up: mint the handle the measured loop describes, and pin
+        // the row shape once (role/name/bounds ride every reply).
+        let (node, generation) = {
+            let done = client
+                .request(RequestV1::Resolve {
+                    selector: SelectorV1::Role {
+                        role: "Button".into(),
+                        name: Some(guiwright_proto::schema::TextMatchV1 {
+                            text: "Save".into(),
+                            exact: true,
+                            ignore_case: false,
+                        }),
+                    },
+                    timeout_ms: 2000,
+                })
+                .await
+                .expect("warm resolve");
+            match done {
+                ResponseV1::Resolved {
+                    node, generation, ..
+                } => (node, generation),
+                other => unreachable!("expected Resolved, got {other:?}"),
+            }
+        };
+        let warm = client
+            .request(RequestV1::Describe(DescribeV1 {
+                node: node.clone(),
+                generation,
+            }))
+            .await
+            .expect("warm describe");
+        match warm {
+            ResponseV1::Described(ref row) => {
+                assert_eq!(row.role, "Button", "the warm probe pins the row shape");
+            }
+            other => unreachable!("expected Described, got {other:?}"),
+        }
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .request(RequestV1::Describe(DescribeV1 {
+                    node: node.clone(),
+                    generation,
+                }))
+                .await
+                .expect("bench describe read");
+            match done {
+                ResponseV1::Described(ref row) => {
+                    assert_eq!(row.name.as_deref(), Some("Save"), "still the Save button");
+                }
+                other => unreachable!("expected Described, got {other:?}"),
+            }
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
