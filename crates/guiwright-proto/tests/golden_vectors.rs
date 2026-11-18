@@ -15,8 +15,8 @@
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
-    GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
+    EventV1, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
     RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
     SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
@@ -306,6 +306,20 @@ fn describe_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M39 (the describe-all read): the set read carrying facts — the
+/// `ResolveAll` request's exact shape (the m39 record's payload reuse).
+fn describe_all_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "describe_all_buttons",
+        RequestV1::DescribeAll(DescribeAllV1 {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: None,
+            },
+        }),
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -315,7 +329,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(multi_window_gesture_requests())
         .chain(resolve_all_requests())
         .chain(hit_test_requests())
-        .chain(describe_requests());
+        .chain(describe_requests())
+        .chain(describe_all_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -519,6 +534,62 @@ fn describe_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
             "name": "Save",
             "value": null,
             "bounds": [16.0, 16.0, 136.0, 48.0],
+        }),
+    )]
+}
+
+/// M39 (the describe-all read): the set read carrying facts — the
+/// resolve-all walk's rows plus the Described identity facts (the
+/// m37 record's standing gap, closed).
+fn describe_all_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "described_all_buttons",
+        ResponseV1::DescribedAll {
+            rows: vec![
+                DescribedV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 2,
+                    },
+                    generation: 0,
+                    role: "Button".into(),
+                    name: Some("Save".into()),
+                    value: None,
+                    bounds: Some([16.0, 16.0, 136.0, 48.0]),
+                },
+                DescribedV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 3,
+                    },
+                    generation: 0,
+                    role: "Button".into(),
+                    name: Some("Cancel".into()),
+                    value: None,
+                    bounds: Some([16.0, 56.0, 136.0, 88.0]),
+                },
+            ],
+        },
+        serde_json::json!({
+            "kind": "described_all",
+            "rows": [
+                {
+                    "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 2},
+                    "generation": 0,
+                    "role": "Button",
+                    "name": "Save",
+                    "value": null,
+                    "bounds": [16.0, 16.0, 136.0, 48.0],
+                },
+                {
+                    "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 3},
+                    "generation": 0,
+                    "role": "Button",
+                    "name": "Cancel",
+                    "value": null,
+                    "bounds": [16.0, 56.0, 136.0, 88.0],
+                },
+            ],
         }),
     )]
 }
@@ -730,6 +801,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .chain(resolve_all_responses())
         .chain(hit_test_responses())
         .chain(describe_responses())
+        .chain(describe_all_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
