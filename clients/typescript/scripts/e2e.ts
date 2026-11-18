@@ -147,6 +147,22 @@ try {
   assert.equal(miss, null, "empty space answers null (the read is total)");
   console.log("✓ hit-test: Save under (76, 32), null off-tree");
 
+  // --- node-describe (§8.1 identity facts, M36) ---
+  // The hit row mints the handle; the describe reads what it points at —
+  // role/name/value/bounds without a whole-subtree dump.
+  const described = await client.describe(hit.node, hit.generation);
+  assert.equal(described.role, "Button");
+  assert.equal(described.name, "Save");
+  assert.equal(described.value, null, "a button carries no value");
+  assert.deepEqual(described.bounds, hit.rect, "the resolve rect, restated");
+  const ghost = await client.describe({ kind: "accesskit", tree: "0".repeat(32), node: 999 }, 0)
+    .then(
+      () => null,
+      (err: Error) => err,
+    );
+  assert.ok(ghost, "a handle the tree does not know rejects (the Action boundary)");
+  console.log("✓ node-describe: Save = Button \"Save\", ghost handle rejected");
+
   // --- act (§8.4) ---
   const done = await client.action(resolved.node, resolved.generation, { kind: "click" });
   assert.equal(done.detail, "clicked");
