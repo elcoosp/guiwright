@@ -3,7 +3,7 @@
  * (`cargo run -p guiwright-driver --example gwp_demo_app`), connect the
  * TypeScript client over real TCP and drive the full conversation:
  *
- * handshake → tree snapshot → resolve → act → clock → mock seams →
+ * handshake → tree snapshot → resolve → resolve-all → act → clock → mock seams →
  * video start/stop → subscribe/nextEvent (M12) → treeDumpUnder (M13) →
  * strict-mode rejection → bye.
  *
@@ -127,6 +127,16 @@ try {
   assert.equal(resolved.node.kind, "accesskit");
   assert.equal(resolved.generation, 0);
   console.log("✓ resolve: node", resolved.node.node, "rect", resolved.rect);
+
+  // --- resolve-all (§8.2 set read, M30) ---
+  const all = await client.resolveAll({ kind: "role", role: "Button", name: null });
+  assert.equal(all.length, 4, "the fixture's four buttons, strict mode not consulted");
+  assert.deepEqual(
+    all.map((m: any) => m.node.node),
+    [2, 3, 6, 7],
+    "document order, the count()/all() ordering",
+  );
+  console.log("✓ resolve-all:", all.length, "matches in document order");
 
   // --- act (§8.4) ---
   const done = await client.action(resolved.node, resolved.generation, { kind: "click" });
