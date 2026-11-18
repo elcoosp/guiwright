@@ -123,14 +123,14 @@ impl WaitTracker {
 
     fn step(&mut self, rows: &[DescribedV1], frame_wake: bool) -> Eval {
         match self.state {
-            WaitState::Attached => self.attached_step(rows),
-            WaitState::Visible => self.visible_step(rows),
-            WaitState::Hidden => self.hidden_step(rows),
+            WaitState::Attached => Self::attached_step(rows),
+            WaitState::Visible => Self::visible_step(rows),
+            WaitState::Hidden => Self::hidden_step(rows),
             WaitState::Stable => self.stable_step(rows, frame_wake),
         }
     }
 
-    fn attached_step(&mut self, rows: &[DescribedV1]) -> Eval {
+    fn attached_step(rows: &[DescribedV1]) -> Eval {
         match rows.first() {
             Some(row) => Eval::Satisfied(Some(row.clone())),
             None => Eval::Pending {
@@ -139,7 +139,7 @@ impl WaitTracker {
         }
     }
 
-    fn visible_step(&mut self, rows: &[DescribedV1]) -> Eval {
+    fn visible_step(rows: &[DescribedV1]) -> Eval {
         match rows
             .iter()
             .find_map(|row| visible_bounds(row).map(|bounds| (row, bounds)))
@@ -154,7 +154,7 @@ impl WaitTracker {
         }
     }
 
-    fn hidden_step(&mut self, rows: &[DescribedV1]) -> Eval {
+    fn hidden_step(rows: &[DescribedV1]) -> Eval {
         let visible = rows
             .iter()
             .filter(|row| visible_bounds(row).is_some())
