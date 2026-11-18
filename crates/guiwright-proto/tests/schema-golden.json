@@ -381,6 +381,11 @@
       "index": 18,
       "name": "Describe",
       "payload": "{ node: NodeKeyV1, generation: u32 varint } — the §8.1 node-describe read (M36): one node's identity facts for a handle the client already holds (a resolve/hit/dump row, the dump-row rule) → Described; handle-addressed, so no window scope applies (the Action boundary), and the generation guard is the Action boundary's — a stale handle is Error { StaleGeneration }, an unknown one Error { UnknownNode }"
+    },
+    {
+      "index": 19,
+      "name": "DescribeAll",
+      "payload": "{ selector: SelectorV1 } — the §8.2 set read carrying facts (M39, the m37 record's standing gap): the resolve-all walk's rows plus the Described identity facts, one round trip instead of one Describe per row → DescribedAll; the connection's window scope narrows the walk exactly like ResolveAll (M30)"
     }
   ],
   "responses": [
@@ -493,6 +498,11 @@
       "index": 21,
       "name": "Described",
       "payload": "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]> } — the handle's identity facts (the dump row's facts, one node instead of a walk, M36); the handle echoes the request's and is directly usable as an Action handle"
+    },
+    {
+      "index": 22,
+      "name": "DescribedAll",
+      "payload": "{ rows: seq<DescribedV1> } — the set read carrying facts (the resolve-all walk's rows plus the Described identity facts, one round trip instead of N, M39); document order, an empty set answers with an empty list"
     }
   ],
   "schema": "gwp-schema/v1",
