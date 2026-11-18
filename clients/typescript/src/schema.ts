@@ -46,6 +46,8 @@ export const RequestV1 = {
   ResolveAll: 16,
   /** §8.3 hit-test read (M32): which node occupies the point, no timeout. */
   HitTest: 17,
+  /** §8.1 node-describe read (M36): one node's identity facts, no scope. */
+  Describe: 18,
 } as const;
 
 export const ClockV1 = {
@@ -147,6 +149,8 @@ export const ResponseV1 = {
   ResolvedAll: 19,
   /** §8.3 hit-test read (M32): the node under the point, null on a miss. */
   HitTest: 20,
+  /** §8.1 node-describe read (M36): the handle's identity facts. */
+  Described: 21,
 } as const;
 
 export const ErrorCode = {
@@ -262,6 +266,17 @@ export interface ResolvedMatch {
   rect: [number, number, number, number] | null;
 }
 
+/** §8.1 node-describe row (M36): one node's identity facts — the dump
+ * row's facts (role/name/value/bounds), one node instead of a walk. */
+export interface DescribedNode {
+  node: NodeKey;
+  generation: number;
+  role: string;
+  name: string | null;
+  value: string | null;
+  bounds: [number, number, number, number] | null;
+}
+
 export type NodeKey =
   | { kind: "accesskit"; tree: string; node: number }  // tree = 32 hex chars (16 bytes)
   | { kind: "logical"; adapter: string; id: number };
@@ -348,7 +363,8 @@ export type GwpRequest =
   | { kind: "snapshot"; cmd: SnapshotCmd }
   | { kind: "subscribe"; cmd: SubscribeCmd }
   | { kind: "resolve_all"; selector: Selector }
-  | { kind: "hit_test"; x: number; y: number };
+  | { kind: "hit_test"; x: number; y: number }
+  | { kind: "describe"; node: NodeKey; generation: number };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -482,4 +498,5 @@ export type GwpResponse =
   | { kind: "event"; event: EventV1 }
   | { kind: "subscribed"; kinds: EventKind[] }
   | { kind: "resolved_all"; matches: ResolvedMatch[] }
-  | { kind: "hit_test"; hit: ResolvedMatch | null };
+  | { kind: "hit_test"; hit: ResolvedMatch | null }
+  | ({ kind: "described" } & DescribedNode);
