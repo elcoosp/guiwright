@@ -290,6 +290,32 @@ export class GwpClient {
     return resp.rows;
   }
 
+  /** The m29 bulk text read at set width (M41 — the m29 record's remote
+   * note: "a remote bulk read would extend the `Resolve` reply exactly
+   * as the m26/m22 records name … and stays open until a remote suite
+   * asks"; the M39 domain retired the schema question): every match's
+   * text content in document order — the accessible name first, the
+   * value as the fallback (the source order the text locators match).
+   * The kit's `all_text_contents()` read over any door. Rides the M39
+   * `describeAll()` round trip — no protocol change, no new vectors; a
+   * node with neither fact reads as `""`, keeping positions 1:1 with
+   * the walk (the m31 rule). Snapshot semantics: non-strict, never
+   * waiting, an empty set answers with an empty list. */
+  async allTextContents(selector: Selector): Promise<string[]> {
+    const rows = await this.describeAll(selector);
+    return rows.map((row) => row.name ?? row.value ?? "");
+  }
+
+  /** The m31 value-first bulk read (M41): the `allTextContents` walk
+   * with the source order flipped for form semantics — what the form
+   * *carries* first, the accessible name as the fallback (the
+   * `getByValue` source order). The kit's `all_values()` read over any
+   * door, one `describeAll()` round trip, the same snapshot rules. */
+  async allValues(selector: Selector): Promise<string[]> {
+    const rows = await this.describeAll(selector);
+    return rows.map((row) => row.value ?? row.name ?? "");
+  }
+
   async action(
     node: NodeKey,
     generation: number,
