@@ -32,8 +32,9 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// `Bye` (M3), `Window` follows `Video` (M6, §16 v0.4 multi-window),
 /// `Gesture` follows `Window` (M7, §9 input pipeline), `Screenshot`
 /// follows `Gesture` (M10, §7 render domain), `Snapshot` follows
-/// `Screenshot` (M11, tree dump) and `Subscribe` follows `Snapshot`
-/// (M12, event channel); the pinning tests enforce the order.
+/// `Screenshot` (M11, tree dump), `Subscribe` follows `Snapshot`
+/// (M12, event channel) and `ResolveAll` follows `Subscribe`
+/// (M30, §8.2's set read); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -63,13 +64,18 @@ const REQUESTS: &[Variant] = &[
     v(13, "Screenshot", "ScreenshotV1 (see domains.screenshot)"),
     v(14, "Snapshot", "SnapshotV1 (see domains.snapshot)"),
     v(15, "Subscribe", "SubscribeV1 (see domains.subscribe)"),
+    v(
+        16,
+        "ResolveAll",
+        "{ selector: SelectorV1 } — the §8.2 set read (the kit's count()/all() walk, non-strict, never waits) → ResolvedAll; the connection's window scope narrows the walk exactly like Resolve (M30)",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
 /// `Bye` (M3), the M6 window replies append at 12–13, the M7
 /// `GestureDone` reply at 14, the M10 `Shot` reply at 15, the M11
-/// `TreeDump` reply at 16 and the M12 event replies (`Event`,
-/// `Subscribed`) at 17–18.
+/// `TreeDump` reply at 16, the M12 event replies (`Event`,
+/// `Subscribed`) at 17–18 and the M30 `ResolvedAll` reply at 19.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -129,6 +135,11 @@ const RESPONSES: &[Variant] = &[
         18,
         "Subscribed",
         "{ kinds: seq<EventKindV1> } — the subscription ack, echoing the deduplicated kinds now active on this connection (empty after Off)",
+    ),
+    v(
+        19,
+        "ResolvedAll",
+        "{ matches: seq<ResolvedMatchV1 { node: NodeKeyV1, generation: u32 varint, rect: option<[f64; 4]> }> } — every current match, document order (the count()/all() ordering); each row is directly usable as an Action handle (the dump-row rule, M11); an empty set answers with an empty list (M30)",
     ),
 ];
 
