@@ -32,12 +32,19 @@ fn role(name: Option<&str>) -> SelectorV1 {
 }
 
 fn tree_of(match_: &guiwright_proto::schema::ResolvedMatchV1) -> String {
+    use std::fmt::Write as _;
+
     match &match_.node {
         NodeKeyV1::AccessKit { tree, node } => {
-            let hex: String = tree.iter().map(|b| format!("{b:02x}")).collect();
+            let hex: String =
+                tree.iter()
+                    .fold(String::with_capacity(tree.len() * 2), |mut acc, b| {
+                        let _ = write!(acc, "{b:02x}");
+                        acc
+                    });
             format!("{}#{node}", &hex[..8])
         }
-        other => format!("{other:?}"),
+        other @ NodeKeyV1::Logical { .. } => format!("{other:?}"),
     }
 }
 
@@ -81,7 +88,7 @@ fn main() {
             .await
             .expect("the empty set read");
         println!(
-            "resolve-all role Button \"Ghost\" — {} matches (total, no error)",
+            "resolve-all role Button "Ghost" — {} matches (total, no error)",
             empty.len()
         );
 
