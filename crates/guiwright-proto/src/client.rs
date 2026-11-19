@@ -26,9 +26,9 @@ use guiwright_core::Selector;
 
 use crate::GwpError;
 use crate::schema::{
-    AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1, GwpEvent,
-    NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1, SemActionV1, WindowInfoV1,
-    WindowV1,
+    AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1, GestureV1,
+    GwpEvent, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1, SemActionV1,
+    SnapshotNodeV1, SnapshotV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 
@@ -44,6 +44,39 @@ pub struct ActionReceipt {
     pub frame_seq: u64,
     /// The adapter's detail string (the `ActionDone` detail).
     pub detail: String,
+}
+
+/// The receipt a [`ClientConn::gesture`] answers (m48): the frame the
+/// synthesized batch applied at (the §15.4 rendezvous — clients can
+/// await exactly this frame) and the synthesis summary (`"clicked at
+/// (76, 32) — 3 events"`, the same line the REPL's gesture rows render).
+/// A client-side carrier for the wire `GestureDone` payload — never
+/// serialized itself, so the schema stays byte-pinned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GestureReceipt {
+    /// The frame the gesture was applied at.
+    pub frame_seq: u64,
+    /// The synthesis summary (the `GestureDone` detail).
+    pub detail: String,
+}
+
+/// The client-side carrier for the wire `TreeDump` reply (m49):
+/// field-for-field the M11/M13 payload — the tree generation the dump was
+/// taken at, the dumped node count, the focused node and the depth-first
+/// rows. Never serialized itself (the reply rides `ResponseV1::TreeDump`
+/// byte-for-byte), so the schema stays byte-pinned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeDump {
+    /// The tree generation the dump was taken at (the same seq space the
+    /// `ResponseV1::TreeSnapshot` reply reports).
+    pub tree_seq: u64,
+    /// Dumped node count (== `nodes.len()`, redundancy for readers).
+    pub node_count: usize,
+    /// The focused node, when the tree has one.
+    pub focus: Option<NodeKeyV1>,
+    /// Depth-first per window root (§16 v0.4): every window's subtree
+    /// appears once, roots in adapter-reported window order.
+    pub nodes: Vec<SnapshotNodeV1>,
 }
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
@@ -368,6 +401,117 @@ pub trait ClientConn: Send + 'static {
                     Ok(ActionReceipt { frame_seq, detail })
                 }
                 other => Err(GwpError::Protocol(format!("Action answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §9 input half as typed seam sugar (m48): one [`RequestV1::Gesture`]
+    /// round trip — the driver synthesizes the raw `InputEventV1` batch from
+    /// its adapter's pacing table (click = move→down→up; drag = the §9
+    /// ratchet-interpolated moves; key = down→up; type = one text commit) and
+    /// injects it through the target window's pipeline, applying the batch
+    /// inside the next frame. Answers the [`GestureReceipt`] — the frame the
+    /// batch applied at plus the synthesis summary the REPL's gesture rows
+    /// render. No wire change: the synthesis rides the `Gesture` domain
+    /// byte-for-byte as M7 blessed it; every [`ClientConn`] impl inherits
+    /// the sugar, the same shape the TypeScript client has spoken since M7
+    /// (`gesture()`) and the REPL since M7 (`mouse` / `key` / `text`).
+    ///
+    /// The connection's window scope (§16 v0.4) steers the coordinates (the
+    /// M6 handoff the §9 grammar rides) — the batch lands in the aimed
+    /// window's pipeline, the same scope [`Self::resolve`] aims the walk
+    /// through. The boundary's honesty carries over unchanged: a gesture
+    /// that synthesizes nothing (a zero-count click — the session's
+    /// client-bug rejection) answers the wire's typed error naming the
+    /// cause; the raw `RequestV1::Input` batch stays the un-synthesized
+    /// escape hatch, exactly where M7 left it.
+    fn gesture(
+        &mut self,
+        gesture: GestureV1,
+    ) -> impl Future<Output = Result<GestureReceipt, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Gesture(gesture)).await? {
+                ResponseV1::GestureDone { frame_seq, detail } => {
+                    Ok(GestureReceipt { frame_seq, detail })
+                }
+                other => Err(GwpError::Protocol(format!("Gesture answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §7 tree-dump domain as typed seam sugar (m49 — the m13 record's
+    /// dump-row half): one `RequestV1::Snapshot(SnapshotV1::Full)` round
+    /// trip — the whole logical tree, depth-first per window root (§16
+    /// v0.4), rebuilt into the [`TreeDump`] carrier. The walk is the M11
+    /// contract the REPL's `snapshot` row prints and the TypeScript
+    /// client's `treeDump()` carries: every row carries the identity facts
+    /// (role, name, value, bounds) and the `children` counts rebuild the
+    /// hierarchy without a parent pointer per row. Not window-scoped by
+    /// design — the full walk covers every window target, disjoint by
+    /// construction ([`Self::tree_dump_under`] is the scoped read). No
+    /// wire change: the walk rides the `Snapshot` domain byte-for-byte as
+    /// M11 blessed it; every [`ClientConn`] impl inherits the sugar.
+    fn tree_dump(&mut self) -> impl Future<Output = Result<TreeDump, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Snapshot(SnapshotV1::Full)).await? {
+                ResponseV1::TreeDump {
+                    tree_seq,
+                    node_count,
+                    focus,
+                    nodes,
+                } => Ok(TreeDump {
+                    tree_seq,
+                    node_count,
+                    focus,
+                    nodes,
+                }),
+                other => Err(GwpError::Protocol(format!(
+                    "TreeDump answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// One subtree as typed seam sugar (m49 — the m13 `Snapshot::Filtered`
+    /// arm): resolve `selector` (the driver's auto-wait `Attached` within
+    /// `timeout_ms`, honoring the connection's window scope — the same
+    /// resolve [`Self::resolve`] runs) and dump the depth-first walk
+    /// rooted at the match — a leaf locator answers one row, itself. The
+    /// resolve's honesty rides the sugar unchanged: a selector that never
+    /// matches inside the budget answers `ErrorCode::Timeout` naming the
+    /// stuck check; strict mode is the wire's own policy (§8.2), so an
+    /// ambiguous locator answers `ErrorCode::StrictModeViolation`. No wire
+    /// change: the subtree walk rides the `Snapshot` domain byte-for-byte
+    /// as M13 blessed it; every [`ClientConn`] impl inherits the sugar,
+    /// the same shape the TypeScript client's `treeDumpUnder()` has
+    /// spoken since M13.
+    fn tree_dump_under(
+        &mut self,
+        selector: SelectorV1,
+        timeout_ms: u64,
+    ) -> impl Future<Output = Result<TreeDump, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::Snapshot(SnapshotV1::Filtered {
+                    selector,
+                    timeout_ms,
+                }))
+                .await?
+            {
+                ResponseV1::TreeDump {
+                    tree_seq,
+                    node_count,
+                    focus,
+                    nodes,
+                } => Ok(TreeDump {
+                    tree_seq,
+                    node_count,
+                    focus,
+                    nodes,
+                }),
+                other => Err(GwpError::Protocol(format!(
+                    "TreeDump answered by {other:?}"
+                ))),
             }
         }
     }
