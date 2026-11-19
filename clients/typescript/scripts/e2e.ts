@@ -116,7 +116,7 @@ try {
 
   // --- tree snapshot ---
   const snapshot = await client.treeSnapshot();
-  assert.equal(snapshot.node_count, 8, "the buttons fixture");
+  assert.equal(snapshot.node_count, 9, "the described fixture");
   console.log("✓ tree snapshot:", snapshot.node_count, "nodes");
 
   // --- resolve (server-side auto-wait, §8.2) ---
@@ -131,10 +131,10 @@ try {
 
   // --- resolve-all (§8.2 set read, M30) ---
   const all = await client.resolveAll({ kind: "role", role: "Button", name: null });
-  assert.equal(all.length, 4, "the fixture's four buttons, strict mode not consulted");
+  assert.equal(all.length, 5, "the described fixture's five buttons, strict mode not consulted");
   assert.deepEqual(
     all.map((m: ResolvedMatch) => m.node.node),
-    [2, 3, 6, 7],
+    [2, 3, 6, 7, 14],
     "document order, the count()/all() ordering",
   );
   console.log("✓ resolve-all:", all.length, "matches in document order");
@@ -168,10 +168,10 @@ try {
   // The resolve-all walk's rows carrying the describe facts — one round
   // trip instead of one describe per row (the m37 record's standing gap).
   const describedAll = await client.describeAll({ kind: "role", role: "Button", name: null });
-  assert.equal(describedAll.length, 4, "the same walk resolveAll runs");
+  assert.equal(describedAll.length, 5, "the same walk resolveAll runs");
   assert.deepEqual(
     describedAll.map((r: DescribedNode) => r.node.node),
-    [2, 3, 6, 7],
+    [2, 3, 6, 7, 14],
     "document order, the count()/all() ordering",
   );
   assert.equal(describedAll[0].role, "Button");
@@ -191,8 +191,14 @@ try {
   const bulkTexts = await client.allTextContents({ kind: "role", role: "Button", name: null });
   assert.deepEqual(
     bulkTexts,
-    ["Save", "Cancel", "Invisible", "Confirm"],
-    "the full 4-button walk, document order, label-first",
+    [
+    "Save",
+    "Cancel",
+    "Invisible",
+    "Confirm",
+    "Install",
+  ],
+    "the full five-button walk, document order, label-first",
   );
   const inputTexts = await client.allTextContents({ kind: "role", role: "TextInput", name: null });
   assert.deepEqual(inputTexts, ["Email"], "texts reads the label (the m29 source order)");
@@ -364,23 +370,23 @@ try {
   // --- the count family over the door (m59/m60) ---
   const found = await client.expectCount(
     { kind: "role", role: "Button", name: null },
-    4,
+    5,
     2000,
   );
-  assert.equal(found, 4, "the demo app's four buttons, found 4 (absence would answer 0)");
+  assert.equal(found, 5, "the demo app's five buttons, found 5 (absence would answer 0)");
   const more = await client.expectCountGreaterThan(
     { kind: "role", role: "Button", name: null },
     3,
     2000,
   );
-  assert.equal(more, 4, "the comparator answers the same found fact");
+  assert.equal(more, 5, "the comparator answers the same found fact");
   await assert.rejects(
     () => client.expectCount({ kind: "role", role: "Button", name: null }, 99, 200),
     (err: unknown) => {
       assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
       const timeout = err as GwpWaitTimeout;
       assert.equal(timeout.state, "have count", "the static state word");
-      assert.match(timeout.lastEvaluation, /count is 4, expected 99/, "both sides ride the line");
+      assert.match(timeout.lastEvaluation, /count is 5, expected 99/, "both sides ride the line");
       return true;
     },
   );
@@ -457,6 +463,62 @@ try {
   await client.ping(); // the spent assertions left the door healthy
   console.log("✓ expectRole/expectName: the identity rows + the typed expiry — door healthy (m62/m63)");
 
+  // --- the description assertion over the door (m64/m65) ---
+  // The kit's `toHaveAccessibleDescription` (M38) mirrored on the TS
+  // client (the m45/m60/m63 one-milestone-per-surface pattern) over the
+  // appended `describeAllIdentity()` read: the description answers the
+  // matcher (the name and the value never answer), a mismatch expires
+  // with the typed timeout naming both sides, and the missing fact is
+  // named on an undescribed node.
+  const describedRow = await client.expectDescription(
+    { kind: "role", role: "Button", name: { text: "Install", exact: true, ignore_case: true } },
+    { text: "Installs", exact: false, ignore_case: true },
+    2000,
+  );
+  assert.equal(
+    describedRow.description,
+    "Installs the latest build",
+    "the fact the assertion speaks",
+  );
+  assert.equal(describedRow.name, "Install", "the identity four ride beside it");
+  await assert.rejects(
+    () =>
+      client.expectDescription(
+        { kind: "role", role: "Button", name: { text: "Install", exact: true, ignore_case: true } },
+        { text: "Ghost", exact: false, ignore_case: true },
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have description", "the static state word");
+      assert.match(
+        timeout.lastEvaluation,
+        /description is "Installs the latest build", expected "Ghost" \(fuzzy\)/,
+        "both sides ride the line",
+      );
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      client.expectDescription(
+        { kind: "role", role: "Button", name: null },
+        { text: "Anything", exact: false, ignore_case: true },
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      assert.match(
+        (err as GwpWaitTimeout).lastEvaluation,
+        /no accessible description/,
+        "the missing fact is named",
+      );
+      return true;
+    },
+  );
+  console.log("✓ expectDescription: the description row + the typed expiry — door healthy (m64/m65)");
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
@@ -489,7 +551,7 @@ try {
   console.log("✓ M15 ws: upgraded + handshaked —", wsWelcome.session_id);
 
   const wsSnapshot = await wsClient.treeSnapshot();
-  assert.equal(wsSnapshot.node_count, 8, "the same fixture bytes over ws");
+  assert.equal(wsSnapshot.node_count, 9, "the same fixture bytes over ws");
   const wsResolved = await wsClient.resolve({
     kind: "role",
     role: "Button",
