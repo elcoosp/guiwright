@@ -41,7 +41,7 @@ fn gesture_click_synthesizes_move_down_up() {
     settle(&mut session);
 
     let outcome = session
-        .perform_gesture(click(10.0, 20.0, 1), None)
+        .perform_gesture(&click(10.0, 20.0, 1), None)
         .expect("click applies");
     assert_eq!(outcome.events, 3, "move + down + up");
     assert_eq!(outcome.detail, "clicked at (10, 20) — 3 events");
@@ -77,7 +77,7 @@ fn double_click_repeats_the_press_at_one_point() {
     settle(&mut session);
 
     let outcome = session
-        .perform_gesture(click(4.0, 8.0, 2), None)
+        .perform_gesture(&click(4.0, 8.0, 2), None)
         .expect("double click applies");
     assert_eq!(outcome.events, 5, "move + down/up ×2");
     assert_eq!(outcome.detail, "double-clicked at (4, 8) — 5 events");
@@ -131,7 +131,7 @@ fn drag_interpolates_moves_with_the_pacing_ratchet() {
     settle(&mut session);
     let outcome = session
         .perform_gesture(
-            Gesture::Drag {
+            &Gesture::Drag {
                 from_x: 10.0,
                 from_y: 10.0,
                 to_x: 110.0,
@@ -173,7 +173,7 @@ fn drag_interpolates_moves_with_the_pacing_ratchet() {
     settle(&mut slow);
     let outcome = slow
         .perform_gesture(
-            Gesture::Drag {
+            &Gesture::Drag {
                 from_x: 0.0,
                 from_y: 0.0,
                 to_x: 100.0,
@@ -193,7 +193,7 @@ fn key_and_type_gestures_synthesize_keyboard_events() {
 
     let outcome = session
         .perform_gesture(
-            Gesture::Key {
+            &Gesture::Key {
                 key: "Enter".into(),
                 modifiers: vec!["Shift".into()],
             },
@@ -220,7 +220,7 @@ fn key_and_type_gestures_synthesize_keyboard_events() {
 
     let outcome = session
         .perform_gesture(
-            Gesture::Type {
+            &Gesture::Type {
                 text: "héllo".into(),
             },
             None,
@@ -245,7 +245,7 @@ fn wheel_gesture_routes_one_wheel_event() {
     settle(&mut session);
     let outcome = session
         .perform_gesture(
-            Gesture::Wheel {
+            &Gesture::Wheel {
                 dx: 0.0,
                 dy: -120.0,
             },
@@ -308,14 +308,14 @@ fn input_and_gestures_validate_the_window_target() {
     // An explicit target routes there; the default (None) is the session's
     // first window target.
     session
-        .perform_gesture(click(30.0, 40.0, 1), Some(&fx.w2.0.to_string()))
+        .perform_gesture(&click(30.0, 40.0, 1), Some(&fx.w2.0.to_string()))
         .expect("click into w2");
     let logged = session.adapter().window_events();
     assert_eq!(logged.len(), 3);
     assert!(logged.iter().all(|(w, _)| w == &fx.w2.0.to_string()));
 
     session
-        .perform_gesture(click(50.0, 60.0, 1), None)
+        .perform_gesture(&click(50.0, 60.0, 1), None)
         .expect("default target");
     let logged = session.adapter().window_events();
     assert_eq!(logged.len(), 6);
@@ -330,7 +330,7 @@ fn zero_count_click_is_rejected_before_any_injection() {
     let mut session = Session::new(MockAdapter::with_fixture(&Fixture::buttons()));
     settle(&mut session);
     let err = session
-        .perform_gesture(click(1.0, 2.0, 0), None)
+        .perform_gesture(&click(1.0, 2.0, 0), None)
         .expect_err("count 0 is a client bug");
     assert!(
         err.to_string().contains("count"),
@@ -543,11 +543,11 @@ fn codegen_records_the_gesture_vocabulary() {
 
     session.codegen_start().expect("recording starts");
     session
-        .perform_gesture(click(10.0, 20.0, 1), None)
+        .perform_gesture(&click(10.0, 20.0, 1), None)
         .expect("click applies");
     session
         .perform_gesture(
-            Gesture::Wheel {
+            &Gesture::Wheel {
                 dx: 0.0,
                 dy: -120.0,
             },
@@ -556,7 +556,7 @@ fn codegen_records_the_gesture_vocabulary() {
         .expect("wheel applies");
     session
         .perform_gesture(
-            Gesture::Key {
+            &Gesture::Key {
                 key: "Enter".into(),
                 modifiers: vec![],
             },
@@ -570,7 +570,7 @@ fn codegen_records_the_gesture_vocabulary() {
     assert_eq!(code.lines().count(), 4, "{code}");
     assert!(code.contains("app.mouse().click(10.0, 20.0);"), "{code}");
     assert!(code.contains("app.mouse().wheel(0.0, -120.0);"), "{code}");
-    assert!(code.contains("app.keyboard().press(\"Enter\");"), "{code}");
+    assert!(code.contains("app.keyboard().press("Enter");"), "{code}");
     assert!(code.contains("app.mouse().move_to(30.0, 40.0);"), "{code}");
     assert!(warnings.is_empty(), "{warnings:?}");
 }
@@ -587,7 +587,7 @@ fn codegen_records_window_targets_chords_and_high_counts() {
     // recorded line replays into the same window it drove.
     session
         .perform_gesture(
-            Gesture::Click {
+            &Gesture::Click {
                 x: 5.0,
                 y: 6.0,
                 button: PointerButton::Primary,
@@ -598,7 +598,7 @@ fn codegen_records_window_targets_chords_and_high_counts() {
         .expect("dblclick applies");
     session
         .perform_gesture(
-            Gesture::Key {
+            &Gesture::Key {
                 key: "KeyA".into(),
                 modifiers: vec!["Control".into()],
             },
@@ -606,11 +606,11 @@ fn codegen_records_window_targets_chords_and_high_counts() {
         )
         .expect("chord applies");
     session
-        .perform_gesture(Gesture::Type { text: "ada".into() }, None)
+        .perform_gesture(&Gesture::Type { text: "ada".into() }, None)
         .expect("type applies");
     // A count>2 click has no kit equivalent — recorded with a warning.
     session
-        .perform_gesture(click(1.0, 2.0, 3), None)
+        .perform_gesture(&click(1.0, 2.0, 3), None)
         .expect("triple click applies");
     let (code, warnings) = session.codegen_stop().expect("recording stops");
     assert!(
@@ -620,11 +620,11 @@ fn codegen_records_window_targets_chords_and_high_counts() {
         "{code}"
     );
     assert!(
-        code.contains("app.keyboard().press_with(\"KeyA\", [\"Control\"]);"),
+        code.contains("app.keyboard().press_with("KeyA", ["Control"]);"),
         "{code}"
     );
     assert!(
-        code.contains("app.keyboard().type_text(\"ada\");"),
+        code.contains("app.keyboard().type_text("ada");"),
         "{code}"
     );
     assert!(code.contains("app.mouse().click(1.0, 2.0);"), "{code}");
@@ -637,7 +637,7 @@ fn codegen_inactive_gestures_record_nothing() {
     let mut session = Session::new(MockAdapter::with_fixture(&Fixture::buttons()));
     settle(&mut session);
     session
-        .perform_gesture(click(10.0, 20.0, 1), None)
+        .perform_gesture(&click(10.0, 20.0, 1), None)
         .expect("click applies without a recorder");
     // No recording active: nothing to stop, nothing recorded.
     assert!(session.codegen_stop().is_err(), "no recorder");
@@ -652,7 +652,7 @@ fn failed_gestures_record_nothing() {
     let dead = "a6000000-dead-beef-0000-000000000000";
     assert!(
         session
-            .perform_gesture(click(10.0, 20.0, 1), Some(dead))
+            .perform_gesture(&click(10.0, 20.0, 1), Some(dead))
             .is_err(),
         "dead window rejected"
     );
