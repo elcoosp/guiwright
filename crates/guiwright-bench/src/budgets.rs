@@ -135,6 +135,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         "client_wait_satisfied",
         crate::samples::client_wait_satisfied,
     ),
+    ("client_text_contents", crate::samples::client_text_contents),
+    ("client_resolve_act", crate::samples::client_resolve_act),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
