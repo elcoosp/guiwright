@@ -1578,3 +1578,145 @@ async fn assert_rows_discoverable_and_append_only(repl: &mut Repl) {
     let out = rendered(&repl.step("expect role Button Save").await);
     assert!(out[0].starts_with("resolved "), "{out:?}");
 }
+
+/// The REPL description-assertion row (m64 — the m38
+/// `to_have_accessible_description` vocabulary's interactive half, the
+/// m62 grammar's third identity fact): `assert description <get-args…>
+/// is <expected>` rides the `ClientConn::expect_description` seam over a
+/// real socket — the satisfying-row render naming the description fact,
+/// the typed timeout naming `have description` (found and expected, the
+/// missing fact named on undescribed nodes), the grammar's usage line,
+/// the wake-and-re-read on a scripted restatement, and the `events on`
+/// filter restored after the assertion's subscription window (the m43
+/// rule). Its own described-fixture session — the base buttons fixture
+/// stays byte-stable for the assertion rows above.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_description_rows_wait_on_the_client_seam() {
+    let scripts: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts_for_app = Arc::clone(&scripts);
+    let path = socket_path("repl-description.sock");
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        move || {
+            MockAdapter::with_fixture(&Fixture::with_description())
+                .with_shared_scripts(scripts_for_app)
+        },
+        guiwright_driver::ServerOptions {
+            log_tail: true,
+            ..guiwright_driver::ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // Satisfied on entry: the matcher rides the REPL's posture
+    // (substring, case-insensitive), the satisfying row renders the m37
+    // facts with the description fact named.
+    let out = rendered(
+        &repl
+            .step(r#"assert description role Button Install is "Installs""#)
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert description — "), "{out:?}");
+    assert!(
+        out[0].contains("Button \"Install\""),
+        "the head row's facts: {out:?}"
+    );
+    assert!(
+        out[0].contains("Installs the latest build"),
+        "the fact the assertion speaks: {out:?}"
+    );
+
+    // The exact posture rides the same read (the quoted form).
+    let out = rendered(
+        &repl
+            .step(r#"assert description role Button Install is "Installs the latest build""#)
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+
+    // A spent budget prints the typed timeout — `have description`, the
+    // found description and the wanted matcher.
+    assert_eq!(
+        rendered(&repl.step("timeout 150").await)[0],
+        "timeout = 150 ms"
+    );
+    let out = rendered(
+        &repl
+            .step(r#"assert description role Button Install is "Ghost""#)
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait have description timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(
+        out[0].contains(r#"description is "Installs the latest build""#),
+        "found side: {out:?}"
+    );
+    assert!(
+        out[0].contains(r#"expected "Ghost""#),
+        "wanted side: {out:?}"
+    );
+
+    // The missing fact is named on an undescribed node (the Save button
+    // has no description — the m38 pending rule at the prompt).
+    let out = rendered(
+        &repl
+            .step(r#"assert description role Button Save is "Anything""#)
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("no accessible description"), "{out:?}");
+
+    // The vocabulary is discoverable: the kinds usage line and the help
+    // row list the description word.
+    let out = rendered(&repl.step("assert shiny role Button is 1").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("description"), "{out:?}");
+
+    // Wake-and-re-read: the Save button gains its description a moment
+    // after attach — event-driven, no polling — and the `events on`
+    // filter survives the assertion's subscription window.
+    let scripts_for_push = Arc::clone(&scripts);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        scripts_for_push
+            .lock()
+            .expect("script lock")
+            .push(Fixture::with_description().describe_save_update());
+    });
+    assert_eq!(
+        rendered(&repl.step("timeout 5000").await)[0],
+        "timeout = 5000 ms"
+    );
+    let out = rendered(
+        &repl
+            .step(r#"assert description role Button Save is "Saves every change""#)
+            .await,
+    );
+    assert!(
+        out[0].contains("assert description — "),
+        "the restatement satisfies: {out:?}"
+    );
+
+    rendered(&repl.step("events on").await);
+    rendered(
+        &repl
+            .step(r#"assert description role Button Install is "Installs""#)
+            .await,
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let out = rendered(&repl.step("ping").await);
+    assert!(
+        out.iter().any(|l| l.starts_with("event ")),
+        "the `events on` stream keeps flowing after an assertion: {out:?}"
+    );
+    rendered(&repl.step("events off").await);
+
+    handle.shutdown();
+}
