@@ -71,6 +71,7 @@ The full domain vocabulary on `GwpClient` (each maps 1:1 onto a GWP request):
 | Bulk reads (M41) | `allTextContents(selector)` — label first (the text locators' source order); `allValues(selector)` — value first (the form's source order); both ride `describeAll`, no protocol change |
 | Client-side wait (M45) | `waitFor(selector, state, timeoutMs?)` — the m42 composition over the TS client (subscribe / `describeAll()` / `nextEvent`), `attached`/`visible`/`hidden`/`stable`, the typed `GwpWaitTimeout` naming state, locator and last evaluation; no protocol change |
 | Content assertions (M54) | `expectText(selector, expected, timeoutMs?)` / `expectValue(selector, expected, timeoutMs?)` — the kit's `toHaveText` / `toHaveValue` over any door: the M41 source orders made waitable on the M45 wake loop, the typed `GwpWaitTimeout` naming locator, expected and found; no protocol change |
+| Count assertions (M60) | `expectCount(selector, expected, timeoutMs?)`, `expectCountGreaterThan(selector, min, timeoutMs?)`, `expectCountLessThan(selector, max, timeoutMs?)` — the kit's `toHaveCount` family over any door (m59's Rust rows mirrored on the identical `CountTracker` evaluator, `src/count.ts`): the M30 set read on the M54 wake loop, absence answering found 0 (Playwright parity), the typed `GwpWaitTimeout` naming the comparison and the count the last evaluation found; no protocol change |
 | Liveness / misc | `ping()`, `gesture(...)` (the `mouse`/`keyboard` helper's request), `close()` |
 
 ## Tests
