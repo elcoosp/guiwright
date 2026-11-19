@@ -2340,3 +2340,129 @@ pub fn client_clock() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+/// §15.1 `client_mock`: one `ClientConn::mock` call over the in-process
+/// door (m52 — the §14 state-seam half as typed seam sugar): the wire
+/// `Mock` round trip running a registered seam inside the adapter's runner
+/// context (`run_in` + the settle pump) and the `MockDone` reply
+/// marshalled into the carrier — the floor the TS client's `mock()` /
+/// `callSeam()` / `resetState()` helpers and the REPL's `mock` rows have
+/// carried since §14/M4, now on the Rust seam; a client-side sugar over an
+/// existing domain, no wire change.
+pub fn client_mock() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::MockV1;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            // The hook runs in the runner context (§14): the state slot must
+            // be attached or `run_in` is loud (the mock's own contract).
+            move || MockAdapter::with_fixture(&Fixture::buttons()).with_state(()),
+            {
+                let mut seams = guiwright_driver::SeamRegistry::new();
+                seams.register("seed_users", |_ctx, _scope| Ok("3 users seeded".into()));
+                seams
+            },
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        // Warm-up: one call pins the carrier shape once (the hook ran in
+        // the runner context, the detail rode back).
+        let warm = client
+            .mock(MockV1::Call {
+                id: "seed_users".into(),
+                scope: "warm".into(),
+            })
+            .await
+            .expect("warm call");
+        assert_eq!(warm.detail, "3 users seeded");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let receipt = client
+                .mock(MockV1::Call {
+                    id: "seed_users".into(),
+                    scope: "bench".into(),
+                })
+                .await
+                .expect("bench call");
+            assert_eq!(receipt.id, "seed_users", "the reply names the seam");
+            assert_eq!(receipt.detail, "3 users seeded");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+/// §15.1 `client_inspect`: one `ClientConn::inspect` overlay-enable round
+/// trip over the in-process door (m53 — the §13 inspector half as typed
+/// seam sugar): the wire `Inspect` round trip rebuilding the overlay plan
+/// from the tree indexes (the session's enable path, one pump + the
+/// adapter's `show_overlay`) and the `Pong` ack marshalled into the
+/// carrier — the floor the TS client's `inspectOverlay()` helper and the
+/// REPL's `inspect` row have carried since §13/M8, now on the Rust seam; a
+/// client-side sugar over an existing domain, no wire change.
+pub fn client_inspect() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::client::InspectReply;
+    use guiwright_proto::schema::InspectV1;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        // Warm-up: enable + disable pins the carrier shape once (the acks
+        // ride the wire's shared `Pong`).
+        let warm = client
+            .inspect(InspectV1::EnableOverlay)
+            .await
+            .expect("warm enable");
+        assert_eq!(warm, InspectReply::Applied);
+        client
+            .inspect(InspectV1::DisableOverlay)
+            .await
+            .expect("warm disable");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let ack = client
+                .inspect(InspectV1::EnableOverlay)
+                .await
+                .expect("bench enable");
+            assert_eq!(ack, InspectReply::Applied, "the ack arm");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
