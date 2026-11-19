@@ -20,6 +20,11 @@
 //!   `to_have_text` / `to_have_value` rows over any door, behind
 //!   [`ClientConn::expect_text`] / [`ClientConn::expect_value`], no wire
 //!   change
+//! * [`count`] — the client-side count assertion (m59): the kit's
+//!   `to_have_count` family (the M22 exact form + the M25 comparators)
+//!   over any door, behind [`ClientConn::expect_count`] /
+//!   [`ClientConn::expect_count_greater_than`] /
+//!   [`ClientConn::expect_count_less_than`], no wire change
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -32,6 +37,7 @@ pub mod bulk;
 pub mod client;
 pub mod conn;
 pub mod convert;
+pub mod count;
 pub mod duplex;
 pub mod expect;
 pub mod framing;
