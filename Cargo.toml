@@ -88,7 +88,8 @@ unused_dependencies = "allow"
 all = { level = "warn", priority = -1 }
 # Pedantic rides the workspace table (§17 policy): every carve-out lives
 # here with its rationale — in-code #[allow] attributes are forbidden
-# (see CONTRIBUTING.md, "Lint policy").
+# (this table's comments are the lint policy; there is no separate
+# contributing guide).
 pedantic = { level = "warn", priority = -1 }
 # The kit/driver API is a fluent builder/DSL surface (handles, locators,
 # `expect` chains, selector narrowing): must_use on every accessor call
