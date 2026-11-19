@@ -2688,3 +2688,102 @@ pub fn client_input() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+/// §15.1 `client_tree_snapshot`: one `ClientConn::tree_snapshot` call over
+/// the in-process door (m57) — the §7 summary read riding the
+/// `TreeSnapshot` domain, the reply's generation + node count marshalled
+/// into the [`TreeSnapshotSummary`] carrier. The measured operation is the
+/// round trip (the pump + the count), the same shape the TS client's
+/// `treeSnapshot()` has spoken since its M3 landing.
+pub fn client_tree_snapshot() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::{ClientConn, TreeSnapshotSummary};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        // Warm-up: one summary read pins the carrier shape once (the 8
+        // nodes rode back with their generation).
+        let warm = client.tree_snapshot().await.expect("warm summary read");
+        assert_eq!(warm.node_count, 8, "the M0 fixture's 8 nodes");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let summary: TreeSnapshotSummary =
+                client.tree_snapshot().await.expect("bench summary read");
+            assert_eq!(summary.node_count, 8, "still the whole tree");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+/// §15.1 `client_bye`: one `ClientConn::bye` call over the in-process door
+/// (m58) — the §7 lifecycle farewell riding the `Bye` domain, answered
+/// `Ok(())` before the conversation ends (`run_connection` returns right
+/// after the `Bye` frame, so each measured iteration opens a fresh
+/// connection; the open is setup, the round trip is the measured
+/// operation). The same round trip the TS client's `close()` has made
+/// since its M3 landing before its own transport teardown.
+pub fn client_bye() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+
+        // Warm-up: one full farewell pins the row shape once (the bye
+        // ends the conversation — the successor connection below carries
+        // the rest).
+        let mut warm_client = DuplexClient::connect(&connect)
+            .await
+            .expect("warm in-process client");
+        warm_client
+            .handshake("gw-bench/0.1")
+            .await
+            .expect("handshake");
+        warm_client.bye().await.expect("warm farewell");
+        drop(warm_client);
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let mut client = DuplexClient::connect(&connect)
+                .await
+                .expect("bench in-process client");
+            client.handshake("gw-bench/0.1").await.expect("handshake");
+            client.bye().await.expect("bench farewell");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
