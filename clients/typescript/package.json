@@ -14,9 +14,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/codec.test.ts test/wait.test.ts test/expect.test.ts test/count.test.ts test/client.test.ts",
+    "test": "node --test test/codec.test.ts test/wait.test.ts test/expect.test.ts test/count.test.ts test/description.test.ts test/client.test.ts",
     "e2e": "node scripts/e2e.ts",
-    "example:identity": "node examples/identity_assertions.ts"
+    "example:identity": "node examples/identity_assertions.ts",
+    "example:description": "node examples/description_assertions.ts"
   },
   "keywords": [
     "guiwright",
