@@ -222,6 +222,22 @@ pub struct InputReceipt {
     pub frame_seq: u64,
 }
 
+/// The receipt a [`ClientConn::tree_snapshot`] answers (m57): the §7
+/// summary read — the tree generation (`tree_seq`, the seq space the
+/// `TreeChanged` events report) and the whole tree's node count, the same
+/// two facts the wire arm reports. A client-side carrier for the wire
+/// `TreeSnapshot` payload — never serialized itself, so the schema stays
+/// byte-pinned (the [`InputReceipt`] rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeSnapshotSummary {
+    /// The tree generation the read observed.
+    pub tree_seq: u64,
+    /// The whole tree's node count (session-wide — the §16 v0.4 rule:
+    /// the connection's window scope narrows locators, not whole-tree
+    /// reads).
+    pub node_count: usize,
+}
+
 /// The client half of a GWP conversation, transport-blind (§7, M18).
 ///
 /// The four shipped clients implement this one-for-one over the shared
@@ -934,6 +950,71 @@ pub trait ClientConn: Send + 'static {
             match self.request(RequestV1::Input { events }).await? {
                 ResponseV1::InputQueued { frame_seq } => Ok(InputReceipt { frame_seq }),
                 other => Err(GwpError::Protocol(format!("Input answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §7 summary read as typed seam sugar (m57): one
+    /// [`RequestV1::TreeSnapshot`] round trip — the M0-era whole-tree
+    /// answer (the tree generation and the node count), the read the M11
+    /// dump domain later expanded into the m49 rows. Answers the
+    /// [`TreeSnapshotSummary`] carrier. No wire change: the read rides the
+    /// `TreeSnapshot` domain byte-for-byte as M0 blessed it; every
+    /// [`ClientConn`] impl inherits the sugar, the same shape the
+    /// TypeScript client has spoken since its M3 landing
+    /// (`treeSnapshot()`).
+    ///
+    /// The domain's honesty carries over unchanged: the read is
+    /// session-wide by design — the connection's window scope narrows
+    /// locators, not whole-tree reads (the §16 v0.4 rule the dump rows
+    /// carry) — and it is a read, not a mutation pump: the session pumps
+    /// once and reports the tree as it is *now*, so back-to-back reads
+    /// agree with each other and with the [`Self::tree_dump`] walk's count
+    /// at the same generation. A client that needs the rows asks
+    /// [`Self::tree_dump`]; a client that needs the two summary facts asks
+    /// this row.
+    fn tree_snapshot(
+        &mut self,
+    ) -> impl Future<Output = Result<TreeSnapshotSummary, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::TreeSnapshot).await? {
+                ResponseV1::TreeSnapshot {
+                    tree_seq,
+                    node_count,
+                } => Ok(TreeSnapshotSummary {
+                    tree_seq,
+                    node_count,
+                }),
+                other => Err(GwpError::Protocol(format!(
+                    "TreeSnapshot answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// The §7 lifecycle close as typed seam sugar (m58): one
+    /// [`RequestV1::Bye`] round trip answering `Ok(())` on the wire's
+    /// `Bye` arm — the same round trip the TypeScript client's `close()`
+    /// has made since its M3 landing before its own transport teardown.
+    /// No wire change: the farewell rides the `Bye` domain byte-for-byte
+    /// as M0 blessed it; every [`ClientConn`] impl inherits the sugar.
+    ///
+    /// **The transport close stays the door's business.** The wire's own
+    /// contract: the driver answers the farewell and the conversation
+    /// ends — `run_connection` returns right after writing the `Bye`
+    /// frame, so a further request on this connection cannot land (the
+    /// TS `close()` does exactly this round trip before its own
+    /// `transport.close()`). What the farewell does *not* end is the
+    /// session under the connection: the driver keeps serving fresh
+    /// connections untouched, the door's teardown being the door's own
+    /// business (socket drop, the in-process channels). The method
+    /// answers before the door closes, so `Ok(())` is the honest
+    /// last-word: the driver received the goodbye.
+    fn bye(&mut self) -> impl Future<Output = Result<(), GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Bye).await? {
+                ResponseV1::Bye => Ok(()),
+                other => Err(GwpError::Protocol(format!("Bye answered by {other:?}"))),
             }
         }
     }
