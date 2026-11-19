@@ -504,16 +504,47 @@ export class GwpClient {
     return this.expectContent(selector, "value", expected, timeoutMs);
   }
 
-  /** The shared content-assertion composition (m54): the m45 wait's
-   * loop shape with the `ExpectTracker` evaluation — one entry read,
-   * event-driven re-reads, the subscription window owned and dropped,
-   * the typed timeout naming locator/expected/found. Tree and frame
-   * wakes both re-decide (content has no `stable`-like frame
+  /** The identity assertion, role form (m62/m63 — the kit's
+   * `expect(locator).toHaveRole(...)` over any door, the Rust
+   * `ClientConn::expect_role` mirrored, M38): the head row's role
+   * answers the exact string — the AccessKit debug name the describe
+   * rows print (`Button`, `TextInput`), the vocabulary the role
+   * locators speak. A structural fact, so the comparison is exact (no
+   * matcher, no fuzz). The same composition as `expectText()`: the M45
+   * wake loop over the M39 describe-all rows, the set's head pinned,
+   * the subscription window owned and dropped. **No wire change**: the
+   * assertion rides existing domains byte-for-byte.
+   *
+   * A spent budget rejects with the typed `GwpWaitTimeout`, naming the
+   * assertion (`have role`), the locator and the last evaluation — the
+   * role the row carried beside the wanted one. */
+  async expectRole(selector: Selector, role: string, timeoutMs = 5000): Promise<DescribedNode> {
+    return this.expectContent(selector, "role", role, timeoutMs);
+  }
+
+  /** The identity assertion, name form (m62/m63 — the kit's
+   * `expect(locator).toHaveAccessibleName(...)` over any door, the Rust
+   * `ClientConn::expect_name` mirrored, M38): the label-only accessible
+   * name — narrower than `expectText()`'s m29 order (the value never
+   * answers), the fact the text row cannot pin. A node with no
+   * accessible name stays pending (waitable — the m54 empty-content
+   * rule's shape), the timeout naming the missing fact. The same
+   * composition; **no wire change**. */
+  async expectName(selector: Selector, expected: TextMatchV1, timeoutMs = 5000): Promise<DescribedNode> {
+    return this.expectContent(selector, "name", expected, timeoutMs);
+  }
+
+  /** The shared content- and identity-assertion composition (m54; the
+   * m62 identity kinds ride the same loop): the m45 wait's loop shape
+   * with the `ExpectTracker` evaluation — one entry read, event-driven
+   * re-reads, the subscription window owned and dropped, the typed
+   * timeout naming locator/expected/found. Tree and frame wakes both
+   * re-decide (content and identity have no `stable`-like frame
    * discipline); `log` records are never wakes. */
   private async expectContent(
     selector: Selector,
     kind: ExpectKind,
-    expected: TextMatchV1,
+    expected: TextMatchV1 | string,
     timeoutMs: number,
   ): Promise<DescribedNode> {
     this.assertHandshaked();
