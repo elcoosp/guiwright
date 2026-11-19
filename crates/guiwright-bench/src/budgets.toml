@@ -448,3 +448,21 @@ p95_us = 8000
 notes = "the m47 client seam's §7 locate-and-act loop as typed sugar: one ClientConn::resolve with the driver's auto-wait (the wire_action_resolve round-trip shape — the strict resolve answering the Save row) plus one ClientConn::action on that row (the wire_action act-time gate re-checking the pinned node and the frame rendezvous); the floor the TS client's resolve()/action() pair has carried since M3, now on the Rust seam; a client-side pairing of existing domains, no wire change"
 m0_measurable = true
 sample = "client_resolve_act"
+
+[[budget]]
+id = "client_gesture"
+name = "Client seam gesture click, in-process door (synthesize + inject)"
+p50_us = 900
+p95_us = 4200
+notes = "the m48 client seam's §9 input half as typed sugar: one ClientConn::gesture click over the embedded door — the driver-side synthesis from the adapter's pacing table (the gesture_synthesis micro-path) plus the batch injection through the one-rendezvous pump (the wire_action_click round-trip shape, minus the actionability gate); the floor the TS client's gesture() and the REPL mouse/key/text rows have carried since M3/M7, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_gesture"
+
+[[budget]]
+id = "client_tree_dump"
+name = "Client seam subtree dump, in-process door (resolve + walk rows)"
+p50_us = 800
+p95_us = 3500
+notes = "the m49 client seam's §7 tree-dump half as typed sugar: one ClientConn::tree_dump_under read over the embedded door — the strict resolve with the driver's auto-wait (the resolve_cached_index index answer) plus the depth-first subtree walk and row build (the tree_dump_filtered shape on the four-button fixture); the floor the TS client's treeDumpUnder() and the REPL snapshot-under row have carried since M3/M13, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_tree_dump"
