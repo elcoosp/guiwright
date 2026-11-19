@@ -91,7 +91,10 @@ pub fn bless_dir(root: &Path, dry_run: bool) -> Result<Vec<BlessReport>, BlessEr
             if !dry_run {
                 std::fs::rename(&artifact, &baseline)?;
                 if diff_removed {
-                    let _ = std::fs::remove_file(&diff);
+                    // A diff that survives the bless silently contradicts
+                    // the report's `diff_removed` — the failure surfaces
+                    // (the stale artifact stays, loudly) instead.
+                    std::fs::remove_file(&diff)?;
                 }
             }
             reports.push(BlessReport {
