@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use guiwright_core::Selector;
 
 use crate::GwpError;
+use crate::count::{CountEval, CountTracker};
 use crate::expect::{ExpectEval, ExpectKind, ExpectTracker};
 use crate::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1,
@@ -33,6 +34,7 @@ use crate::schema::{
     VideoV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
+use guiwright_core::wait::CountMatch;
 
 /// The receipt a [`ClientConn::action`] answers (m47): the frame the
 /// action applied at (clients can await exactly this frame — the §7
@@ -1214,6 +1216,134 @@ pub trait ClientConn: Send + 'static {
             }
         }
     }
+
+    /// The count assertion (m59 — the kit's `expect(locator)
+    /// .to_have_count(...)` over any door, M22): the whole match set's
+    /// size as a waitable assertion — the M30 resolve-all round trip's
+    /// set read (strict mode never consulted, the m22 record's escape
+    /// hatch), woken by the §7 event channel exactly like
+    /// [`Self::wait_for`] and the m54 content pair. **No wire change**:
+    /// the assertion rides existing domains byte-for-byte; every
+    /// [`ClientConn`] impl inherits it.
+    ///
+    /// **Answers.** The satisfied assertion hands back the found count —
+    /// the fact the assertion speaks (the m57 summary shape); the set's
+    /// rows themselves ride [`Self::resolve_all`] (M30), one read per
+    /// question.
+    ///
+    /// **Absence is an answer.** An empty set is found 0 — satisfying
+    /// `count 0` and every less-than row (Playwright's `toHaveCount(0)`
+    /// parity), unlike the content pair's empty-set pending.
+    ///
+    /// **Subscription ownership.** The assertion installs the
+    /// `TreeChanged` + `FramePresented` filter for its duration and
+    /// drops it on return, both on success and on expiry — the same
+    /// rule [`Self::wait_for`] states: a connection running its own
+    /// long-lived subscription (the viewer's live feed) should not hand
+    /// the same connection to an assertion.
+    ///
+    /// # Errors
+    ///
+    /// Protocol failures (`subscribe`, the resolve-all round trips,
+    /// `next_event`) propagate as-is — a driver that predates M30
+    /// answers `ResolveAll` with the typed `Unsupported` and the
+    /// assertion surfaces that rejection rather than degrading (the m41
+    /// fail-fast rule). A spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have count`.
+    fn expect_count(
+        &mut self,
+        selector: SelectorV1,
+        expected: usize,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        self.expect_count_with(selector, CountMatch::Exact(expected), timeout)
+    }
+
+    /// The one-sided count comparator (m59 — the kit's
+    /// `expect(locator).to_have_count_greater_than(...)` over any door,
+    /// M25): satisfied while *more* than `min` nodes match, the same
+    /// composition as [`Self::expect_count`] with the comparison as the
+    /// only difference. **No wire change**; every [`ClientConn`] impl
+    /// inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_count`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have count`.
+    fn expect_count_greater_than(
+        &mut self,
+        selector: SelectorV1,
+        min: usize,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        self.expect_count_with(selector, CountMatch::GreaterThan(min), timeout)
+    }
+
+    /// The one-sided count comparator (m59 — the kit's
+    /// `expect(locator).to_have_count_less_than(...)` over any door,
+    /// M25): satisfied while *fewer* than `max` nodes match, the mirror
+    /// of [`Self::expect_count_greater_than`]. **No wire change**; every
+    /// [`ClientConn`] impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_count`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have count`.
+    fn expect_count_less_than(
+        &mut self,
+        selector: SelectorV1,
+        max: usize,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        self.expect_count_with(selector, CountMatch::LessThan(max), timeout)
+    }
+
+    /// The shared count-assertion composition (m59): the m54 loop shape
+    /// over the M30 resolve-all round trip — one entry read, event-driven
+    /// re-reads, the subscription window owned and dropped, the typed
+    /// timeout built by [`expire_count`]. Tree and frame wakes both
+    /// re-decide (a count has no `Stable`-like frame discipline); `Log`
+    /// records are never wakes.
+    fn expect_count_with(
+        &mut self,
+        selector: SelectorV1,
+        comparison: CountMatch,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        async move {
+            // The locator string for the timeout line (the kit's render
+            // vocabulary — one conversion, not one per re-read).
+            let rendered = Selector::from(selector.clone()).render();
+
+            // The assertion owns the event filter for its duration, the
+            // wait's rule (a driver that rejects Log-less subscriptions
+            // answers the same `Subscribed` ack every door speaks).
+            self.subscribe(&[EventKindV1::TreeChanged, EventKindV1::FramePresented])
+                .await?;
+
+            let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);
+            let tracker = CountTracker::new(comparison);
+            loop {
+                let set = self.resolve_all(selector.clone()).await?;
+                match tracker.evaluate(&set) {
+                    CountEval::Satisfied { found } => {
+                        self.unsubscribe().await?;
+                        return Ok(found);
+                    }
+                    CountEval::Pending { reason } => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(expire_count(self, rendered, timeout, reason).await);
+                        }
+                        if next_wake(self, deadline).await?.is_none() {
+                            return Err(expire_count(self, rendered, timeout, reason).await);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Which event ended the last event-wait: a tree change re-decides the
@@ -1286,6 +1416,26 @@ async fn expire_expect<C: ClientConn + ?Sized>(
 ) -> GwpError {
     let outcome = GwpError::WaitTimeout {
         state: kind.state(),
+        selector,
+        timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        last,
+    };
+    let _ = client.unsubscribe().await;
+    outcome
+}
+
+/// Build the count assertion's typed timeout (m59) and drop its
+/// subscription (the wait's cleanup rule) — the assertion names the
+/// state word (`have count`), the locator and the last evaluation (the
+/// demanded comparison and the count the last evaluation found).
+async fn expire_count<C: ClientConn + ?Sized>(
+    client: &mut C,
+    selector: String,
+    timeout: Duration,
+    last: String,
+) -> GwpError {
+    let outcome = GwpError::WaitTimeout {
+        state: crate::count::HAVE_COUNT_STATE,
         selector,
         timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
         last,
