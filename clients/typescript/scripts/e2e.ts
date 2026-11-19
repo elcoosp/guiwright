@@ -360,6 +360,32 @@ try {
   await client.ping(); // the spent assertion left the door healthy
   console.log("✓ expectText/expectValue: both source orders + the typed expiry — door healthy (M54)");
 
+  // --- the count family over the door (m59/m60) ---
+  const found = await client.expectCount(
+    { kind: "role", role: "Button", name: null },
+    4,
+    2000,
+  );
+  assert.equal(found, 4, "the demo app's four buttons, found 4 (absence would answer 0)");
+  const more = await client.expectCountGreaterThan(
+    { kind: "role", role: "Button", name: null },
+    3,
+    2000,
+  );
+  assert.equal(more, 4, "the comparator answers the same found fact");
+  await assert.rejects(
+    () => client.expectCount({ kind: "role", role: "Button", name: null }, 99, 200),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have count", "the static state word");
+      assert.match(timeout.lastEvaluation, /count is 4, expected 99/, "both sides ride the line");
+      return true;
+    },
+  );
+  await client.ping(); // the spent assertion left the door healthy
+  console.log("✓ expectCount: the exact form + the comparator + the typed expiry — door healthy (m59/m60)");
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
