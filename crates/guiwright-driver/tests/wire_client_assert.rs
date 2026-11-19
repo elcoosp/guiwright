@@ -109,7 +109,9 @@ fn email_value_update(value: &str) -> TreeUpdate {
 fn node_id_of(row: &DescribedV1) -> u64 {
     match &row.node {
         NodeKeyV1::AccessKit { node, .. } => *node,
-        other => panic!("expected AccessKit keys, got {other:?}"),
+        other @ NodeKeyV1::Logical { .. } => {
+            panic!("expected AccessKit keys, got {other:?}")
+        }
     }
 }
 
