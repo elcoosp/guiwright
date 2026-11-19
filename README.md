@@ -134,7 +134,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | `expect().toBeVisible` / `toHaveText` / `toHaveValue`                         | `to_be_visible` / `to_have_text` / `to_have_value`                                   | complete exactly when the condition turns true                                                          |
 | `expect().toHaveRole` / `toHaveAccessibleName` / `toHaveAccessibleDescription` | `to_have_role` / `to_have_accessible_name` / `to_have_accessible_description`       | the identity reads: role / label-only / description-only — a value never satisfies a name (M38)         |
 | `expect().toBeChecked`                                                        | `to_be_checked` / `to_be_unchecked` / **`to_be_checked_mixed`**                      | AccessKit's tri-state; mixed is a Guiwright extension (M20)                                             |
-| `expect().toHaveCount` / `count()`                                            | `to_have_count(n)` / `count()`                                                       | the strict-mode escape hatch — waitable in both directions, `count()` a snapshot read (M22)             |
+| `expect().toHaveCount` / `count()`                                            | `to_have_count(n)` / `count()`                                                       | the strict-mode escape hatch — waitable in both directions, `count()` a snapshot read (M22); over any door as the client seam's count rows (m59)                        |
 | —                                                                             | `to_have_count_greater_than` / `to_have_count_less_than`                             | one-sided count comparators, compose with `.not()` (M25 extension)                                      |
 | `expect().not()`                                                              | `.not().to_*()`                                                                      | one `NotWaiter` decorator inverts the whole vocabulary; strict-mode violations still fail (M24)         |
 | `expect().toBeEditable`                                                       | `to_be_editable` / **`to_be_readonly`**                                              | the consumer's effective read-only state — flag, role defaults, unsupported roles (M28 extension)       |
@@ -329,7 +329,13 @@ count) the way the TS `treeSnapshot()` helper has spoken since its M3
 landing — the last unsugared read arm closed — and the §7 lifecycle
 close, `bye()` (m58), answering `Ok(())` on the wire's `Bye` arm the way
 the TS `close()` does before its transport teardown (the conversation
-ends, the session keeps serving). The raw `request()` covers
+ends, the session keeps serving) — and the §8 count family,
+`expect_count(selector, expected, timeout)` + the M25 comparators
+`expect_count_greater_than(…)` / `expect_count_less_than(…)` (m59),
+answering the found `usize` — the kit's `to_have_count` family over any
+door, the m54 wake-loop composition riding the M30 resolve-all round
+trip, absence answering found 0, the typed timeout naming the comparison
+and the count the last evaluation found. The raw `request()` covers
 the rest.
 
 </details>
@@ -457,13 +463,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M56**       | The client seam's raw-input row: `input(events)` answering the `InputReceipt` carrier (the §9 raw-injection half as typed sugar, the un-synthesized escape hatch the m48 gesture row's contract names) — the client-built `InputEventV1` batch applied inside the next frame (the §15.4 rendezvous), the empty batch's honest no-op pump pinned as shipped, the window scope steering the target, one budget row, no wire change |
 | **M57**       | The client seam's tree-snapshot row: `tree_snapshot()` answering the `TreeSnapshotSummary` carrier (the M0-era §7 summary read as typed sugar — the generation the `TreeChanged` events report plus the whole tree's node count) — the last unsugared read arm closed, the read's session-wide scope and its read-not-mutation stability (agreeing with the m49 dump walk) pinned as shipped, one budget row, no wire change |
 | **M58**       | The client seam's bye row: `bye()` answering `Ok(())` on the wire's `Bye` arm (the §7 lifecycle close as typed sugar — the same round trip the TS `close()` makes before its transport teardown) — the conversation's end (`run_connection` returns after the `Bye` frame) and the session's survival (a successor connection reads the same tree) pinned as shipped, the transport close staying the door's business, one budget row, no wire change |
+| **M59**       | The client seam's count assertion: `expect_count(selector, expected, timeout)` + the M25 comparators (`expect_count_greater_than` / `expect_count_less_than`) answering the found `usize` (the kit's `to_have_count` family over any door, the m54 record's named gap closed) — the set's size as a waitable assertion riding the M30 resolve-all round trip on the m54 wake loop, absence answering found 0 (Playwright parity), the typed timeout naming the comparison and the count the last evaluation found, one budget row, no wire change |
+| **M60**       | The TypeScript client's count assertion: `expectCount(selector, expected, timeoutMs)` + the comparators (`expectCountGreaterThan` / `expectCountLessThan`) answering the found count — the m59 Rust rows mirrored on the other-language client (the m45 one-milestone-per-surface pattern), the pure `CountTracker` evaluator row-for-row (`src/count.ts`), the m54 loop composition over the M30 resolve-all round trip, the cross-language e2e leg against the real Rust server (the typed expiry naming `have count` and both sides), no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m58-client-seam-bye.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m60-ts-client-count-assert.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
