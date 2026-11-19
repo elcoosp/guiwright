@@ -27,9 +27,24 @@ use guiwright_core::Selector;
 use crate::GwpError;
 use crate::schema::{
     AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1, GwpEvent,
-    NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1, WindowInfoV1, WindowV1,
+    NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1, SemActionV1, WindowInfoV1,
+    WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
+
+/// The receipt a [`ClientConn::action`] answers (m47): the frame the
+/// action applied at (clients can await exactly this frame — the §7
+/// multiplexing rule) and the adapter's detail string (`"clicked"`, the
+/// same line the REPL's action rows render). A client-side carrier for
+/// the wire `ActionDone` payload — never serialized itself, so the
+/// schema stays byte-pinned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionReceipt {
+    /// The frame the action was applied at.
+    pub frame_seq: u64,
+    /// The adapter's detail string (the `ActionDone` detail).
+    pub detail: String,
+}
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
 ///
@@ -200,6 +215,159 @@ pub trait ClientConn: Send + 'static {
                 other => Err(GwpError::Protocol(format!(
                     "DescribeAll answered by {other:?}"
                 ))),
+            }
+        }
+    }
+
+    /// The kit's bulk text read over the wire (m46 — the m41 record's
+    /// Rust-client half, closed): every current match of `selector` with
+    /// its content derived client-side from the [`Self::describe_all`]
+    /// rows — the m29 `all_text_contents()` order (accessible name
+    /// first, value as the fallback), the read the text locators match.
+    /// One round trip instead of one [`Self::describe`] per row: the
+    /// walk's rows already carry the name and the value, so the read
+    /// costs what [`Self::describe_all`] costs.
+    ///
+    /// **No wire change and no fallback** (the m41 fail-fast rule, the
+    /// [`crate::bulk`] module's boundary): the rows ride `DescribeAll`
+    /// byte-for-byte as M39 blessed them; a driver that predates M39
+    /// answers the typed `Unsupported` and this read surfaces that
+    /// rejection rather than degrading — the REPL's per-row fallback is
+    /// the interactive surface's concession, never this one's. Snapshot
+    /// semantics, unchanged from the `resolve_all` family: no strict
+    /// mode, no waiting, an empty set answers an empty list, hidden
+    /// nodes ride the walk, and the connection's window scope narrows
+    /// the read exactly like [`Self::describe_all`].
+    ///
+    /// Every [`ClientConn`] impl inherits the derivation (a default
+    /// method over [`Self::describe_all`]), the same way the TypeScript
+    /// client carries `allTextContents()` (m41) and the REPL carries
+    /// `texts` (m40): one vocabulary, every surface, one round trip.
+    fn all_text_contents(
+        &mut self,
+        selector: SelectorV1,
+    ) -> impl Future<Output = Result<Vec<String>, GwpError>> + Send {
+        async move {
+            let rows = self.describe_all(selector).await?;
+            Ok(rows.iter().map(crate::bulk::text_content).collect())
+        }
+    }
+
+    /// The kit's form-dump read over the wire (m46 — the m31 kit
+    /// reader's client half): [`Self::all_text_contents`] with the
+    /// source order flipped — the value first, the accessible name as
+    /// the fallback (the `getByValue` source order, the m31 rule) — so
+    /// the fixture's Email input answers `"ada@example.dev"` here and
+    /// `"Email"` there, and the two reads can never silently agree on
+    /// the wrong datum. A node with neither fact reads as the empty
+    /// string, keeping `Vec` positions 1:1 with the document order the
+    /// set read established.
+    ///
+    /// Everything else is the [`Self::all_text_contents`] contract,
+    /// unchanged: the [`Self::describe_all`] round trip as M39 blessed
+    /// it (no wire change, no fallback — a pre-M39 driver answers the
+    /// typed `Unsupported`), the snapshot-read family rules, and the
+    /// connection's window scope.
+    fn all_values(
+        &mut self,
+        selector: SelectorV1,
+    ) -> impl Future<Output = Result<Vec<String>, GwpError>> + Send {
+        async move {
+            let rows = self.describe_all(selector).await?;
+            Ok(rows.iter().map(crate::bulk::value_content).collect())
+        }
+    }
+
+    /// The §7 locate half as typed seam sugar (m47): one strict-mode
+    /// [`RequestV1::Resolve`] round trip — the driver resolves with its
+    /// own auto-wait (`timeout_ms` budget, the §8.3 attached gate on the
+    /// session thread, no polling) and answers the row the kit's `get`
+    /// step resolves: handle, generation, bounds. The row is directly
+    /// usable as a [`RequestV1::Action`] node (the dump-row rule, M11)
+    /// and pairs with [`Self::action`] — the §7 locate-and-act loop in
+    /// two typed calls, no raw request.
+    ///
+    /// Strict mode is the wire's own policy (§8.2): an ambiguous
+    /// selector answers the typed `Rejected { code:
+    /// ErrorCode::StrictModeViolation }`, a selector that never matches
+    /// inside the budget answers `ErrorCode::Timeout` naming the stuck
+    /// check. The connection's window scope (§16 v0.4) narrows the
+    /// resolve exactly like [`Self::resolve_all`] — one target per
+    /// window. No wire change: the row rides the `Resolve` domain
+    /// byte-for-byte as M0 blessed it; every [`ClientConn`] impl
+    /// inherits the sugar, the same shape the TypeScript client has
+    /// spoken since M3 (`resolve()`).
+    fn resolve(
+        &mut self,
+        selector: SelectorV1,
+        timeout_ms: u64,
+    ) -> impl Future<Output = Result<ResolvedMatchV1, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::Resolve {
+                    selector,
+                    timeout_ms,
+                })
+                .await?
+            {
+                ResponseV1::Resolved {
+                    node,
+                    generation,
+                    rect,
+                } => Ok(ResolvedMatchV1 {
+                    node,
+                    generation,
+                    rect,
+                }),
+                other => Err(GwpError::Protocol(format!("Resolve answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §7 act half as typed seam sugar (m47): one [`RequestV1::Action`]
+    /// round trip applying `sem` on a row the client already holds — a
+    /// [`Self::resolve`] answer, a [`Self::resolve_all`] / [`Self::describe_all`]
+    /// row, a [`Self::hit_test`] hit (the dump-row rule, M11). The
+    /// driver re-checks the pinned node at act time (`force` skips
+    /// exactly stability + hit-test, the M17 [`RequestV1::Action`]
+    /// contract) within `timeout_ms` and applies it at a frame
+    /// rendezvous, answering the [`ActionReceipt`] — the frame the
+    /// action applied at and the adapter's detail. No wire change: the
+    /// act rides the `Action` domain byte-for-byte as M17 blessed it;
+    /// every [`ClientConn`] impl inherits the sugar, the same shape the
+    /// TypeScript client has spoken since M3 (`action()`).
+    ///
+    /// The Action boundary's honesty carries over unchanged: a row whose
+    /// generation has moved on answers `ErrorCode::StaleGeneration`, a
+    /// dead one the boundary's since-M0 `NoMatch` mapping — the typed
+    /// `ErrorCode::StrictModeViolation` whose message names the dead
+    /// handle (the `Describe` boundary's `ErrorCode::UnknownNode` is
+    /// that read's own contract) — and a node failing its act-time gate
+    /// answers `ErrorCode::Timeout` naming the stuck check (the m17
+    /// record's named error).
+    fn action(
+        &mut self,
+        node: NodeKeyV1,
+        generation: u32,
+        sem: SemActionV1,
+        force: bool,
+        timeout_ms: u64,
+    ) -> impl Future<Output = Result<ActionReceipt, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::Action {
+                    node,
+                    generation,
+                    action: sem,
+                    force,
+                    timeout_ms,
+                })
+                .await?
+            {
+                ResponseV1::ActionDone { frame_seq, detail } => {
+                    Ok(ActionReceipt { frame_seq, detail })
+                }
+                other => Err(GwpError::Protocol(format!("Action answered by {other:?}"))),
             }
         }
     }
