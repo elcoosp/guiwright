@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 
 import { GwpClient, GwpRejected, GwpWaitTimeout } from "../src/client.ts";
+import type { DescribedNode, ResolvedMatch } from "../src/schema.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolvePath(here, "..", "..", "..");
@@ -132,7 +133,7 @@ try {
   const all = await client.resolveAll({ kind: "role", role: "Button", name: null });
   assert.equal(all.length, 4, "the fixture's four buttons, strict mode not consulted");
   assert.deepEqual(
-    all.map((m: any) => m.node.node),
+    all.map((m: ResolvedMatch) => m.node.node),
     [2, 3, 6, 7],
     "document order, the count()/all() ordering",
   );
@@ -169,7 +170,7 @@ try {
   const describedAll = await client.describeAll({ kind: "role", role: "Button", name: null });
   assert.equal(describedAll.length, 4, "the same walk resolveAll runs");
   assert.deepEqual(
-    describedAll.map((r: any) => r.node.node),
+    describedAll.map((r: DescribedNode) => r.node.node),
     [2, 3, 6, 7],
     "document order, the count()/all() ordering",
   );
@@ -385,6 +386,76 @@ try {
   );
   await client.ping(); // the spent assertion left the door healthy
   console.log("✓ expectCount: the exact form + the comparator + the typed expiry — door healthy (m59/m60)");
+
+  // --- the identity assertions over the door (m62/m63) ---
+  // The kit's `to_have_role` / `to_have_accessible_name` vocabulary (M38)
+  // mirrored on the TS client (the m45/m60 one-milestone-per-surface
+  // pattern): the head row's role answers the exact string, the
+  // label-only name answers the matcher (the value never rides the read),
+  // and a mismatched identity expires with the typed timeout naming both
+  // sides — the same connection keeps driving afterwards.
+  const roleRow = await client.expectRole(
+    { kind: "role", role: "Button", name: null },
+    "Button",
+    2000,
+  );
+  assert.equal(roleRow.role, "Button", "the structural fact answers exactly");
+  assert.equal(roleRow.name, "Save", "the set's head row, document order");
+  const nameLabel = await client.expectName(
+    { kind: "role", role: "TextInput", name: { text: "Email", exact: true, ignore_case: true } },
+    { text: "Email", exact: false, ignore_case: true },
+    2000,
+  );
+  assert.equal(nameLabel.name, "Email", "the label-only read answers the name");
+  assert.equal(nameLabel.value, "ada@example.dev", "the value rides the row beside the name");
+  await assert.rejects(
+    () => client.expectRole({ kind: "role", role: "Button", name: null }, "TextInput", 200),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have role", "the static state word");
+      assert.match(
+        timeout.lastEvaluation,
+        /role is "Button", expected "TextInput"/,
+        "both sides ride the line",
+      );
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      client.expectName(
+        { kind: "role", role: "Button", name: null },
+        { text: "Ghost", exact: false, ignore_case: true },
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have name", "the static state word");
+      assert.match(timeout.lastEvaluation, /name is "Save", expected "Ghost" \(fuzzy\)/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      client.expectName(
+        { kind: "role", role: "Group", name: null },
+        { text: "Editor", exact: false, ignore_case: true },
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      assert.match(
+        (err as GwpWaitTimeout).lastEvaluation,
+        /no accessible name/,
+        "the missing fact is named",
+      );
+      return true;
+    },
+  );
+  await client.ping(); // the spent assertions left the door healthy
+  console.log("✓ expectRole/expectName: the identity rows + the typed expiry — door healthy (m62/m63)");
 
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
