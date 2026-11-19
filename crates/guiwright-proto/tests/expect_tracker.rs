@@ -204,3 +204,134 @@ fn the_mismatch_reason_names_expected_and_found() {
         ExpectEval::Satisfied(_) => panic!("mismatch must stay pending"),
     }
 }
+
+// --- the m64 description kind over the identity rows -----------------------
+
+use guiwright_proto::expect::ExpectIdentityEval;
+use guiwright_proto::schema::DescribedIdentityV1;
+
+/// The Install row of the described fixture (the m38 extension band):
+/// the identity four plus the description fact the M39 rows left out —
+/// the row shape the m64 identity read answers.
+fn identity_row(id: u64, name: Option<&str>, description: Option<&str>) -> DescribedIdentityV1 {
+    DescribedIdentityV1 {
+        node: NodeKeyV1::Logical {
+            adapter: "test".into(),
+            id,
+        },
+        generation: 0,
+        role: "Button".into(),
+        name: name.map(Into::into),
+        value: None,
+        bounds: Some([16.0, 204.0, 136.0, 236.0]),
+        description: description.map(Into::into),
+    }
+}
+
+/// The description assertion reads the description fact only — the m38
+/// read (the name and the value never answer), the satisfying answer
+/// handing back the full identity row (the dump-row rule: node, role
+/// and name ride beside the fact).
+#[test]
+fn description_assertion_reads_the_description_fact() {
+    let tracker = ExpectTracker::new(ExpectKind::Description(fuzzy("Installs")));
+    let install = identity_row(9, Some("Install"), Some("Installs the latest build"));
+    match tracker.evaluate_identity(std::slice::from_ref(&install)) {
+        ExpectIdentityEval::Satisfied(satisfied) => {
+            assert_eq!(
+                satisfied.description.as_deref(),
+                Some("Installs the latest build"),
+                "the fact the assertion speaks"
+            );
+            assert_eq!(satisfied.name.as_deref(), Some("Install"));
+            assert_eq!(satisfied.role, "Button");
+        }
+        ExpectIdentityEval::Pending { reason } => {
+            panic!("the description satisfies the description read: {reason:?}")
+        }
+    }
+}
+
+/// A node whose description lives in its name or value cannot satisfy
+/// the description read — the fact the name and value rows cannot pin,
+/// the m38 narrower-read rule at the identity row's width.
+#[test]
+fn description_assertion_never_takes_the_name_or_value() {
+    let tracker = ExpectTracker::new(ExpectKind::Description(fuzzy("Save")));
+    let save = identity_row(2, Some("Save"), None);
+    match tracker.evaluate_identity(std::slice::from_ref(&save)) {
+        ExpectIdentityEval::Pending { reason } => assert!(
+            reason.contains("no accessible description"),
+            "the missing fact is named: {reason:?}"
+        ),
+        ExpectIdentityEval::Satisfied(_) => {
+            panic!("the name must not satisfy the description read")
+        }
+    }
+}
+
+/// The mismatch names the found description and the wanted matcher —
+/// the failures-name-names discipline on the third identity fact.
+#[test]
+fn the_description_mismatch_names_expected_and_found() {
+    let tracker = ExpectTracker::new(ExpectKind::Description(exact("Ghost")));
+    let install = identity_row(9, Some("Install"), Some("Installs the latest build"));
+    match tracker.evaluate_identity(std::slice::from_ref(&install)) {
+        ExpectIdentityEval::Pending { reason } => {
+            assert!(
+                reason.contains("Installs the latest build"),
+                "found description: {reason:?}"
+            );
+            assert!(reason.contains("expected"), "wanted side: {reason:?}");
+        }
+        ExpectIdentityEval::Satisfied(_) => panic!("mismatch must stay pending"),
+    }
+}
+
+/// The set's head pins the identity assertion too (document order — the
+/// m54 pin carried over); an empty set stays pending.
+#[test]
+fn the_identity_rows_pin_the_set_head() {
+    let tracker = ExpectTracker::new(ExpectKind::Description(fuzzy("Installs")));
+    let rows = [
+        identity_row(2, Some("Save"), None),
+        identity_row(9, Some("Install"), Some("Installs the latest build")),
+    ];
+    match tracker.evaluate_identity(&rows) {
+        ExpectIdentityEval::Pending { reason } => assert!(
+            reason.contains("no accessible description"),
+            "the head is the pin: {reason:?}"
+        ),
+        ExpectIdentityEval::Satisfied(_) => panic!("the second row must not answer"),
+    }
+    match tracker.evaluate_identity(&[]) {
+        ExpectIdentityEval::Pending { reason } => {
+            assert!(reason.contains("no match"), "{reason:?}")
+        }
+        ExpectIdentityEval::Satisfied(_) => panic!("an empty set cannot satisfy"),
+    }
+}
+
+/// The content and identity kinds project over the wider rows (the
+/// identity four ride the m64 row beside the description fact): the
+/// same evaluator answers them without a second copy of the per-kind
+/// verdicts.
+#[test]
+fn the_content_kinds_project_over_identity_rows() {
+    let named = identity_row(2, Some("Save"), None);
+    let role = ExpectTracker::new(ExpectKind::Role("Button".into()));
+    assert!(matches!(
+        role.evaluate_identity(std::slice::from_ref(&named)),
+        ExpectIdentityEval::Satisfied(_)
+    ));
+    let name = ExpectTracker::new(ExpectKind::Name(fuzzy("Sav")));
+    assert!(matches!(
+        name.evaluate_identity(std::slice::from_ref(&named)),
+        ExpectIdentityEval::Satisfied(_)
+    ));
+    let text = ExpectTracker::new(ExpectKind::Text(fuzzy("Sav")));
+    assert!(matches!(
+        text.evaluate_identity(std::slice::from_ref(&named)),
+        ExpectIdentityEval::Satisfied(_)
+    ));
+}
