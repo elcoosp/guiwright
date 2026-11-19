@@ -119,7 +119,13 @@ export const SubscribeV1 = {
 export const EventKindV1 = {
   TreeChanged: 0,
   FramePresented: 1,
-  /** Not served yet — subscribing fails with `Unsupported`. */
+  /**
+   * A log record (the `tracing`-fed log-tail tap, M14): one
+   * `logs.ndjson`-shape JSON line per record. The tap is opt-in — a
+   * session spawned without it still rejects a `Log` subscription with
+   * `Unsupported` (the honest capability answer, never a silent no-op
+   * filter).
+   */
   Log: 2,
 } as const;
 
