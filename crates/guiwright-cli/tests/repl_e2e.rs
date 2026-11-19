@@ -8,6 +8,10 @@
 //! transport parity on the same conversation; the video test exercises
 //! the §10 domain end-to-end.
 
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use accesskit::TreeUpdate;
 use guiwright_cli::{ConnectTarget, Line, Repl};
 use guiwright_core::test_util::{Fixture, MultiWindowFixture};
 use guiwright_driver::mock::MockAdapter;
@@ -1340,4 +1344,237 @@ async fn repl_wait_rows_wait_on_the_client_seam() {
     );
 
     handle.shutdown();
+}
+
+/// The REPL assertion rows (m61 — the m54/m59 client-seam assertions'
+/// interactive half, the m43 one-milestone-per-surface pattern):
+/// `assert text|value|count <get-args…> is <expected>` rides the
+/// `ClientConn::expect_text` / `expect_value` / `expect_count` seam over
+/// a real socket — the `timeout <ms>` budget, the satisfying-row /
+/// found-count renders, absence answering found 0 on counts, the typed
+/// timeout naming the seam's state word and the last evaluation, the
+/// wake-and-re-read on a scripted tree update, the `events on` filter
+/// restored after the assertion's subscription window, and the
+/// read-not-store rule (`last` keeps the node `get` aimed at).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_assert_rows_wait_on_the_client_seam() {
+    // The shared-script channel stands in for app-side UI changes: the
+    // late-button update proves the wake-and-re-read below (the m59
+    // wire-conversation shape over the interactive surface).
+    let scripts: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts_for_app = Arc::clone(&scripts);
+    let path = socket_path("repl-assert.sock");
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        move || MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts_for_app),
+        guiwright_driver::ServerOptions {
+            log_tail: true,
+            ..guiwright_driver::ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    assert_rows_satisfied_on_entry(&mut repl).await;
+    assert_rows_validate_their_grammar(&mut repl).await;
+    assert_rows_print_the_typed_timeout(&mut repl).await;
+    assert_rows_wake_and_re_read(&mut repl, &scripts).await;
+    assert_rows_discoverable_and_append_only(&mut repl).await;
+
+    handle.shutdown();
+}
+
+/// The satisfied forms: the content pair's satisfying-row render, the
+/// count family's found-count answer, absence answering found 0, and the
+/// read-not-store rule (`last` keeps the node `get` aimed at).
+async fn assert_rows_satisfied_on_entry(repl: &mut Repl) {
+    // A satisfied content assertion answers one ok line naming the row —
+    // the m43 satisfying-row form over the m54 seam.
+    let out = rendered(&repl.step(r#"assert text role Button Save is "Save""#).await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert text — "), "{out:?}");
+    assert!(
+        out[0].contains(r#"Button "Save" (generation 0)"#),
+        "{out:?}"
+    );
+
+    // The matcher rides the REPL's posture (substring, case-insensitive):
+    // `sav` satisfies against "Save".
+    let out = rendered(&repl.step(r#"assert text role Button Save is "sav""#).await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert text — "), "{out:?}");
+
+    // The value row reads the m31 order (the value first): the Email
+    // input answers its value here, never its label.
+    let out = rendered(
+        &repl
+            .step(r#"assert value role TextInput Email is "ada@example.dev""#)
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert value — "), "{out:?}");
+    assert!(
+        out[0].contains(r#"TextInput "Email" value "ada@example.dev""#),
+        "{out:?}"
+    );
+
+    // The identity rows (m62 — the m38 vocabulary over the door): the
+    // role answers exactly (the AccessKit debug name), the name reads
+    // the label-only fact.
+    let out = rendered(&repl.step("assert role role Button Save is Button").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert role — "), "{out:?}");
+    assert!(
+        out[0].contains(r#"Button "Save" (generation 0)"#),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("assert name role TextInput Email is email").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert name — "), "{out:?}");
+    assert!(out[0].contains(r#"TextInput "Email""#), "{out:?}");
+
+    // The count rows: the exact form and both comparators — the found
+    // count is the answer (the m59 fact), the locator echoed in the
+    // REPL's describe vocabulary.
+    assert_eq!(
+        rendered(&repl.step("assert count role Button is 4").await),
+        vec!["assert count — found 4 (Button)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("assert count role Button is > 3").await),
+        vec!["assert count — found 4 (Button)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("assert count role Button is < 5").await),
+        vec!["assert count — found 4 (Button)"],
+    );
+
+    // Absence is an answer for counts (the m59 parity rule): an empty
+    // set satisfies `is 0` — unlike the content pair's pending.
+    assert_eq!(
+        rendered(&repl.step("assert count testid ghost is 0").await),
+        vec![r#"assert count — found 0 (testid "ghost")"#],
+    );
+
+    // A read, not a resolve-store: `last` keeps the node `get` aimed at
+    // (the m35 read rule the m43 row rides).
+    rendered(&repl.step("get role Button Cancel").await);
+    rendered(&repl.step("assert count role Button is 4").await);
+    assert!(ok_line(&repl.step("last").await).contains("\"Cancel\""));
+}
+
+/// The grammar validation: one error line naming the grammar per mistake,
+/// the session usable after (the survival rule).
+async fn assert_rows_validate_their_grammar(repl: &mut Repl) {
+    let out = rendered(&repl.step("assert").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("text | value | count"), "{out:?}");
+    let out = rendered(&repl.step("assert shiny role Button is 1").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("text | value | count"), "{out:?}");
+    let out = rendered(&repl.step("assert count role Button").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("`is`"), "{out:?}");
+    let out = rendered(&repl.step("assert count role Button is = 4").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("> <N>"), "{out:?}");
+    assert!(out[0].contains("< <N>"), "{out:?}");
+    assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
+}
+
+/// A spent budget prints the typed timeout — the seam's state word
+/// (`have text` / `have count`), the locator and the last evaluation
+/// (expected and found; the failures-name-names discipline).
+async fn assert_rows_print_the_typed_timeout(repl: &mut Repl) {
+    assert_eq!(
+        rendered(&repl.step("timeout 150").await)[0],
+        "timeout = 150 ms"
+    );
+    let out = rendered(
+        &repl
+            .step(r#"assert text role Button Save is "Ghost""#)
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait have text timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(out[0].contains(r#"expected "Ghost""#), "{out:?}");
+    let out = rendered(&repl.step(r#"assert text testid ghost is "Ghost""#).await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("no match yet (the set is empty)"),
+        "{out:?}"
+    );
+    let out = rendered(&repl.step("assert count role Button is > 9").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait have count timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(out[0].contains("count is 4, expected > 9"), "{out:?}");
+    let out = rendered(&repl.step("assert count role Button is < 2").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("count is 4, expected < 2"), "{out:?}");
+    let out = rendered(&repl.step("assert role role Button Save is TextInput").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait have role timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(out[0].contains(r#"role is "Button""#), "{out:?}");
+    assert!(out[0].contains(r#"expected "TextInput""#), "{out:?}");
+    assert_eq!(
+        rendered(&repl.step("timeout 5000").await)[0],
+        "timeout = 5000 ms"
+    );
+}
+
+/// The wake-and-re-read conversation: the assertion stays pending until
+/// the scripted update joins a fifth button — event-driven, no polling —
+/// and the assertion's subscription window restores the `events on`
+/// filter afterwards (the m43 restore rule).
+async fn assert_rows_wake_and_re_read(repl: &mut Repl, scripts: &Arc<Mutex<Vec<TreeUpdate>>>) {
+    let scripts_for_push = Arc::clone(scripts);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        scripts_for_push
+            .lock()
+            .expect("script lock")
+            .push(Fixture::buttons().add_button_update("Later"));
+    });
+    let out = rendered(&repl.step("assert count role Button is 5").await);
+    assert_eq!(out, vec!["assert count — found 5 (Button)"], "{out:?}");
+
+    rendered(&repl.step("events on").await);
+    rendered(&repl.step("assert count role Button is 5").await);
+    // The restored filter arms the server's frame-cadence pump (§7, M12);
+    // give it a few ticks so the next drain has something honest to flush.
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let out = rendered(&repl.step("ping").await);
+    assert!(
+        out.iter().any(|l| l.starts_with("event ")),
+        "the `events on` stream keeps flowing after an assertion: {out:?}"
+    );
+    rendered(&repl.step("events off").await);
+}
+
+/// The vocabulary is discoverable (the help lists the rows) and the
+/// append-only rule held: the legacy `expect` row is untouched.
+async fn assert_rows_discoverable_and_append_only(repl: &mut Repl) {
+    let help_text = rendered(&repl.step("help").await);
+    assert!(
+        help_text.iter().any(|l| l.contains("assert text")),
+        "{help_text:?}"
+    );
+    assert!(
+        help_text.iter().any(|l| l.contains("assert count")),
+        "{help_text:?}"
+    );
+
+    let out = rendered(&repl.step("expect role Button Save").await);
+    assert!(out[0].starts_with("resolved "), "{out:?}");
 }
