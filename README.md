@@ -322,7 +322,14 @@ the way the TS `videoStart()`/`videoStop()` helpers and the REPL `video`
 rows speak, and the §9 raw-injection half, `input(events)` (m56), answering
 the `InputReceipt` (the frame the batch applied at) the way the TS
 `input(events)` helper speaks — the un-synthesized escape hatch the m48
-gesture row's contract names, now typable. The raw `request()` covers
+gesture row's contract names, now typable. The §7 summary read,
+`tree_snapshot()` (m57), answering the `TreeSnapshotSummary` carrier (the
+generation the `TreeChanged` events report plus the whole tree's node
+count) the way the TS `treeSnapshot()` helper has spoken since its M3
+landing — the last unsugared read arm closed — and the §7 lifecycle
+close, `bye()` (m58), answering `Ok(())` on the wire's `Bye` arm the way
+the TS `close()` does before its transport teardown (the conversation
+ends, the session keeps serving). The raw `request()` covers
 the rest.
 
 </details>
@@ -448,13 +455,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M54**       | The client seam's content assertions: `expect_text(selector, expected, timeout)` / `expect_value(selector, expected, timeout)` (the kit's `expect` vocabulary's content half over any door, the m46 source orders made waitable) — the m42 wait's wake loop composed with the m46 bulk-read derivations, the set's head pinned, the typed timeout naming locator / expected / found; the TS half rides the same evaluator (`expectText()` / `expectValue()` + the cross-language e2e leg, the m45 pattern), one budget row, no wire change |
 | **M55**       | The client seam's video row: `video(cmd)` answering the `VideoReply` union (the §10 recording half as typed sugar, the m48/m51/m52/m53 take-the-wire-enum rule) — the whole §10 vocabulary in one call (start / stop), the heterogeneous reply named client-side instead of collapsed to an `Option` (the m53 union shape: the start ack rides `Pong`, the stop carries the finalized file — path, encoded frames, dedup-dropped frames, wall-clock span), the single-slot honesty pinned as shipped (double-start and bare-stop rejections), one budget row, no wire change |
 | **M56**       | The client seam's raw-input row: `input(events)` answering the `InputReceipt` carrier (the §9 raw-injection half as typed sugar, the un-synthesized escape hatch the m48 gesture row's contract names) — the client-built `InputEventV1` batch applied inside the next frame (the §15.4 rendezvous), the empty batch's honest no-op pump pinned as shipped, the window scope steering the target, one budget row, no wire change |
+| **M57**       | The client seam's tree-snapshot row: `tree_snapshot()` answering the `TreeSnapshotSummary` carrier (the M0-era §7 summary read as typed sugar — the generation the `TreeChanged` events report plus the whole tree's node count) — the last unsugared read arm closed, the read's session-wide scope and its read-not-mutation stability (agreeing with the m49 dump walk) pinned as shipped, one budget row, no wire change |
+| **M58**       | The client seam's bye row: `bye()` answering `Ok(())` on the wire's `Bye` arm (the §7 lifecycle close as typed sugar — the same round trip the TS `close()` makes before its transport teardown) — the conversation's end (`run_connection` returns after the `Bye` frame) and the session's survival (a successor connection reads the same tree) pinned as shipped, the transport close staying the door's business, one budget row, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m56-client-seam-raw-input.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m58-client-seam-bye.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
