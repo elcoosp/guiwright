@@ -24,10 +24,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use guiwright_proto::GwpError;
 use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
-    EventV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1,
-    ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, VideoV1,
-    WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1,
+    ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
+    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1,
+    SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -836,6 +836,9 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::DescribeAll(DescribeAllV1 { selector }) => {
             describe_all_response(session, selector, window)
         }
+        RequestV1::DescribeAllIdentity(DescribeAllV1 { selector }) => {
+            describe_all_identity_response(session, selector, window)
+        }
         RequestV1::Action {
             node,
             generation,
@@ -997,15 +1000,23 @@ fn describe_response<A: FrameworkAdapter>(
 ) -> ResponseV1 {
     let key: NodeKey = node.into();
     match session.describe(&key, generation) {
-        Ok(row) => ResponseV1::Described(DescribedV1 {
-            node: NodeKeyV1::from(row.key),
-            generation: row.generation,
-            role: row.role,
-            name: row.name,
-            value: row.value,
-            bounds: row.bounds,
-        }),
+        Ok(row) => ResponseV1::Described(described_row(row)),
         Err(err) => error_response(&err),
+    }
+}
+
+/// The session row's M36 wire shape — the identity four, the one mapping
+/// both describe arms (and the m64 identity read's projection) speak.
+/// One copy instead of the two the arms used to carry by hand (the
+/// describe widening keeps every future field change a one-line edit).
+fn described_row(row: crate::session::NodeDescription) -> DescribedV1 {
+    DescribedV1 {
+        node: NodeKeyV1::from(row.key),
+        generation: row.generation,
+        role: row.role,
+        name: row.name,
+        value: row.value,
+        bounds: row.bounds,
     }
 }
 
@@ -1028,15 +1039,40 @@ fn describe_all_response<A: FrameworkAdapter>(
     session.clear_resolve_scope();
     match result {
         Ok(rows) => ResponseV1::DescribedAll {
+            rows: rows.into_iter().map(described_row).collect(),
+        },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The describe-all identity read over the wire (M64 — the m62/m63
+/// records' reserved wire change): the same walk as the M39 arm, the rows
+/// carrying the description fact beside the identity four — the fact the
+/// M38 identity family's third assertion reads. The M39 encodings stay
+/// byte-pinned (the widening is its own appended domain); snapshot
+/// semantics and window scoping are the `describe_all` arm's, unchanged.
+fn describe_all_identity_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    selector: SelectorV1,
+    window: Option<&str>,
+) -> ResponseV1 {
+    if let Err(err) = scoped_resolve(session, window) {
+        return error_response(&err);
+    }
+    let result = session.describe_all(&Selector::from(selector));
+    session.clear_resolve_scope();
+    match result {
+        Ok(rows) => ResponseV1::DescribedAllIdentity {
             rows: rows
                 .into_iter()
-                .map(|row| DescribedV1 {
+                .map(|row| DescribedIdentityV1 {
                     node: NodeKeyV1::from(row.key),
                     generation: row.generation,
                     role: row.role,
                     name: row.name,
                     value: row.value,
                     bounds: row.bounds,
+                    description: row.description,
                 })
                 .collect(),
         },
