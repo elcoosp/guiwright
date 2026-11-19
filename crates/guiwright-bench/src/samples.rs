@@ -1930,3 +1930,152 @@ pub fn client_wait_satisfied() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+// --- Client seam aim-and-act sample (the §7 loop on the seam, m47) -----------
+
+/// §15.1 `client_resolve_act`: one [`ClientConn::resolve`] → one
+/// [`ClientConn::action`] over the in-process door (m47 — the §7
+/// locate-and-act loop as typed seam sugar): the strict resolve with the
+/// driver's auto-wait (the wire `Resolve` path, the `resolve_cached_index`
+/// index answer), then the action on that row (the `wire_action` act-time
+/// gate re-checking the pinned node, the frame rendezvous) — the floor
+/// the TS client's `resolve()`/`action()` pair has carried since M3, now
+/// on the Rust seam; no wire change.
+pub fn client_resolve_act() -> Duration {
+    const ITERATIONS: u32 = 32;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::{SelectorV1, SemActionV1, TextMatchV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let save = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+        // Warm-up: one full aim-and-act loop pins the receipt shape once.
+        let warm_row = client
+            .resolve(save.clone(), 2000)
+            .await
+            .expect("warm resolve");
+        let warm_receipt = client
+            .action(
+                warm_row.node.clone(),
+                warm_row.generation,
+                SemActionV1::Click,
+                false,
+                5000,
+            )
+            .await
+            .expect("warm action");
+        assert_eq!(warm_receipt.detail, "clicked");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let row = client
+                .resolve(save.clone(), 2000)
+                .await
+                .expect("bench resolve");
+            let receipt = client
+                .action(
+                    row.node.clone(),
+                    row.generation,
+                    SemActionV1::Click,
+                    false,
+                    5000,
+                )
+                .await
+                .expect("bench action");
+            assert_eq!(receipt.detail, "clicked", "still the Save row");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- Client seam bulk-content sample (the m41 half on the Rust seam, m46) ----
+
+/// §15.1 `client_text_contents`: one `ClientConn::all_text_contents`
+/// read over the in-process door (m46 — the m41 record's Rust-client
+/// half, closed): the describe-all round trip plus the client-side m29
+/// derivation — the steady-state floor every bulk content read adds on
+/// top of the `describe_all_wire` row-set read (the same round-trip
+/// shape; the derivation is a per-row map, no extra wire work).
+pub fn client_text_contents() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::SelectorV1;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let buttons = SelectorV1::Role {
+            role: "Button".into(),
+            name: None,
+        };
+        // Warm-up: the derivation pins the row shape once (label first,
+        // the fixture's hidden button included — the non-strict walk).
+        let warm = client
+            .all_text_contents(buttons.clone())
+            .await
+            .expect("warm bulk read");
+        assert_eq!(
+            warm,
+            vec!["Save", "Cancel", "Invisible", "Confirm"],
+            "the m29 order, document order"
+        );
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .all_text_contents(buttons.clone())
+                .await
+                .expect("bench bulk read");
+            assert_eq!(
+                done,
+                vec!["Save", "Cancel", "Invisible", "Confirm"],
+                "still the four-button set"
+            );
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
