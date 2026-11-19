@@ -208,7 +208,7 @@ async fn a_driver_without_describe_all_is_a_typed_rejection() {
         .expect_err("the read fails fast");
     match err {
         GwpError::Rejected { code, .. } => {
-            assert_eq!(code, ErrorCode::Unsupported, "the typed rejection: {err}")
+            assert_eq!(code, ErrorCode::Unsupported, "the typed rejection: {err}");
         }
         other => panic!("expected the typed rejection, got {other:?}"),
     }
