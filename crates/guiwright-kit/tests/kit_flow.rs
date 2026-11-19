@@ -235,7 +235,14 @@ fn macro_failing_result(_app: &mut guiwright_kit::App) -> Result<(), String> {
 #[should_panic(expected = "resolved to")]
 fn macro_strict_mode_panics(app: &mut guiwright_kit::App) {
     // Four buttons — the unnamed role locator must fail strict mode.
-    app.role_locator(Role::Button).resolve().unwrap();
+    // The panic carries the error's Display rendering (the friendly
+    // "resolved to 4 nodes; narrow it with …" line), not a `unwrap()`
+    // Debug dump.
+    let err = app
+        .role_locator(Role::Button)
+        .resolve()
+        .expect_err("strict mode rejects the ambiguous locator");
+    panic!("{err}");
 }
 
 // --- M2: codegen (§13) -----------------------------------------------------
