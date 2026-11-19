@@ -241,6 +241,7 @@ impl Repl {
             "texts" => self.texts_command(tokens).await,
             "values" => self.values_command(tokens).await,
             "wait" => self.wait_command(tokens).await,
+            "assert" => self.assert_command(tokens).await,
             "expect" => {
                 // The runner's assertion wording over the same resolve
                 // path (M5): like `get`, stores the current node, but
@@ -437,15 +438,17 @@ impl Repl {
                 let handle = describe_node(&match_.node);
                 // The M37 enrichment: one `Describe` round trip behind the
                 // hit gives the row its role/name (the m32 record's named
-                // rendering gap). An enrichment failure degrades to the
-                // bare handle form — the hit itself is the read, and the
-                // facts ride one extra round trip (a node removed between
-                // the two reads is the honest case: the hit happened, the
+                // rendering gap) — the same shared fetch the bulk-content
+                // fallback rides (`describe_row`, one round trip, both
+                // callers). An enrichment failure degrades to the bare
+                // handle form — the hit itself is the read, and the facts
+                // ride one extra round trip (a node removed between the
+                // two reads is the honest case: the hit happened, the
                 // facts are gone).
                 let facts = self
-                    .describe_facts(&match_.node, match_.generation)
+                    .describe_row(&match_.node, match_.generation)
                     .await
-                    .unwrap_or_else(|| handle.clone());
+                    .map_or_else(|| handle.clone(), |row| facts_of(&row));
                 let mut rendered = format!(
                     "hit ({x}, {y}) → {facts} ({handle}) (generation {})",
                     match_.generation
@@ -508,28 +511,6 @@ impl Repl {
             return Err("`describe` reads the resolved handle — unexpected Describe reply".into());
         };
         Ok(vec![Line::Ok(render_described(&row))])
-    }
-
-    /// The M37 hit-row enrichment's round trip: role/name for a handle,
-    /// `None` when the facts cannot ride (an old driver, a node that left
-    /// between the hit and the describe).
-    async fn describe_facts(&mut self, node: &NodeKeyV1, generation: u32) -> Option<String> {
-        match self
-            .request(RequestV1::Describe(DescribeV1 {
-                node: node.clone(),
-                generation,
-            }))
-            .await
-        {
-            Ok(ResponseV1::Described(row)) => {
-                let mut text = row.role;
-                if let Some(name) = row.name.as_deref() {
-                    let _ = write!(text, " {name:?}");
-                }
-                Some(text)
-            }
-            _ => None,
-        }
     }
 
     // --- set reads (the M30 domain's REPL rows, M35) -----------------------
@@ -767,16 +748,7 @@ impl Repl {
             .await;
         // The wait installed its own event filter; restore the `events on`
         // one (best effort — a broken stream surfaces at the next drain).
-        if self.events_subscribed {
-            let _ = self
-                .conn
-                .subscribe(&[
-                    EventKindV1::TreeChanged,
-                    EventKindV1::FramePresented,
-                    EventKindV1::Log,
-                ])
-                .await;
-        }
+        self.restore_events().await;
         match outcome {
             Ok(Some(row)) => {
                 let mut line = format!(
@@ -794,6 +766,185 @@ impl Repl {
             Ok(None) => Ok(vec![Line::Ok(format!(
                 "wait {} — satisfied by absence (no visible rows)",
                 state.describe()
+            ))]),
+            Err(err) => Err(render_gwp_error(&err)),
+        }
+    }
+
+    /// Restore the `events on` filter after a seam row's subscription
+    /// window (best effort — the m43 rule): the wait and the assertion
+    /// rows own the event filter for their duration and drop it on
+    /// return; the interactive flow re-arms the tree/frame/log triple
+    /// when the stream was live, so the live-debug view keeps flowing. A
+    /// server without the log tail never had a live filter to restore —
+    /// the guard keys on the REPL's own `events_subscribed` state, so
+    /// the unsupported case is a no-op by construction.
+    async fn restore_events(&mut self) {
+        if self.events_subscribed {
+            let _ = self
+                .conn
+                .subscribe(&[
+                    EventKindV1::TreeChanged,
+                    EventKindV1::FramePresented,
+                    EventKindV1::Log,
+                ])
+                .await;
+        }
+    }
+
+    /// `assert text|value|role|name|count <get-args…> is <expected>` (m61/m62
+    /// — the m54/m59 client-seam assertions' interactive half, the m43
+    /// one-milestone-per-surface pattern): the kit's waitable
+    /// `expect(locator).to_*` vocabulary at the prompt, riding the
+    /// [`ClientConn::expect_text`] / [`ClientConn::expect_value`] /
+    /// [`ClientConn::expect_role`] / [`ClientConn::expect_name`] /
+    /// [`ClientConn::expect_count`] seam rows — event-driven re-reads on
+    /// the §7 channel, no polling, the `timeout <ms>` budget.
+    ///
+    /// The rows land under their own `assert` word: `expect` already owns
+    /// the runner-wording resolve (`expect <get-args…>`, M5) and `text` /
+    /// `value` / `count` are locator kinds in the get vocabulary — one
+    /// word cannot lead two grammars without re-wording the scripted rows
+    /// (the m43 append-only rule). The first standalone `is` token
+    /// separates the locator from the expectation: the locator vocabulary
+    /// is greedy (multi-word names join), so a word is the honest
+    /// delimiter.
+    ///
+    /// A satisfied assertion answers one ok line naming the satisfying
+    /// fact — the m37 row render for the content pair, the found count
+    /// for `count` (the m59 answer shape, absence answering found 0). A
+    /// spent budget prints the seam's typed timeout verbatim (`have
+    /// text` / `have value` / `have count`, the locator, the last
+    /// evaluation — the failures-name-names discipline). A read, not a
+    /// resolve-store: `last` keeps the node `get` aimed at, and the
+    /// assertion's subscription window restores the `events on` filter
+    /// (the m43 rule, shared with [`Self::wait_command`]).
+    async fn assert_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        match tokens.get(1).map(String::as_str) {
+            None => Err(format!("`assert` needs a kind — {ASSERT_KINDS_USAGE}")),
+            Some("text") => self.assert_content_command(tokens, false).await,
+            Some("value") => self.assert_content_command(tokens, true).await,
+            Some("role") => self.assert_role_command(tokens).await,
+            Some("name") => self.assert_name_command(tokens).await,
+            Some("count") => self.assert_count_command(tokens).await,
+            Some(other) => Err(format!("unknown kind `{other}` — {ASSERT_KINDS_USAGE}")),
+        }
+    }
+
+    /// The content-assertion row shared by `assert text` / `assert value`
+    /// (the m54 pair): the locator resolves through the get vocabulary,
+    /// the expectation rides the seam's [`ClientConn::expect_text`] /
+    /// [`ClientConn::expect_value`] rows with the REPL's matching posture
+    /// (substring, case-insensitive — the `match_arg` shape), the
+    /// satisfying row renders as the m37 facts. An empty set stays
+    /// pending on the seam (waitable — nodes stream in), so a spent
+    /// budget answers the typed timeout naming the empty set.
+    async fn assert_content_command(
+        &mut self,
+        tokens: &[String],
+        value_first: bool,
+    ) -> Result<Vec<Line>, String> {
+        let (locator_tokens, expected_tokens) = split_at_is(assert_tail(tokens)?)?;
+        let (selector, _describe) = parse_selector(locator_tokens)?;
+        let expected = match_arg(
+            Some(expected_tokens),
+            r#"an expectation after `is` — e.g. `assert text role Button Save is "Save"`"#,
+        )?;
+        let kind_word = if value_first { "value" } else { "text" };
+        let outcome = if value_first {
+            self.conn
+                .expect_value(selector, expected, Duration::from_millis(self.timeout_ms))
+                .await
+        } else {
+            self.conn
+                .expect_text(selector, expected, Duration::from_millis(self.timeout_ms))
+                .await
+        };
+        self.restore_events().await;
+        identity_line(outcome, kind_word)
+    }
+
+    /// The role-assertion row (m62 — the m38 `to_have_role` vocabulary's
+    /// interactive half): the expected role rides the get vocabulary's
+    /// role word (the `get role` first-letter rule), the head row's role
+    /// answers it exactly (a structural fact — the seam compares the
+    /// AccessKit debug name without a matcher), the satisfying row
+    /// renders as the m37 facts.
+    async fn assert_role_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (locator_tokens, expected_tokens) = split_at_is(assert_tail(tokens)?)?;
+        let (selector, _describe) = parse_selector(locator_tokens)?;
+        let role = expected_tokens
+            .first()
+            .ok_or("an expected role after `is` — e.g. `assert role role Button Save is Button`")?;
+        let outcome = self
+            .conn
+            .expect_role(
+                selector,
+                canonical_role(role),
+                Duration::from_millis(self.timeout_ms),
+            )
+            .await;
+        self.restore_events().await;
+        identity_line(outcome, "role")
+    }
+
+    /// The name-assertion row (m62 — the m38 `to_have_accessible_name`
+    /// vocabulary's interactive half): the label-only accessible name,
+    /// narrower than `assert text` (the value never answers), the REPL's
+    /// matching posture (substring, case-insensitive). A node with no
+    /// accessible name stays pending on the seam, so a spent budget
+    /// names the missing fact.
+    async fn assert_name_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (locator_tokens, expected_tokens) = split_at_is(assert_tail(tokens)?)?;
+        let (selector, _describe) = parse_selector(locator_tokens)?;
+        let expected = match_arg(
+            Some(expected_tokens),
+            r"an expected name after `is` — e.g. `assert name role TextInput Email is Email`",
+        )?;
+        let outcome = self
+            .conn
+            .expect_name(selector, expected, Duration::from_millis(self.timeout_ms))
+            .await;
+        self.restore_events().await;
+        identity_line(outcome, "name")
+    }
+
+    /// The count-assertion row (m59 — the exact form and both
+    /// comparators): the locator resolves through the get vocabulary, the
+    /// comparison rides the seam's [`ClientConn::expect_count`] /
+    /// [`expect_count_greater_than`] / [`expect_count_less_than`] rows,
+    /// the found count renders as the answer — `found 0` included (the
+    /// m59 absence rule: an empty set is an answer, satisfying `is 0`
+    /// and every less-than).
+    async fn assert_count_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (locator_tokens, spec) = split_at_is(assert_tail(tokens)?)?;
+        let (selector, describe) = parse_selector(locator_tokens)?;
+        let comparison = parse_count_spec(spec)?;
+        let outcome = match comparison {
+            CountSpec::Exact(expected) => {
+                self.conn
+                    .expect_count(selector, expected, Duration::from_millis(self.timeout_ms))
+                    .await
+            }
+            CountSpec::GreaterThan(min) => {
+                self.conn
+                    .expect_count_greater_than(
+                        selector,
+                        min,
+                        Duration::from_millis(self.timeout_ms),
+                    )
+                    .await
+            }
+            CountSpec::LessThan(max) => {
+                self.conn
+                    .expect_count_less_than(selector, max, Duration::from_millis(self.timeout_ms))
+                    .await
+            }
+        };
+        self.restore_events().await;
+        match outcome {
+            Ok(found) => Ok(vec![Line::Ok(format!(
+                "assert count — found {found} ({describe})"
             ))]),
             Err(err) => Err(render_gwp_error(&err)),
         }
@@ -1339,6 +1490,9 @@ impl Repl {
             "  texts <get-args…>           the set's text content, label first (M40)",
             "  values <get-args…>          the set's values, value first (M40)",
             "  wait <state> <get-args…>    attached|visible|hidden|stable (m43)",
+            "  assert text|value <get-args…> is <text>   waitable content assertion (m61)",
+            "  assert role|name <get-args…> is <Role|text>  waitable identity assertion (m62)",
+            "  assert count <get-args…> is <N>|> <N>|< <N>  waitable count assertion (m61)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
@@ -1391,6 +1545,18 @@ fn describe_node(node: &NodeKeyV1) -> String {
         NodeKeyV1::AccessKit { node, .. } => format!("accesskit#{node}"),
         NodeKeyV1::Logical { adapter, id } => format!("{adapter}#{id}"),
     }
+}
+
+/// The hit-row's facts form (the m37 enrichment): the role beside the
+/// accessible name — the same words the describe rows start with,
+/// rendered from the shared `describe_row` fetch (one `Describe` round
+/// trip behind the hit row and the bulk-content fallback alike).
+fn facts_of(row: &DescribedV1) -> String {
+    let mut text = row.role.clone();
+    if let Some(name) = row.name.as_deref() {
+        let _ = write!(text, " {name:?}");
+    }
+    text
 }
 
 /// The M36 describe row, rendered for the REPL (M37): the dump row's
@@ -1563,6 +1729,102 @@ fn parse_ms(value: Option<&String>) -> Result<u64, String> {
     value
         .parse::<u64>()
         .map_err(|_| format!("not a millisecond value: {value}"))
+}
+
+/// The `assert` row's vocabulary words (m61/m62): the kind list every
+/// validation error names, so one error line teaches the whole grammar
+/// (the survival rule's hint shape).
+const ASSERT_KINDS_USAGE: &str =
+    "text | value | count | role | name (e.g. `assert count role Button is 4`)";
+
+/// The `assert count` expectation's forms (the m59 comparator shapes).
+const ASSERT_COUNT_USAGE: &str = "`is <N>` | `is > <N>` | `is < <N>`";
+
+/// The separator error every `assert` parse names (the whole grammar, so
+/// one error line teaches the row — the survival rule's hint shape).
+const ASSERT_SEPARATOR_USAGE: &str =
+    "`assert` needs `is` — assert <kind> <get-args…> is <expected>";
+
+/// The tokens after the `assert` kind word (the locator + expectation
+/// tail). Missing means the kind never got its arguments — the separator
+/// error names the whole grammar.
+fn assert_tail(tokens: &[String]) -> Result<&[String], String> {
+    tokens.get(2..).ok_or(ASSERT_SEPARATOR_USAGE.to_string())
+}
+
+/// Split an `assert` tail at the first standalone `is` token: the locator
+/// tokens before it, the expectation tokens after (the m61 grammar — the
+/// locator vocabulary is greedy, so a word is the honest delimiter).
+/// `None` when the separator is missing; the caller prints the grammar.
+fn split_at_is(tail: &[String]) -> Result<(&[String], &[String]), String> {
+    let pos = tail
+        .iter()
+        .position(|token| token == "is")
+        .ok_or(ASSERT_SEPARATOR_USAGE.to_string())?;
+    Ok((&tail[..pos], &tail[pos + 1..]))
+}
+
+/// The parsed `assert count` expectation (the m59 comparator shapes: the
+/// exact form and the one-sided pair).
+enum CountSpec {
+    Exact(usize),
+    GreaterThan(usize),
+    LessThan(usize),
+}
+
+/// The row-assertion answer line (m61/m62): the satisfying row rendered
+/// as the m37 facts (the dump-row rule — directly aimable by the action
+/// vocabulary); a spent budget renders the seam's typed timeout verbatim.
+fn identity_line(
+    outcome: Result<DescribedV1, GwpError>,
+    kind_word: &str,
+) -> Result<Vec<Line>, String> {
+    match outcome {
+        Ok(row) => Ok(vec![Line::Ok(format!(
+            "assert {kind_word} — {}",
+            render_described(&row)
+        ))]),
+        Err(err) => Err(render_gwp_error(&err)),
+    }
+}
+
+/// Parse the `assert count` expectation tokens: `<N>` rides one token or
+/// two (`is 4`, `is > 4`), the comparator words accept the joined form
+/// too (`is >4`). Anything else is one error line naming the three forms
+/// (the survival rule).
+fn parse_count_spec(spec: &[String]) -> Result<CountSpec, String> {
+    /// One count argument, parsed or named.
+    fn count(token: &str) -> Result<usize, String> {
+        if token.is_empty() {
+            return Err(format!(
+                "`assert count` needs a count — {ASSERT_COUNT_USAGE}"
+            ));
+        }
+        token
+            .parse::<usize>()
+            .map_err(|_| format!("`{token}` is not a count — {ASSERT_COUNT_USAGE}"))
+    }
+    match spec {
+        [one] => {
+            if let Some(rest) = one.strip_prefix('>') {
+                Ok(CountSpec::GreaterThan(count(rest)?))
+            } else if let Some(rest) = one.strip_prefix('<') {
+                Ok(CountSpec::LessThan(count(rest)?))
+            } else {
+                Ok(CountSpec::Exact(count(one)?))
+            }
+        }
+        [op, n] => match op.as_str() {
+            ">" => Ok(CountSpec::GreaterThan(count(n)?)),
+            "<" => Ok(CountSpec::LessThan(count(n)?)),
+            other => Err(format!(
+                "unknown comparator `{other}` — `assert count` needs {ASSERT_COUNT_USAGE}"
+            )),
+        },
+        _ => Err(format!(
+            "`assert count` needs a count — {ASSERT_COUNT_USAGE}"
+        )),
+    }
 }
 
 /// One required non-flag argument.
