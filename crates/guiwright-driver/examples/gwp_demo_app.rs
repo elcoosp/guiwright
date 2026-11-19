@@ -10,7 +10,8 @@
 //! # prints: GWP_WS_ADDR=127.0.0.1:43211
 //! ```
 //!
-//! The app serves the buttons fixture (Save/Cancel), the virtual clock and
+//! The app serves the described fixture (Save/Cancel + the Install button
+//! whose row carries `"Installs the latest build"`), the virtual clock and
 //! two state seams — exactly the surface the TS client covers: handshake →
 //! resolve → act → clock → mock → bye.
 
@@ -63,7 +64,7 @@ fn main() {
         let adapter = move || {
             // Scripted pixels give the adapter the §6.2 pixel row, so
             // the video domain works end to end (§10).
-            MockAdapter::with_fixture(&Fixture::buttons())
+            MockAdapter::with_fixture(&Fixture::with_description())
                 .with_frame_pixels(32, 16, vec![64u8; 32 * 16 * 4])
                 .with_state(DemoState {
                     rows: 9,
