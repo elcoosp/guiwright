@@ -306,7 +306,13 @@ rule made typable over any door, the §7 render half, `screenshot_window()` /
 way the TS `screenshotWindow()`/`screenshotElement()` and the REPL `screenshot`
 rows speak, and the §14 deterministic-time half, `clock(cmd)` (m51), answering
 the `ClockState` carrier the REPL's `clock` family and the TS `clock()`/
-`fastForward()` helpers speak. The raw `request()` covers the rest.
+`fastForward()` helpers speak, plus the §14 state-seam half, `mock(cmd)`
+(m52), answering the `MockReceipt` carrier the way the TS `mock()`/`callSeam()`/
+`resetState()` helpers and the REPL `mock` rows speak, and the §13 inspector
+half, `inspect(cmd)` (m53), answering the `InspectReply` union (the codegen
+recording's kit code, the overlay/highlight acks) the way the TS
+`inspectOverlay()`/`inspectHighlight()` and the REPL `codegen`/`inspect` rows
+speak. The raw `request()` covers the rest.
 
 </details>
 
@@ -426,13 +432,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M49**       | The client seam's tree-dump rows: `tree_dump()` + `tree_dump_under(selector, timeout_ms)` answering the `TreeDump` carrier (the m13 record's dump-row half, the M11/M13 contract made typable) — the full walk and the auto-wait resolve's scoped subtree, the resolve's typed Timeout/StrictMode honesty riding the sugar, one budget row, no wire change |
 | **M50**       | The client seam's screenshot rows: `screenshot_window()` + `screenshot_element(selector, timeout_ms)` answering the `Shot` carrier (the M10 render half, the m13-style read half of the wire surface) — the one §10 render pass and the clip-aware element crop, the resolve's typed Timeout/StrictMode honesty riding the sugar, one budget row, no wire change |
 | **M51**       | The client seam's clock row: `clock(cmd)` answering the `ClockState` carrier (the §14 virtual-clock half as typed sugar, the m48 take-the-wire-enum rule) — the whole §14 vocabulary in one call, the chaining contract (every reply carries the full state), the probe's totality and the paused `run_for` rejection pinned as shipped, one budget row, no wire change |
+| **M52**       | The client seam's mock row: `mock(cmd)` answering the `MockReceipt` carrier (the §14 state-seam half as typed sugar, the m48/m51 take-the-wire-enum rule) — the whole §14 mock vocabulary in one call (install / clear / call / reset-state), the runner-context honesty and the unknown-id / failing-hook typed rejections pinned as shipped, one budget row, no wire change |
+| **M53**       | The client seam's inspect row: `inspect(cmd)` answering the `InspectReply` union (the §13 inspector half as typed sugar, the m48/m51/m52 take-the-wire-enum rule) — the whole §13 vocabulary in one call (codegen start/stop, overlay enable/disable, highlight aim/clear), the reply union named client-side instead of collapsed to an `Option`, the recorder's single-slot honesty pinned as shipped, one budget row, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m51-client-seam-clock.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m53-client-seam-inspect.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
