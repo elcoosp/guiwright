@@ -21,6 +21,12 @@ use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
 
 fn main() {
+    #[derive(Debug, Default)]
+    struct DemoState {
+        rows: usize,
+        fixture: Option<String>,
+    }
+
     let args: Vec<String> = std::env::args().collect();
     let port: u16 = args
         .windows(2)
@@ -28,12 +34,6 @@ fn main() {
         .flatten()
         .unwrap_or(0);
     let ws = args.iter().any(|flag| flag == "--ws");
-
-    #[derive(Debug, Default)]
-    struct DemoState {
-        rows: usize,
-        fixture: Option<String>,
-    }
 
     let mut seams = guiwright_driver::SeamRegistry::new();
     seams.register("reset_state", |ctx, scope| {
