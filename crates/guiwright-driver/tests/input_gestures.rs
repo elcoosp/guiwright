@@ -269,7 +269,7 @@ fn send_input_routes_raw_events_to_the_active_target() {
     settle(&mut session);
 
     let frame = session
-        .send_input(vec![InputEvent::PointerMove { x: 1.0, y: 2.0 }], None)
+        .send_input(&[InputEvent::PointerMove { x: 1.0, y: 2.0 }], None)
         .expect("raw batch applies");
     assert!(frame >= 1);
     let logged = session.adapter().window_events();
@@ -279,9 +279,7 @@ fn send_input_routes_raw_events_to_the_active_target() {
 
     // An empty batch is an honest no-op: one rendezvous, nothing injected.
     let before = session.adapter().window_events().len();
-    session
-        .send_input(Vec::new(), None)
-        .expect("empty batch ok");
+    session.send_input(&[], None).expect("empty batch ok");
     assert_eq!(session.adapter().window_events().len(), before);
 }
 
@@ -295,7 +293,7 @@ fn input_and_gestures_validate_the_window_target() {
     // v0.4) — and a failed gesture applies nothing.
     let err = session
         .perform_gesture(
-            click(1.0, 2.0, 1),
+            &click(1.0, 2.0, 1),
             Some("00000000-0000-0000-0000-00000000dead"),
         )
         .expect_err("unknown window");
@@ -564,13 +562,13 @@ fn codegen_records_the_gesture_vocabulary() {
         )
         .expect("key applies");
     session
-        .send_input(vec![InputEvent::PointerMove { x: 30.0, y: 40.0 }], None)
+        .send_input(&[InputEvent::PointerMove { x: 30.0, y: 40.0 }], None)
         .expect("raw move applies");
     let (code, warnings) = session.codegen_stop().expect("recording stops");
     assert_eq!(code.lines().count(), 4, "{code}");
     assert!(code.contains("app.mouse().click(10.0, 20.0);"), "{code}");
     assert!(code.contains("app.mouse().wheel(0.0, -120.0);"), "{code}");
-    assert!(code.contains("app.keyboard().press("Enter");"), "{code}");
+    assert!(code.contains("app.keyboard().press(\"Enter\");"), "{code}");
     assert!(code.contains("app.mouse().move_to(30.0, 40.0);"), "{code}");
     assert!(warnings.is_empty(), "{warnings:?}");
 }
@@ -620,11 +618,11 @@ fn codegen_records_window_targets_chords_and_high_counts() {
         "{code}"
     );
     assert!(
-        code.contains("app.keyboard().press_with("KeyA", ["Control"]);"),
+        code.contains("app.keyboard().press_with(\"KeyA\", [\"Control\"]);"),
         "{code}"
     );
     assert!(
-        code.contains("app.keyboard().type_text("ada");"),
+        code.contains("app.keyboard().type_text(\"ada\");"),
         "{code}"
     );
     assert!(code.contains("app.mouse().click(1.0, 2.0);"), "{code}");
