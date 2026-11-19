@@ -547,3 +547,12 @@ p95_us = 250
 notes = "the m58 client seam's §7 lifecycle close as typed sugar: one ClientConn::bye call over the embedded door — the Byes reply answered, then run_connection returns and the conversation ends (each measured iteration opens a fresh connection; the open is setup, the farewell round trip is the measured operation); the floor the TS client's close() has carried since its M3 landing, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
 m0_measurable = true
 sample = "client_bye"
+
+[[budget]]
+id = "client_count_assert"
+name = "Client seam count assertion, satisfied on entry (in-process door)"
+p50_us = 1500
+p95_us = 6000
+notes = "the m59 client seam's count-assertion rows (the kit's to_have_count family — the M22 exact form + the M25 comparators — over any door): one ClientConn::expect_count satisfied on entry over the embedded door — the subscribe round-trip, the resolve-all entry evaluation (the resolve_all_wire round-trip shape with the CountMatch comparison on top) and the unsubscribe cleanup; the whole-match-set floor satisfies on the first row set, so no wake and no re-read ride this number (the event-driven cost is the wire_event_delivery row's); a client-side composition of existing domains, no wire change"
+m0_measurable = true
+sample = "client_count_assert"
