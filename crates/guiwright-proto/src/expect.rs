@@ -10,13 +10,17 @@
 //!
 //! Three boundaries keep this honest:
 //!
-//! * **No wire change.** The kinds below are a client-side vocabulary
-//!   (never serialized): the assertion composes the existing
+//! * **The kinds are a client-side vocabulary** (never serialized): the
+//!   content and identity kinds (m54/m62) compose the existing
 //!   `DescribeAll` and event domains byte-for-byte as M12/M39 blessed
 //!   them. A driver that predates M39 rejects `DescribeAll` with the
 //!   typed `Unsupported` and the assertion surfaces that rejection
 //!   rather than degrading (the m41 fail-fast rule; the wait module's
-//!   boundary, restated for content).
+//!   boundary, restated for content). The description kind (m64) is the
+//!   one exception — its fact rides the appended
+//!   `DescribeAllIdentity`/`DescribedAllIdentity` domain (the m62/m63
+//!   records' reserved wire change), the same wake loop over the wider
+//!   rows; the M39 encodings stay byte-pinned.
 //! * **The rows are the truth.** Evaluation sees exactly what the M39
 //!   `describe_all` walk answers, through the m46 derivation orders:
 //!   the text kind reads the m29 order (accessible name first, value
@@ -32,7 +36,7 @@
 //!   expected …`).
 
 use crate::bulk::{text_content, value_content};
-use crate::schema::{DescribedV1, TextMatchV1};
+use crate::schema::{DescribedIdentityV1, DescribedV1, TextMatchV1};
 use guiwright_core::selector::TextMatch;
 
 /// The content-assertion vocabulary (§8 check vocabulary's content half,
@@ -61,6 +65,16 @@ pub enum ExpectKind {
     /// text kind's m29 order (the value never answers), the fact the
     /// text row cannot pin.
     Name(TextMatchV1),
+    /// The accessible description, description-only — the m64 identity
+    /// row (the kit's `to_have_accessible_description` over any door,
+    /// M38): the third identity fact, the one the M39 describe-all rows
+    /// left out. Narrower than every content kind — the name and the
+    /// value never answer — and read off the m64 identity rows (the
+    /// [`DescribedIdentityV1`] fact), so this kind evaluates through
+    /// [`ExpectTracker::evaluate_identity`] only; the plain
+    /// [`ExpectTracker::evaluate`] answers it with the misroute pending
+    /// (the M39 rows carry no description fact to read).
+    Description(TextMatchV1),
 }
 
 impl ExpectKind {
@@ -72,6 +86,7 @@ impl ExpectKind {
             ExpectKind::Value(_) => "have value",
             ExpectKind::Role(_) => "have role",
             ExpectKind::Name(_) => "have name",
+            ExpectKind::Description(_) => "have description",
         }
     }
 }
@@ -85,6 +100,21 @@ pub enum ExpectEval {
     /// The content matched. The row is the set's head at the generation
     /// the walk answered.
     Satisfied(DescribedV1),
+    /// The world may still change so the assertion can pass; the reason
+    /// names what the last evaluation found.
+    Pending { reason: String },
+}
+
+/// The identity-row evaluation behind
+/// [`crate::client::ClientConn::expect_description`] — the same two
+/// answers as [`ExpectEval`], the satisfying answer carrying the full
+/// [`DescribedIdentityV1`] row (the m64 row is a dump-row handle with
+/// the description fact beside it, the dump-row rule).
+#[derive(Clone, Debug)]
+pub enum ExpectIdentityEval {
+    /// The description (or the projected content/identity fact) matched.
+    /// The row is the set's head at the generation the walk answered.
+    Satisfied(DescribedIdentityV1),
     /// The world may still change so the assertion can pass; the reason
     /// names what the last evaluation found.
     Pending { reason: String },
@@ -148,6 +178,51 @@ impl ExpectTracker {
                 None => ExpectEval::Pending {
                     reason: "the set's head carries no accessible name".into(),
                 },
+            },
+            // The m64 kind never rides the M39 rows (they carry no
+            // description fact to read): the misroute stays pending with
+            // the honest reason instead of silently never matching.
+            ExpectKind::Description(_) => ExpectEval::Pending {
+                reason: "the description kind rides the m64 identity read \
+                         (evaluate_identity), not the M39 describe-all rows"
+                    .into(),
+            },
+        }
+    }
+
+    /// The identity-row evaluation (m64): one row set of the appended
+    /// `DescribedAllIdentity` read — the description kind reads the
+    /// description fact (the m38 read: `description()` only, a missing
+    /// description stays pending, the reason naming the missing fact),
+    /// and every other kind projects its row into the M39 shape and
+    /// answers exactly as [`ExpectTracker::evaluate`] does (the identity
+    /// four ride the wider row beside the description fact — one
+    /// evaluator, no second copy of the per-kind verdicts).
+    pub fn evaluate_identity(&self, rows: &[DescribedIdentityV1]) -> ExpectIdentityEval {
+        let Some(row) = rows.first() else {
+            return ExpectIdentityEval::Pending {
+                reason: "no match yet (the set is empty)".into(),
+            };
+        };
+        match &self.kind {
+            ExpectKind::Description(wanted) => match row.description.as_deref() {
+                Some(found) if TextMatch::from(wanted.clone()).matches(found) => {
+                    ExpectIdentityEval::Satisfied(row.clone())
+                }
+                Some(found) => ExpectIdentityEval::Pending {
+                    reason: format!("description is {found:?}, expected {}", render(wanted)),
+                },
+                None => ExpectIdentityEval::Pending {
+                    reason: "the set's head carries no accessible description".into(),
+                },
+            },
+            // The content and identity kinds project (the m62/m54
+            // verdicts over the M39 row shape, the description fact
+            // riding beside them); the satisfying answer stays the full
+            // identity row.
+            _ => match self.evaluate(&[DescribedV1::from(row)]) {
+                ExpectEval::Satisfied(_) => ExpectIdentityEval::Satisfied(row.clone()),
+                ExpectEval::Pending { reason } => ExpectIdentityEval::Pending { reason },
             },
         }
     }
