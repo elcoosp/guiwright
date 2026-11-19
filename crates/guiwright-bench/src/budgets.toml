@@ -432,3 +432,19 @@ p95_us = 6000
 notes = "the m42 client-side wait's steady-state floor (the m21 record's named follow-up, closed): one ClientConn::wait_for satisfied on entry over the embedded door — the subscribe round-trip, the describe-all entry evaluation (the describe_all_wire round-trip shape) and the unsubscribe cleanup; the Save row satisfies on the first row set, so no wake and no re-read ride this number (the event-driven cost is the wire_event_delivery row's); a client-side composition of existing domains, no wire change"
 m0_measurable = true
 sample = "client_wait_satisfied"
+[[budget]]
+id = "client_text_contents"
+name = "Client seam bulk text read, in-process door (4 rows)"
+p50_us = 1000
+p95_us = 4500
+notes = "the m46 client seam's bulk text read (the m41 record's Rust-client half, closed): one ClientConn::all_text_contents read over the embedded door — the describe_all_wire round-trip shape plus the client-side m29 derivation (a per-row name-first/value-fallback map, no extra wire work); the floor the TS client's allTextContents() and the REPL texts row have carried since m40/m41, now on the Rust seam; a client-side derivation over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_text_contents"
+[[budget]]
+id = "client_resolve_act"
+name = "Client seam aim-and-act loop, in-process door (resolve + click)"
+p50_us = 2000
+p95_us = 8000
+notes = "the m47 client seam's §7 locate-and-act loop as typed sugar: one ClientConn::resolve with the driver's auto-wait (the wire_action_resolve round-trip shape — the strict resolve answering the Save row) plus one ClientConn::action on that row (the wire_action act-time gate re-checking the pinned node and the frame rendezvous); the floor the TS client's resolve()/action() pair has carried since M3, now on the Rust seam; a client-side pairing of existing domains, no wire change"
+m0_measurable = true
+sample = "client_resolve_act"
