@@ -92,6 +92,7 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #(#attrs)*
+        #[::core::prelude::v1::test]
         #vis fn #name() {
             const __GW_NAME: &str = stringify!(#name);
             fn __gw_body(#app_arg) #output #body
