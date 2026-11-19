@@ -466,3 +466,21 @@ p95_us = 3500
 notes = "the m49 client seam's §7 tree-dump half as typed sugar: one ClientConn::tree_dump_under read over the embedded door — the strict resolve with the driver's auto-wait (the resolve_cached_index index answer) plus the depth-first subtree walk and row build (the tree_dump_filtered shape on the four-button fixture); the floor the TS client's treeDumpUnder() and the REPL snapshot-under row have carried since M3/M13, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
 m0_measurable = true
 sample = "client_tree_dump"
+
+[[budget]]
+id = "client_screenshot"
+name = "Client seam element shot, in-process door (resolve + render + crop)"
+p50_us = 400
+p95_us = 1500
+notes = "the m50 client seam's §7 render half as typed sugar: one ClientConn::screenshot_element read over the embedded door — the strict resolve with the driver's auto-wait (the resolve_cached_index index answer) plus the one §10 render, the clip-aware crop and the PNG encode the Shot reply ships (the wire_screenshot_window shape plus the resolve); the floor the TS client's screenshotWindow()/screenshotElement() and the REPL screenshot rows have carried since M9/M10, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_screenshot"
+
+[[budget]]
+id = "client_clock"
+name = "Client seam clock fast-forward, in-process door (plan steps + pumps)"
+p50_us = 50
+p95_us = 250
+notes = "the m51 client seam's §14 virtual-clock half as typed sugar: one ClientConn::clock fast-forward over the embedded door — the wire Clock round trip with the §14 pacing service planning the frame-sized steps (one pump per step) and the ClockState reply marshalled back; the floor the TS client's clock()/fastForward() helpers and the REPL clock ff row have carried since §14/M4, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_clock"
