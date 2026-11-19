@@ -2533,3 +2533,158 @@ pub fn client_assert() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+/// §15.1 `client_video`: one `ClientConn::video` record cycle over the
+/// in-process door (m55) — the start round trip, one presented frame (the
+/// resolve's rendezvous pump) and the stop round trip answering the
+/// finalized `VideoOutput` carrier. The measured operation is the whole
+/// cycle: the §10 finalize (manifest + encoded frames) is the stop arm's
+/// payload, not setup.
+pub fn client_video() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::client::VideoReply;
+    use guiwright_proto::schema::SelectorV1;
+    use guiwright_proto::schema::{TextMatchV1, VideoOptsV1, VideoV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    // Scratch artifact root (no tempfile dep in the bench crate): one dir
+    // for the whole run, 64 finalized files inside it.
+    let dir = std::env::temp_dir().join(format!("gw-bench-video-seam-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("bench artifact dir");
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            // The script pixels give the adapter the §6.2 pixel row the
+            // recorder needs — uniform bytes hash-0, so the static span
+            // records first frame + dedup no-ops (§10 backpressure).
+            || {
+                MockAdapter::with_fixture(&Fixture::buttons()).with_frame_pixels(
+                    24,
+                    12,
+                    vec![64; 24 * 12 * 4],
+                )
+            },
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let save = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: false,
+                ignore_case: true,
+            }),
+        };
+
+        // Warm-up: one full record cycle pins the carrier shape once (the
+        // start ack, the presented frame, the finalized artifact).
+        let warm = client
+            .video(VideoV1::Start(VideoOptsV1 {
+                fps: 25,
+                dir: Some(dir.display().to_string()),
+            }))
+            .await
+            .expect("warm start");
+        assert_eq!(warm, VideoReply::Started);
+        let _ = client
+            .resolve(save.clone(), 2000)
+            .await
+            .expect("warm resolve");
+        let warm = client.video(VideoV1::Stop).await.expect("warm stop");
+        let VideoReply::File(file) = warm else {
+            panic!("expected the File arm");
+        };
+        assert!(file.frames >= 1, "at least the first presented frame");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let ack = client
+                .video(VideoV1::Start(VideoOptsV1 {
+                    fps: 25,
+                    dir: Some(dir.display().to_string()),
+                }))
+                .await
+                .expect("bench start");
+            assert_eq!(ack, VideoReply::Started);
+            let _ = client
+                .resolve(save.clone(), 2000)
+                .await
+                .expect("bench resolve");
+            let stopped = client.video(VideoV1::Stop).await.expect("bench stop");
+            let VideoReply::File(file) = stopped else {
+                panic!("expected the File arm");
+            };
+            assert!(file.frames >= 1, "the cycle recorded a frame");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+    measured.max(Duration::from_nanos(1))
+}
+
+/// §15.1 `client_input`: one `ClientConn::input` call over the in-process
+/// door (m56) — a two-move pointer batch riding the `Input` domain's
+/// rendezvous pump, the reply's frame seq marshalled into the
+/// [`InputReceipt`] carrier. The measured operation is the round trip
+/// (injection + pump), the same shape the TS client's `input(events)` has
+/// spoken since M7.
+pub fn client_input() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::InputEventV1;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let batch = || {
+            vec![
+                InputEventV1::PointerMove { x: 12.0, y: 34.0 },
+                InputEventV1::PointerMove { x: 13.0, y: 35.0 },
+            ]
+        };
+
+        // Warm-up: one batch pins the carrier shape once (the frame seq
+        // rode back).
+        let warm = client.input(batch()).await.expect("warm batch");
+        assert!(warm.frame_seq >= 1, "the receipt names the applied frame");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let receipt = client.input(batch()).await.expect("bench batch");
+            assert!(receipt.frame_seq >= 1, "the rendezvous advanced");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
