@@ -16,7 +16,7 @@ use guiwright_proto::schema::{
 use guiwright_proto::{ClientConn, DuplexClient, GwpError};
 
 /// Two-window server + pre-extracted handles: the fixture moves into the
-/// adapter closure (FnOnce — one adapter per server), so the identity
+/// adapter closure (`FnOnce` — one adapter per server), so the identity
 /// bytes come out before the move.
 fn spawn_two_window() -> (
     GwpServerHandle,
@@ -97,9 +97,9 @@ async fn window_use_scopes_later_resolution() {
                     "the resolved Save belongs to the aimed window"
                 );
             }
-            other => panic!("expected an AccessKit key, got {other:?}"),
+            other @ NodeKeyV1::Logical { .. } => panic!("expected an AccessKit key, got {other:?}"),
         },
-        other => panic!("expected Resolved, got {other:?}"),
+        other @ NodeKeyV1::Logical { .. } => panic!("expected Resolved, got {other:?}"),
     }
 }
 
