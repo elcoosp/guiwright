@@ -1244,7 +1244,16 @@ fn clock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: ClockV1) -
     };
     match session.clock(adapter_cmd) {
         Ok(report) => ResponseV1::ClockState {
-            virtual_time_ms: report.state.virtual_time.map(|t| t.as_millis() as u64),
+            // The wire carries milliseconds as u64; the source is u128.
+            // The guarded conversion keeps the clock reply's honesty (the
+            // same discipline the m42 wait's timeout line runs): a duration
+            // beyond the u64 range saturates instead of silently wrapping
+            // through a truncating `as` — unreachable at real scales, but
+            // the conversion proves it rather than assuming it.
+            virtual_time_ms: report
+                .state
+                .virtual_time
+                .map(|t| u64::try_from(t.as_millis()).unwrap_or(u64::MAX)),
             paused: report.state.paused,
             steps: report.steps,
         },
