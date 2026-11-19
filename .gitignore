@@ -20,11 +20,8 @@ bench-results/
 target/guiwright/
 
 # Handoff artifacts (AI Constraints): authored per delivery, never committed.
-# ship.toml is the per-file commit plan; pr-body.md is the PR description.
+# ship.toml is the per-file commit plan; pr-body.md is the PR description;
+# docs/launch.md is the per-delivery launch note.
 ship.toml
 .github/pr-body.md
 docs/launch.md
-
-# handoff artifacts (ship ceremony, not repo files)
-/ship.toml
-/.github/pr-body.md
