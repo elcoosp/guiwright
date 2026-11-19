@@ -511,3 +511,21 @@ p95_us = 6000
 notes = "the m54 client seam's content-assertion rows (the kit's expect vocabulary's content half over any door): one ClientConn::expect_text satisfied on entry over the embedded door — the subscribe round-trip, the describe-all entry evaluation (the describe_all_wire round-trip shape with the m46 name-first derivation on top) and the unsubscribe cleanup; the Save row satisfies on the first row set, so no wake and no re-read ride this number (the event-driven cost is the wire_event_delivery row's); a client-side composition of existing domains, no wire change"
 m0_measurable = true
 sample = "client_assert"
+
+[[budget]]
+id = "client_video"
+name = "Client seam video record cycle, in-process door (start → frame → stop + finalize)"
+p50_us = 500000
+p95_us = 1500000
+notes = "the m55 client seam's §10 recording half as typed sugar: one ClientConn::video record cycle over the embedded door — the start round trip (recorder spawn, the Pong ack marshalled into the Started arm), one presented frame (the resolve's rendezvous pump feeding the recorder) and the stop round trip answering the finalized VideoOutput carrier (the manifest + encoded frames the §10 finalize writes); the floor the TS client's videoStart()/videoStop() helpers and the REPL video rows have carried since M3, now on the Rust seam; the cycle is heavyweight by design and host-dependent at the Auto encoder: an ffmpeg-present host pays the M3 probe + pipe spawn (~120 ms measured), a fallback host runs the deterministic PngSequence finalize (~ms) — the targets bound both orders, the guard still trips on order-of-magnitude regressions; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_video"
+
+[[budget]]
+id = "client_input"
+name = "Client seam raw-input batch, in-process door (inject + rendezvous pump)"
+p50_us = 50
+p95_us = 250
+notes = "the m56 client seam's §9 raw-injection half as typed sugar: one ClientConn::input call over the embedded door — a two-move pointer batch riding the Input domain's rendezvous pump (inject through the target window's real pipeline, one frame rendezvous, §15.4) and the InputQueued reply marshalled into the InputReceipt carrier; the floor the TS client's input(events) helper has carried since M7 and the un-synthesized escape hatch the m48 gesture row's contract names, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_input"
