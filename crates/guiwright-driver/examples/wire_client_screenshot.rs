@@ -24,10 +24,10 @@ use guiwright_proto::schema::{ErrorCode, SelectorV1, TextMatchV1};
 use guiwright_proto::{DuplexClient, GwpError};
 
 fn main() {
-    let out_dir = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("guiwright-client-shots"));
+    let out_dir = std::env::args().nth(1).map_or_else(
+        || std::env::temp_dir().join("guiwright-client-shots"),
+        PathBuf::from,
+    );
     std::fs::create_dir_all(&out_dir).expect("output dir");
 
     let runtime = tokio::runtime::Builder::new_current_thread()
