@@ -27,8 +27,8 @@ use guiwright_core::Selector;
 use crate::GwpError;
 use crate::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1,
-    GestureV1, GwpEvent, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1,
-    SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, WindowInfoV1, WindowV1,
+    GestureV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 
@@ -97,6 +97,60 @@ pub struct Shot {
     pub height: u32,
     /// PNG-encoded RGBA8 (lossless, §10 "Output: PNG").
     pub png: Vec<u8>,
+}
+
+/// The client-side carrier for the wire `MockDone` reply (m52):
+/// field-for-field the §14 payload — the seam id (or fixture scope) the
+/// reply names and the detail the hook or canned override produced. Never
+/// serialized itself (the reply rides `ResponseV1::MockDone` byte-for-byte),
+/// so the schema stays byte-pinned.
+///
+/// The wire reuses one payload for the whole §14 domain: a `ResetState`
+/// reply names the **fixture scope** in the `id` slot (there is no seam id
+/// to name — the session ran its configured reset seam), while `Call` /
+/// `InstallSeam` / `Clear` name the seam id. The carrier surfaces the field
+/// verbatim, so a consumer can render `mock reset_state: …` and
+/// `mock seed-42: …` exactly as the REPL's rows do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MockReceipt {
+    /// The seam id the reply names — or, for a `ResetState` reply, the
+    /// fixture scope that reset (the wire's one payload, field verbatim).
+    pub id: String,
+    /// The seam result detail (or the canned override response) — the same
+    /// line the REPL's `mock` rows render.
+    pub detail: String,
+}
+
+/// The client-side carrier for the wire `Codegen` reply (m53):
+/// field-for-field the §13 payload — the generated kit code and the
+/// strict-mode warnings collected while recording. Never serialized itself
+/// (the reply rides `ResponseV1::Codegen` byte-for-byte), so the schema
+/// stays byte-pinned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodegenOutput {
+    /// The generated kit code (one recorded interaction per line, the §13
+    /// cost model's minimal stable selectors).
+    pub code: String,
+    /// Strict-mode warnings collected while recording (§13).
+    pub warnings: Vec<String>,
+}
+
+/// The reply an [`ClientConn::inspect`] call answers (m53): the §13
+/// domain's replies are heterogeneous by wire design — the ack-only
+/// commands (recording start, overlay enable/disable, highlight) ride the
+/// shared `Pong`, and only the recording stop carries the `Codegen`
+/// payload. The union names that shape client-side instead of collapsing
+/// it into a bare `Option` that hides which command answered what — the
+/// same honesty the carriers above draw (never serialized itself, so the
+/// schema stays byte-pinned).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InspectReply {
+    /// The command was applied — the `Pong` arms (recording start, overlay
+    /// enable/disable, highlight aim/clear).
+    Applied,
+    /// The recording stop's answer: the generated kit code and its
+    /// strict-mode warnings.
+    Codegen(CodegenOutput),
 }
 
 /// The client-side carrier for the wire `ClockState` reply (m51):
@@ -672,6 +726,86 @@ pub trait ClientConn: Send + 'static {
                     steps,
                 }),
                 other => Err(GwpError::Protocol(format!("Clock answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §14 state-seam domain as typed seam sugar (m52): one
+    /// [`RequestV1::Mock`] round trip — install a canned override / clear
+    /// it / call a registered seam once / reset app state to a fixture
+    /// scope — answering the [`MockReceipt`] carrier (the id the reply
+    /// names plus the detail the hook or override produced). The whole
+    /// wire vocabulary in one call taking the wire's own [`MockV1`] enum —
+    /// no parallel client-side vocabulary to keep in sync, the same rule
+    /// the m48 sugar set for `GestureV1` and the m51 sugar set for
+    /// [`ClockV1`]. The same shape the TypeScript client has spoken since
+    /// M3 (`mock()` / `callSeam()` / `resetState()`) and the REPL since M4
+    /// (`mock install` / `clear` / `call` / `reset`). No wire change: the
+    /// command rides the `Mock` domain byte-for-byte as §14 blessed it;
+    /// every [`ClientConn`] impl inherits the sugar.
+    ///
+    /// The domain's honesty carries over unchanged: install/clear are
+    /// bookkeeping on the session's override table (the ack's detail says
+    /// which), a `call` runs the registered hook inside the adapter's
+    /// runner context (§14 "state writes need the runner's context") and
+    /// pumps a frame so any UI effect settles, and a `reset_state` runs
+    /// the session's configured reset seam (the default `"reset_state"`
+    /// id) under the caller's fixture scope — the wire names that scope in
+    /// the reply's id slot, the carrier surfaces it verbatim. A seam id
+    /// nothing registered, and a hook that fails, answer the wire's typed
+    /// rejection naming the cause — surfaced, never re-mapped (the canned
+    /// override wins over the real hook exactly where §14 put it).
+    ///
+    /// [`ClockV1`]: crate::schema::ClockV1
+    fn mock(&mut self, cmd: MockV1) -> impl Future<Output = Result<MockReceipt, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Mock(cmd)).await? {
+                ResponseV1::MockDone { id, detail } => Ok(MockReceipt { id, detail }),
+                other => Err(GwpError::Protocol(format!("Mock answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §13 inspector domain as typed seam sugar (m53): one
+    /// [`RequestV1::Inspect`] round trip — start/stop the interaction →
+    /// kit-code recorder, enable/disable the live overlay, aim/clear the
+    /// hover outline — answering the [`InspectReply`] union (the ack-only
+    /// commands answer [`InspectReply::Applied`], the recording stop
+    /// answers [`InspectReply::Codegen`] with the generated kit code and
+    /// its strict-mode warnings). The whole wire vocabulary in one call
+    /// taking the wire's own [`InspectV1`] enum — no parallel client-side
+    /// vocabulary to keep in sync, the same rule the m48 sugar set for
+    /// `GestureV1` and the m51/m52 sugars set for [`ClockV1`] /
+    /// [`MockV1`]. The same shapes the TypeScript client has spoken since
+    /// M3 (`inspectOverlay()` / `inspectHighlight()`) and the REPL since
+    /// M4/M8 (`codegen start` / `codegen stop`, `inspect` / `highlight`).
+    /// No wire change: the command rides the `Inspect` domain
+    /// byte-for-byte as §13 blessed it; every [`ClientConn`] impl inherits
+    /// the sugar.
+    ///
+    /// The domain's honesty carries over unchanged: the highlight takes
+    /// the dump-row handle form (a [`Self::resolve`] row — `None` clears
+    /// the outline while the overlay session stays on), a handle the tree
+    /// does not know answers the M8 boundary's typed
+    /// `ErrorCode::UnknownNode`, starting a second recording while one is
+    /// active answers the recorder's typed rejection (single-slot, §13),
+    /// and a stop with nothing recorded answers the same rejection naming
+    /// the cause. Adapters without an overlay surface answer the typed
+    /// `Unsupported` (§6.2 capability row) — surfaced, never degraded.
+    ///
+    /// [`ClockV1`]: crate::schema::ClockV1
+    /// [`MockV1`]: crate::schema::MockV1
+    fn inspect(
+        &mut self,
+        cmd: InspectV1,
+    ) -> impl Future<Output = Result<InspectReply, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Inspect(cmd)).await? {
+                ResponseV1::Pong => Ok(InspectReply::Applied),
+                ResponseV1::Codegen { code, warnings } => {
+                    Ok(InspectReply::Codegen(CodegenOutput { code, warnings }))
+                }
+                other => Err(GwpError::Protocol(format!("Inspect answered by {other:?}"))),
             }
         }
     }
