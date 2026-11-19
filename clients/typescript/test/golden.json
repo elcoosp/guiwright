@@ -140,6 +140,10 @@
     {
       "frame_hex": "0b00000000130006427574746f6e00",
       "name": "describe_all_buttons"
+    },
+    {
+      "frame_hex": "0b00000000140006427574746f6e00",
+      "name": "describe_all_identity_buttons"
     }
   ],
   "responses": [
