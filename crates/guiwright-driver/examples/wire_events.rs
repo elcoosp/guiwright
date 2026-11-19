@@ -90,7 +90,7 @@ fn main() {
             match inner {
                 EventV1::TreeChanged { seq } => println!("event: tree_changed seq={seq}"),
                 EventV1::FramePresented { seq, hash } => {
-                    println!("event: frame_presented seq={seq} hash={hash:#x}")
+                    println!("event: frame_presented seq={seq} hash={hash:#x}");
                 }
                 EventV1::Log { record } => println!("event: log {record}"),
             }
