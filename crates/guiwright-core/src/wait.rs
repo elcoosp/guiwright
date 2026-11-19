@@ -275,8 +275,12 @@ pub enum CountMatch {
 }
 
 impl CountMatch {
-    /// Whether `found` satisfies the comparison.
-    fn holds(self, found: usize) -> bool {
+    /// Whether `found` satisfies the comparison. Published with m59: the
+    /// client seam's count assertion (the kit's `to_have_count` family
+    /// over any door) evaluates against this predicate — the comparison
+    /// is the core's vocabulary, so its predicate is the honest shared
+    /// shape (the m46 derivation-module rule).
+    pub fn holds(self, found: usize) -> bool {
         match self {
             CountMatch::Exact(n) => found == n,
             CountMatch::GreaterThan(n) => found > n,
