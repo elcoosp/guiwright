@@ -99,7 +99,9 @@ fn main() {
         let row = row.expect("a positive state answers its satisfying row");
         let node = match &row.node {
             NodeKeyV1::AccessKit { node, .. } => *node,
-            other => panic!("expected an AccessKit handle, got {other:?}"),
+            other @ NodeKeyV1::Logical { .. } => {
+                panic!("expected an AccessKit handle, got {other:?}")
+            }
         };
         println!(
             "wait visible — satisfied by accesskit#{node} {:?} bounds={:?}",
