@@ -17,6 +17,12 @@ Commits](https://www.conventionalcommits.org).
 - **driver:** The clock reply's guarded millis conversion
 - **proto:** The adapter registry's poisoning recovery
 - **kit:** The mock errors name the seam id and scope
+- **driver:** The bulk-read example's unescaped quotes
+- **driver:** The windows test's copy-pasted match arm
+- **driver:** The gesture test's escaped codegen strings
+- **driver:** The multi-window test's copy-pasted match arm
+- **driver:** The remote session test's arm and quotes
+- **driver:** The ws example's copy-pasted match arm
 
 ### Documentation
 - M8/m9 status, version and adapter-table drift
@@ -160,6 +166,16 @@ Commits](https://www.conventionalcommits.org).
 - **readme:** The m57/m58 rows and the record range
 - **clients:** The log event kind's served-when-tail note
 - **changelog:** The unreleased block's newest-first order
+- **m61:** The repl assertion rows' milestone record
+- **m62:** The seam identity rows' milestone record
+- **readme:** The m61/m62 rows and the records range
+- **architecture:** The m61/m62 rows and the header range
+- **clients:** The ts table's missing count rows
+- **m63:** The ts-client identity-rows milestone record
+- **clients:** The domain table's identity row
+- **readme:** The m63 row and the record range
+- **architecture:** The m63 rows and the header range
+- **changelog:** The unreleased block's m61–m63 entries
 
 ### Features
 - **core:** Typed UnknownNode and ClockPaused errors
@@ -413,6 +429,16 @@ Commits](https://www.conventionalcommits.org).
 - **driver:** The client screenshot row's consumer example
 - **bench:** The client tree-snapshot and bye samples
 - **kit:** The video surface's consumer example
+- **proto:** The identity-assertion kinds
+- **proto:** The seam's identity rows
+- **driver:** The identity rows' consumer example
+- **cli:** The repl's assertion rows
+- **cli:** The assertion rows' consumer example
+- **kit:** The hit-test read's consumer example
+- **kit:** The set-facts read's consumer example
+- **clients:** The identity evaluator's role and name kinds
+- **clients:** The TypeScript expectRole and expectName rows
+- **clients:** The identity assertions' consumer example
 
 ### Miscellaneous Tasks
 - **clients:** Re-vendor the schema for m12 and m13
@@ -507,6 +533,8 @@ Commits](https://www.conventionalcommits.org).
 - **bench:** Bind the tree-snapshot and bye samples
 - **workspace:** The unused-dependency lint carve-out
 - **driver:** The too-many-lines scenario carve-out
+- **clients:** The identity demo's npm script
+- **clients:** The examples dir's type-check include
 
 ### Refactor
 - **proto:** Drop the unused event() helper
@@ -698,6 +726,10 @@ Commits](https://www.conventionalcommits.org).
 - **driver:** The wait tests' named wildcard arms
 - **driver:** The texts/values test's named arms and docs
 - **driver:** The windows tests' named arms and docs
+- **driver:** The identity rows' wire conversations
+- **cli:** The repl's assertion conversations
+- **clients:** The identity evaluator's pins
+- **clients:** The identity leg in the cross-language e2e
 
 ## 0.2.0 - 2026-11-10
 ### Benchmarks
