@@ -14,7 +14,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/codec.test.ts test/wait.test.ts test/expect.test.ts test/client.test.ts",
+    "test": "node --test test/codec.test.ts test/wait.test.ts test/expect.test.ts test/count.test.ts test/client.test.ts",
     "e2e": "node scripts/e2e.ts"
   },
   "keywords": [
