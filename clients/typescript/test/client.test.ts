@@ -1,7 +1,7 @@
 /**
  * Client tests: `GwpClient` against an in-process Node TCP server that
  * speaks the wire by hand (independent of the codec under test where
- * possible). The cross-language e2e (`scripts/e2e.mjs`) covers the same
+ * possible). The cross-language e2e (`scripts/e2e.ts`) covers the same
  * conversation against a real Rust server.
  */
 
