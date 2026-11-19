@@ -320,6 +320,21 @@ fn describe_all_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M64 (the describe-all identity read): the same payload — the
+/// description fact's widening rides its own appended domain (the M39
+/// encodings stay byte-pinned).
+fn describe_all_identity_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "describe_all_identity_buttons",
+        RequestV1::DescribeAllIdentity(DescribeAllV1 {
+            selector: SelectorV1::Role {
+                role: "Button".into(),
+                name: None,
+            },
+        }),
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -330,7 +345,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(resolve_all_requests())
         .chain(hit_test_requests())
         .chain(describe_requests())
-        .chain(describe_all_requests());
+        .chain(describe_all_requests())
+        .chain(describe_all_identity_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
