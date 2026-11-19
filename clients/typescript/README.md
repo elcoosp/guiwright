@@ -69,6 +69,8 @@ The full domain vocabulary on `GwpClient` (each maps 1:1 onto a GWP request):
 | Node facts (M36) | `describe(node, generation)` — one handle's identity facts (role, name, value, bounds) |
 | Set facts (M39) | `describeAll(selector)` — the resolve-all walk's rows carrying the describe facts, one round trip |
 | Bulk reads (M41) | `allTextContents(selector)` — label first (the text locators' source order); `allValues(selector)` — value first (the form's source order); both ride `describeAll`, no protocol change |
+| Client-side wait (M45) | `waitFor(selector, state, timeoutMs?)` — the m42 composition over the TS client (subscribe / `describeAll()` / `nextEvent`), `attached`/`visible`/`hidden`/`stable`, the typed `GwpWaitTimeout` naming state, locator and last evaluation; no protocol change |
+| Content assertions (M54) | `expectText(selector, expected, timeoutMs?)` / `expectValue(selector, expected, timeoutMs?)` — the kit's `toHaveText` / `toHaveValue` over any door: the M41 source orders made waitable on the M45 wake loop, the typed `GwpWaitTimeout` naming locator, expected and found; no protocol change |
 | Liveness / misc | `ping()`, `gesture(...)` (the `mouse`/`keyboard` helper's request), `close()` |
 
 ## Tests
