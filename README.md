@@ -132,7 +132,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | `locator.filter({ hasNot })` / `locator.locator(child)`                       | `.has_not(&selector)` / `.locator(&child)`                                           | the inverted subtree filter + the descendant chain, composing with every other narrowing (M34)          |
 | `click` / `fill` / `hover` / `press` / `check` / `uncheck` / `focus` / `blur` | same names (+ `set_checked`, **`drag_to`**)                                                           | actionability-gated, codegen-recorded (M19); `drag_to` resolves both ends in one window context and rides the M7 pacing synthesis (M33)                                   |
 | `expect().toBeVisible` / `toHaveText` / `toHaveValue`                         | `to_be_visible` / `to_have_text` / `to_have_value`                                   | complete exactly when the condition turns true; the content pair rides any door too — the client seam's rows (m54) and the REPL `assert` rows (m61)                     |
-| `expect().toHaveRole` / `toHaveAccessibleName` / `toHaveAccessibleDescription` | `to_have_role` / `to_have_accessible_name` / `to_have_accessible_description`       | the identity reads: role / label-only / description-only — a value never satisfies a name (M38); role + name ride any door as the client seam's identity rows (m62) and the TS client's `expectRole()` / `expectName()` (m63), the description fact staying kit-side until the M39 domain carries it |
+| `expect().toHaveRole` / `toHaveAccessibleName` / `toHaveAccessibleDescription` | `to_have_role` / `to_have_accessible_name` / `to_have_accessible_description`       | the identity reads: role / label-only / description-only — a value never satisfies a name (M38); role + name ride any door as the client seam's identity rows (m62) and the TS client's `expectRole()` / `expectName()` (m63), and the description rides the appended identity read over any door as the client seam's `expect_description` row (m64) — the M39 encodings staying byte-pinned |
 | `expect().toBeChecked`                                                        | `to_be_checked` / `to_be_unchecked` / **`to_be_checked_mixed`**                      | AccessKit's tri-state; mixed is a Guiwright extension (M20)                                             |
 | `expect().toHaveCount` / `count()`                                            | `to_have_count(n)` / `count()`                                                       | the strict-mode escape hatch — waitable in both directions, `count()` a snapshot read (M22); over any door as the client seam's count rows (m59) and the REPL `assert count` row (m61) |
 | —                                                                             | `to_have_count_greater_than` / `to_have_count_less_than`                             | one-sided count comparators, compose with `.not()` (M25 extension)                                      |
@@ -265,6 +265,9 @@ node's role/name through the describe read since M37),
 what the set carries — M35 + the m40 record),
 `wait attached|visible|hidden|stable <get-args…>` (the client-side wait at the prompt —
 the m42 seam's interactive half, M43),
+`assert text|value|role|name|description|count <get-args…> is <expected>` (the
+waitable assertion rows at the prompt — the m61/m62/m64 seam halves: content, identity,
+count, the typed timeout printed verbatim),
 `events on | off` (pushed tree diffs, frames and an opt-in `tracing` log tail — seq numbers
 expose any gap a slow consumer misses), and video.
 
@@ -335,8 +338,13 @@ ends, the session keeps serving) — and the §8 count family,
 answering the found `usize` — the kit's `to_have_count` family over any
 door, the m54 wake-loop composition riding the M30 resolve-all round
 trip, absence answering found 0, the typed timeout naming the comparison
-and the count the last evaluation found. The raw `request()` covers
-the rest.
+and the count the last evaluation found — and the third identity fact,
+`expect_description(selector, expected, timeout)` (m64), answering the
+full identity row: the kit's `to_have_accessible_description` over any
+door, riding the appended `DescribeAllIdentity` domain (the M39
+encodings staying byte-pinned), the description-only read whose missing
+fact stays pending until the node's restatement. The raw `request()`
+covers the rest.
 
 </details>
 
@@ -468,13 +476,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M61**       | The REPL assertion rows: `assert text\|value <get-args…> is <text>` / `assert count <get-args…> is <N>\|> <N>\|< <N>` (the m54/m59 seam assertions' interactive half, the m43 one-milestone-per-surface pattern, the m59/m60 records' named gap closed) — the `timeout <ms>` budget, the satisfying-row / found-count renders, absence answering found 0, the typed timeout printed verbatim (`have text` / `have count`), the wake-and-re-read on a scripted update, the `events on` filter restored after the subscription window, the read-not-store rule, the consumer demo (`repl_assert_rows`), no wire change, no budget row |
 | **M62**       | The client seam's identity-assertion rows: `expect_role(selector, role, timeout)` / `expect_name(selector, expected, timeout)` (the kit's `to_have_role` / `to_have_accessible_name` vocabulary over any door, the m38 family the m61 REPL rows asked for) — the m54 wake loop with the identity facts the M39 describe-all rows already carry, the role compared exactly (a structural fact), the name read label-only (the value never answers), the missing name staying pending with the missing fact named, the REPL `assert role\|name` rows riding the same grammar, no wire change, no budget row |
 | **M63**       | The TypeScript client's identity assertions: `expectRole(selector, role, timeoutMs)` / `expectName(selector, expected, timeoutMs)` answering the satisfying row — the m62 Rust rows mirrored on the other-language client (the m45/m60 one-milestone-per-surface pattern), the `"role"` / `"name"` kinds riding the same `ExpectTracker` evaluator (the role exact — a structural fact takes no fuzz, the name label-only with the missing fact named), the m54 loop composition over the M39 describe-all round trip, the cross-language e2e leg against the real Rust server (the typed expiry naming `have role`/`have name` and both sides), the consumer demo (`npm run example:identity`), no wire change, no budget row |
+| **M64**       | The describe-all identity read + the description-assertion rows: `DescribeAllIdentity` → `DescribedAllIdentity` (discriminants 20/23, the m62/m63 records' reserved wire change — the M39 encodings staying byte-pinned, the widening its own domain reusing the `DescribeAll` payload) with the rows carrying the accessible description beside the identity four, `ClientConn::expect_description` answering the full identity row on the m54 wake loop (the m38 description-only read — the name and the value never answer, a missing description staying pending until the node's restatement), the REPL `assert description` row riding the same grammar (the m61/m62 kinds usage string + the m37-facts render naming the description), the TS codec/tables/byte pin moving with the published schema, no budget row (the m54/m62 rule) |
+| **M65**       | The TypeScript client's description assertions: `expectDescription(selector, expected, timeoutMs)` answering the satisfying row — the m64 Rust rows mirrored on the other-language client (the m45/m60/m63 one-milestone-per-surface pattern), the `"description"` kind riding the same `ExpectTracker` evaluator over the appended `describeAllIdentity()` round trip (the description-only read, the missing fact named), the cross-language e2e leg against the real Rust server (the typed expiry naming `have description` and both sides), the consumer demo (`npm run example:description`), no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m63-ts-client-identity-rows.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m65-ts-description-assertions.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
