@@ -469,9 +469,8 @@ impl<A: FrameworkAdapter> Session<A> {
     /// or the OS temp dir) — the remote-mode default, since the client
     /// learns the finalized path from the `VideoFile` reply (§7).
     pub fn video_start(&mut self, fps: u32) -> Result<(), CoreError> {
-        let dir = std::env::var_os("GUIWRIGHT_VIDEO_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+        let dir =
+            std::env::var_os("GUIWRIGHT_VIDEO_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
         self.video_start_in(&dir, fps)
     }
 
@@ -592,7 +591,7 @@ impl<A: FrameworkAdapter> Session<A> {
             };
             nodes.push(snapshot_row(&window.root, &root));
             self.tree.descendants(&window.root, &mut |key, node| {
-                nodes.push(snapshot_row(&key, node))
+                nodes.push(snapshot_row(&key, node));
             });
         }
         let node_count = nodes.len();
@@ -814,9 +813,9 @@ impl<A: FrameworkAdapter> Session<A> {
         let facts = guiwright_inspect::codegen::NodeFacts {
             key: *key,
             role: node.as_ref().map(|n| format!("{:?}", n.role())),
-            name: node.as_ref().and_then(|n| n.label()),
-            label: node.as_ref().and_then(|n| n.label()),
-            value: node.as_ref().and_then(|n| n.value()),
+            name: node.as_ref().and_then(accesskit_consumer::NodeRef::label),
+            label: node.as_ref().and_then(accesskit_consumer::NodeRef::label),
+            value: node.as_ref().and_then(accesskit_consumer::NodeRef::value),
             test_id: self.tree.test_id_of(key).map(str::to_string),
             bounds: None,
         };
@@ -827,7 +826,7 @@ impl<A: FrameworkAdapter> Session<A> {
     fn codegen_record(
         &mut self,
         kind: &str,
-        argument: Option<String>,
+        argument: Option<&str>,
         facts: &guiwright_inspect::codegen::NodeFacts,
     ) {
         let Some(mut recorder) = self.codegen.take() else {
@@ -838,7 +837,7 @@ impl<A: FrameworkAdapter> Session<A> {
         // per-connection state the recorder does not model, so the line
         // is emitted unscoped — the kit's window-handle surface records
         // its own scoped lines at the App tap.
-        if let Err(err) = recorder.record(kind, argument.as_deref(), facts, &self.tree, None) {
+        if let Err(err) = recorder.record(kind, argument, facts, &self.tree, None) {
             tracing::debug!(%err, action = %kind, "codegen: no stable selector");
         }
         self.codegen = Some(recorder);
@@ -1039,7 +1038,7 @@ impl<A: FrameworkAdapter> Session<A> {
     /// an honest no-op that still pumps.
     pub fn send_input(
         &mut self,
-        events: Vec<InputEvent>,
+        events: &[InputEvent],
         window: Option<&str>,
     ) -> Result<u64, CoreError> {
         let target = self.input_target(window)?;
@@ -1067,11 +1066,11 @@ impl<A: FrameworkAdapter> Session<A> {
     /// [`Session::send_input`], one rendezvous pump applies it.
     pub fn perform_gesture(
         &mut self,
-        gesture: Gesture,
+        gesture: &Gesture,
         window: Option<&str>,
     ) -> Result<GestureOutcome, CoreError> {
         let pacing = self.adapter.gesture_pacing();
-        let events = synthesize(&gesture, &pacing);
+        let events = synthesize(gesture, &pacing);
         if events.is_empty() {
             return Err(CoreError::Other(
                 "gesture synthesizes no events (click count 0?)".into(),
@@ -1079,21 +1078,21 @@ impl<A: FrameworkAdapter> Session<A> {
         }
         let target = self.input_target(window)?;
         let count = events.len();
-        self.inject(events, &target)?;
+        self.inject(&events, &target)?;
         self.pump();
         // §13 over §9: the applied gesture records as kit code (the
         // promise the semantic-action path carried since M0 — raw input is
         // recorded in the gesture milestone). Recorded only after the
         // batch actually applied; a failed gesture records nothing.
         if self.codegen.is_some() {
-            let (surface, call, warning) = codegen_call(&gesture);
+            let (surface, call, warning) = codegen_call(gesture);
             let line = codegen_line(surface, &call, window);
             self.codegen_input_line(line, warning);
         }
         Ok(GestureOutcome {
             applied_at_frame: self.frame_seq,
             events: count,
-            detail: gesture_detail(&gesture, count),
+            detail: gesture_detail(gesture, count),
         })
     }
 
@@ -1113,8 +1112,8 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Forward a synthesized/raw batch through the adapter's window-aware
     /// hook (§9 fidelity rule: synthetic events enter at the same choke
     /// point as OS events).
-    fn inject(&mut self, events: Vec<InputEvent>, target: &str) -> Result<(), CoreError> {
-        for ev in &events {
+    fn inject(&mut self, events: &[InputEvent], target: &str) -> Result<(), CoreError> {
+        for ev in events {
             self.adapter
                 .input_window(target, ev.clone())
                 .map_err(adapter_error)?;
@@ -1165,9 +1164,9 @@ impl<A: FrameworkAdapter> Session<A> {
                 // holds instead (the m24 satisfied-state accessor).
                 let mut header = operation.unwrap_or_else(|| waiter.describe());
                 if let Some(stuck) = waiter.stuck_on() {
-                    header.push_str(&format!(" ({stuck})"));
+                    header = format!("{header} ({stuck})");
                 } else if let Some(held) = waiter.held_on() {
-                    header.push_str(&format!(" (still {held})"));
+                    header = format!("{header} (still {held})");
                 }
                 return Err(CoreError::Timeout {
                     operation: header,
@@ -1357,8 +1356,8 @@ impl<A: FrameworkAdapter> Session<A> {
             (SemAction::Hover, Some(rect)) => {
                 self.adapter
                     .input(InputEvent::PointerMove {
-                        x: (rect.x0 + rect.x1) / 2.0,
-                        y: (rect.y0 + rect.y1) / 2.0,
+                        x: f64::midpoint(rect.x0, rect.x1),
+                        y: f64::midpoint(rect.y0, rect.y1),
                     })
                     .map_err(adapter_error)?;
                 ActionOutcome {
@@ -1417,7 +1416,7 @@ impl<A: FrameworkAdapter> Session<A> {
         // applied at a frame before the reply is sent.
         self.pump();
         if let Some((kind, argument, facts)) = codegen_pending {
-            self.codegen_record(kind, argument, &facts);
+            self.codegen_record(kind, argument.as_deref(), &facts);
         }
         Ok(outcome)
     }
@@ -1713,7 +1712,7 @@ pub struct ExpectBuilder<'s, A: FrameworkAdapter> {
     negated: bool,
 }
 
-impl<'s, A: FrameworkAdapter> ExpectBuilder<'s, A> {
+impl<A: FrameworkAdapter> ExpectBuilder<'_, A> {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -2417,7 +2416,7 @@ mod tests {
 
     /// Level-2 (M1): an iced-shaped adapter synthesizes an AccessKit
     /// update through `logical_snapshot`; selectors, actionability and
-    /// actions must run unchanged, and the adapter-minted NodeId routes
+    /// actions must run unchanged, and the adapter-minted `NodeId` routes
     /// back to the adapter (§6.1).
     #[test]
     fn logical_snapshot_resolves_and_routes_actions() {
@@ -2527,9 +2526,7 @@ mod tests {
         let fixture = Fixture::buttons();
         let mut session = settled_session(&fixture);
         let report = session
-            .clock(crate::adapter::ClockCmd::SetTime(Duration::from_millis(
-                120_000,
-            )))
+            .clock(crate::adapter::ClockCmd::SetTime(Duration::from_secs(120)))
             .expect("set time");
         assert_eq!(report.state.virtual_time, Some(Duration::from_secs(120)));
         let probed = session
