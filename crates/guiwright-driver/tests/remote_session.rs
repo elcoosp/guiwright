@@ -246,7 +246,7 @@ async fn resolve_auto_waits_over_the_wire() {
             };
             assert_eq!(id, 8, "the late Export button");
         }
-        other @ NodeKeyV1::Logical { .. } => panic!("expected Resolved, got {other:?}"),
+        other => panic!("expected Resolved, got {other:?}"),
     }
 
     handle.shutdown();
@@ -630,7 +630,7 @@ async fn codegen_records_actions_over_the_wire() {
         .unwrap();
     match resp {
         ResponseV1::Codegen { code, warnings } => {
-            assert_eq!(code, "app.get_by_role(Role::Button, "Save").click();\n");
+            assert_eq!(code, "app.get_by_role(Role::Button, \"Save\").click();\n");
             assert!(warnings.is_empty(), "{warnings:?}");
         }
         other => panic!("expected Codegen, got {other:?}"),
