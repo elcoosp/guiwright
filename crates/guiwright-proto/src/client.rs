@@ -26,12 +26,12 @@ use guiwright_core::Selector;
 
 use crate::GwpError;
 use crate::count::{CountEval, CountTracker};
-use crate::expect::{ExpectEval, ExpectKind, ExpectTracker};
+use crate::expect::{ExpectEval, ExpectIdentityEval, ExpectKind, ExpectTracker};
 use crate::schema::{
-    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1,
-    GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1,
-    ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1,
-    VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1,
+    EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1,
+    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
+    SnapshotV1, TextMatchV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 use guiwright_core::wait::CountMatch;
@@ -408,6 +408,41 @@ pub trait ClientConn: Send + 'static {
                 ResponseV1::DescribedAll { rows } => Ok(rows),
                 other => Err(GwpError::Protocol(format!(
                     "DescribeAll answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// The describe-all identity read over the wire (m64 — the m62/m63
+    /// records' reserved wire change, the m63 record's "the wire design
+    /// is the next milestone's first decision"): the same walk as
+    /// [`Self::describe_all`], the rows carrying the description fact
+    /// beside the identity four — the fact the M38 identity family's
+    /// third assertion reads. One round trip; the read costs what
+    /// [`Self::describe_all`] costs.
+    ///
+    /// **Appended, not reshaped** (the append-only wire discipline): the
+    /// M39 encodings stay byte-pinned, the widening lands as its own
+    /// `DescribeAllIdentity`/`DescribedAllIdentity` domain reusing the
+    /// `DescribeAll` payload — a driver older than m64 cannot decode the
+    /// appended request at all (the append-only cost every appended
+    /// domain has carried since M3), so there is no fallback derivation
+    /// (the m41 fail-fast rule). Snapshot semantics, unchanged from the
+    /// `describe_all` family: no strict mode, no waiting, an empty set
+    /// answers an empty list, and the connection's window scope narrows
+    /// the read exactly like [`Self::describe_all`].
+    fn describe_all_identity(
+        &mut self,
+        selector: SelectorV1,
+    ) -> impl Future<Output = Result<Vec<DescribedIdentityV1>, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::DescribeAllIdentity(DescribeAllV1 { selector }))
+                .await?
+            {
+                ResponseV1::DescribedAllIdentity { rows } => Ok(rows),
+                other => Err(GwpError::Protocol(format!(
+                    "DescribeAllIdentity answered by {other:?}"
                 ))),
             }
         }
@@ -1218,6 +1253,85 @@ pub trait ClientConn: Send + 'static {
         timeout: Duration,
     ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
         self.expect_content(selector, ExpectKind::Name(expected), timeout)
+    }
+
+    /// The identity assertion, description form (m64 — the kit's
+    /// `expect(locator).to_have_accessible_description(...)` over any
+    /// door, M38): the third identity fact, the one the M39 rows left
+    /// out — the description-only read (the name and the value never
+    /// answer), a node with no description staying pending (waitable —
+    /// the m38 rule: descriptions arrive with the node's restatement),
+    /// the timeout naming the missing fact. The same composition as
+    /// [`Self::expect_text`] over the appended m64 identity read: the
+    /// m42 wake loop, the set's head pinned, the subscription window
+    /// owned and dropped. Every [`ClientConn`] impl inherits it.
+    ///
+    /// **Answers.** The satisfied assertion hands back the full identity
+    /// row — the description fact beside the identity four, directly
+    /// usable as a `RequestV1::Action` handle (the dump-row rule, M11).
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is (a driver older than m64 cannot decode the
+    /// appended request — the append-only cost); a spent budget answers
+    /// [`GwpError::WaitTimeout`] naming `have description` and the
+    /// description the last evaluation saw.
+    fn expect_description(
+        &mut self,
+        selector: SelectorV1,
+        expected: TextMatchV1,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedIdentityV1, GwpError>> + Send {
+        self.expect_identity_content(selector, ExpectKind::Description(expected), timeout)
+    }
+
+    /// The shared identity-row assertion composition (m64): the
+    /// [`Self::expect_content`] loop shape over the appended
+    /// `describe_all_identity` read — one entry read, event-driven
+    /// re-reads, the subscription window owned and dropped, the typed
+    /// timeout built by [`expire_expect`]. The description kind reads
+    /// the widening fact; the wake/expiry helpers are the m54 loop's,
+    /// shared — no second copy of the composition's edges. Tree and
+    /// frame wakes both re-decide (descriptions have no `Stable`-like
+    /// frame discipline); `Log` records are never wakes.
+    fn expect_identity_content(
+        &mut self,
+        selector: SelectorV1,
+        kind: ExpectKind,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedIdentityV1, GwpError>> + Send {
+        async move {
+            // The locator string for the timeout line (the kit's render
+            // vocabulary — one conversion, not one per re-read).
+            let rendered = Selector::from(selector.clone()).render();
+
+            // The assertion owns the event filter for its duration, the
+            // wait's rule (a driver that rejects Log-less subscriptions
+            // answers the same `Subscribed` ack every door speaks).
+            self.subscribe(&[EventKindV1::TreeChanged, EventKindV1::FramePresented])
+                .await?;
+
+            let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);
+            let tracker = ExpectTracker::new(kind.clone());
+            loop {
+                let rows = self.describe_all_identity(selector.clone()).await?;
+                match tracker.evaluate_identity(&rows) {
+                    ExpectIdentityEval::Satisfied(row) => {
+                        self.unsubscribe().await?;
+                        return Ok(row);
+                    }
+                    ExpectIdentityEval::Pending { reason } => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(expire_expect(self, kind, rendered, timeout, reason).await);
+                        }
+                        if next_wake(self, deadline).await?.is_none() {
+                            return Err(expire_expect(self, kind, rendered, timeout, reason).await);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The shared content-assertion composition (m54): the m42 wait's
