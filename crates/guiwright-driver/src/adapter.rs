@@ -236,7 +236,7 @@ pub struct FrameRef {
 /// actionability and `expect` then run unchanged (§4.6 "adds role
 /// semantics via a contributed widget-kind registry"). The adapter mints
 /// the `NodeId`s, so [`FrameworkAdapter::act`] receives exactly those ids
-/// back (§6.1 NodeKey normalization). Level-1 adapters return `None` from
+/// back (§6.1 `NodeKey` normalization). Level-1 adapters return `None` from
 /// `logical_snapshot`.
 #[derive(Clone, Debug)]
 pub struct LogicalTreeDiff {
