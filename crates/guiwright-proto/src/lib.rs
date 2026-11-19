@@ -16,6 +16,10 @@
 //! * [`bulk`] — the bulk-content derivations (m46): the kit's m29/m31
 //!   source orders over the describe-all rows, behind
 //!   [`ClientConn::all_text_contents`] / [`ClientConn::all_values`]
+//! * [`expect`] — the client-side content assertions (m54): the kit's
+//!   `to_have_text` / `to_have_value` rows over any door, behind
+//!   [`ClientConn::expect_text`] / [`ClientConn::expect_value`], no wire
+//!   change
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -29,6 +33,7 @@ pub mod client;
 pub mod conn;
 pub mod convert;
 pub mod duplex;
+pub mod expect;
 pub mod framing;
 pub mod schema;
 pub mod schemadoc;
@@ -40,17 +45,17 @@ pub mod ws;
 pub use client::ClientConn;
 pub use conn::Handler;
 pub use duplex::Client as DuplexClient;
+pub use expect::ExpectKind;
 pub use schema::{
     AdapterInfoV1, CapsV1, ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, InputEventV1,
     NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1,
     SemActionV1, TextMatchV1, VIDEO_DEFAULT_FPS, VideoOptsV1, VideoV1,
 };
 pub use tcp::Client as TcpClient;
+use thiserror::Error;
 pub use uds::Client;
 pub use wait::WaitState;
 pub use ws::WsClient;
-
-use thiserror::Error;
 
 /// Transport and protocol errors.
 #[derive(Debug, Error)]
