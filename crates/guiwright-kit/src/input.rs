@@ -70,7 +70,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
         y: f64,
         button: PointerButton,
     ) -> Result<GestureOutcome, KitError> {
-        self.gesture(Gesture::Click {
+        self.gesture(&Gesture::Click {
             x,
             y,
             button,
@@ -81,7 +81,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
     /// `mouse.dblclick(x, y)` — two presses at the same point
     /// (Playwright's clickCount 2).
     pub fn dblclick(&mut self, x: f64, y: f64) -> Result<GestureOutcome, KitError> {
-        self.gesture(Gesture::Click {
+        self.gesture(&Gesture::Click {
             x,
             y,
             button: PointerButton::Primary,
@@ -97,7 +97,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
         y: f64,
         button: PointerButton,
     ) -> Result<GestureOutcome, KitError> {
-        self.gesture(Gesture::Click {
+        self.gesture(&Gesture::Click {
             x,
             y,
             button,
@@ -126,7 +126,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
         to_y: f64,
         button: PointerButton,
     ) -> Result<GestureOutcome, KitError> {
-        self.gesture(Gesture::Drag {
+        self.gesture(&Gesture::Drag {
             from_x,
             from_y,
             to_x,
@@ -137,7 +137,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
 
     /// `mouse.wheel(dx, dy)` — wheel scroll by logical-px deltas.
     pub fn wheel(&mut self, dx: f64, dy: f64) -> Result<GestureOutcome, KitError> {
-        self.gesture(Gesture::Wheel { dx, dy })
+        self.gesture(&Gesture::Wheel { dx, dy })
     }
 
     /// `mouse.move(x, y)` (raw primitive): one `PointerMove` batch. The
@@ -169,9 +169,9 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
     /// batch, the outcome reports the applied frame and the detail line.
     /// Applied gestures record as kit code while a codegen recording runs
     /// (§13 over §9) — only after the batch actually applied.
-    fn gesture(&mut self, gesture: Gesture) -> Result<GestureOutcome, KitError> {
+    fn gesture(&mut self, gesture: &Gesture) -> Result<GestureOutcome, KitError> {
         let rendered = if self.app.codegen_active() {
-            Some(codegen_call(&gesture))
+            Some(codegen_call(gesture))
         } else {
             None
         };
@@ -196,10 +196,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> MouseHandle<'a, A> {
         } else {
             None
         };
-        let frame = self
-            .app
-            .session
-            .send_input(vec![ev], self.window.as_deref())?;
+        let frame = self.app.session.send_input(&[ev], self.window.as_deref())?;
         if let Some((surface, call)) = rendered {
             let line = codegen_line(surface, &call, self.window.as_deref());
             self.app.record_input_code(line, None);
@@ -262,7 +259,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> KeyboardHandle<'a, A> {
         let outcome = self
             .app
             .session
-            .perform_gesture(gesture, self.window.as_deref())?;
+            .perform_gesture(&gesture, self.window.as_deref())?;
         self.app.record_event("keyboard", outcome.detail.clone());
         if let Some((surface, call, warning)) = rendered {
             let line = codegen_line(surface, &call, self.window.as_deref());
@@ -284,7 +281,7 @@ impl<'a, A: guiwright_driver::FrameworkAdapter> KeyboardHandle<'a, A> {
         let outcome = self
             .app
             .session
-            .perform_gesture(gesture, self.window.as_deref())?;
+            .perform_gesture(&gesture, self.window.as_deref())?;
         self.app.record_event("keyboard", outcome.detail.clone());
         if let Some((surface, call, warning)) = rendered {
             let line = codegen_line(surface, &call, self.window.as_deref());
