@@ -32,7 +32,7 @@
 //! ```ignore
 //! // floem (upstream): src/window/handle.rs, PaintState::new
 //! if headless {
-//!     PaintState::TinySkia(guiwright_paint::PaintState::new(w, h)?)
+//!     PaintState::TinySkia(guiwright_adapter_floem::paint::PaintState::new(w, h)?)
 //! } else { /* existing GPU path */ }
 //! // present: translate the scene into PaintOps (same dispatch the
 //! // inspector `Capture` path uses, `Renderer::finish()`)
