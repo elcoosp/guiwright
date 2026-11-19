@@ -529,3 +529,21 @@ p95_us = 250
 notes = "the m56 client seam's §9 raw-injection half as typed sugar: one ClientConn::input call over the embedded door — a two-move pointer batch riding the Input domain's rendezvous pump (inject through the target window's real pipeline, one frame rendezvous, §15.4) and the InputQueued reply marshalled into the InputReceipt carrier; the floor the TS client's input(events) helper has carried since M7 and the un-synthesized escape hatch the m48 gesture row's contract names, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
 m0_measurable = true
 sample = "client_input"
+
+[[budget]]
+id = "client_tree_snapshot"
+name = "Client seam tree-snapshot summary read, in-process door (pump + count)"
+p50_us = 50
+p95_us = 250
+notes = "the m57 client seam's §7 summary read as typed sugar: one ClientConn::tree_snapshot call over the embedded door — the M0-era whole-tree answer (pump once, report the tree generation and the node count) marshalled into the TreeSnapshotSummary carrier; the floor the TS client's treeSnapshot() helper has carried since its M3 landing, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_tree_snapshot"
+
+[[budget]]
+id = "client_bye"
+name = "Client seam bye round trip, in-process door (farewell + conversation close)"
+p50_us = 50
+p95_us = 250
+notes = "the m58 client seam's §7 lifecycle close as typed sugar: one ClientConn::bye call over the embedded door — the Byes reply answered, then run_connection returns and the conversation ends (each measured iteration opens a fresh connection; the open is setup, the farewell round trip is the measured operation); the floor the TS client's close() has carried since its M3 landing, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_bye"
