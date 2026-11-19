@@ -2079,3 +2079,128 @@ pub fn client_text_contents() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+// --- Client seam gesture sample (the §9 input half on the seam, m48) ---------
+
+/// §15.1 `client_gesture`: one `ClientConn::gesture` click over the
+/// in-process door (m48 — the §9 input half as typed seam sugar): the
+/// driver-side synthesis from the adapter's pacing table (the
+/// `gesture_synthesis` micro-path) plus the batch injection through the
+/// one-rendezvous pump (the `wire_action_click` round-trip shape, minus
+/// the actionability gate) — the floor the TS client's `gesture()` and
+/// the REPL's `mouse`/`key`/`text` rows have carried since M3/M7, now on
+/// the Rust seam; a client-side sugar over an existing domain, no wire
+/// change.
+pub fn client_gesture() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::{GestureV1, PointerButtonV1};
+    use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let click = GestureV1::Click {
+            x: 76.0,
+            y: 32.0,
+            button: PointerButtonV1::Primary,
+            count: 1,
+        };
+        // Warm-up: one click pins the receipt shape once (the synthesis
+        // summary the REPL's gesture row renders).
+        let warm = client.gesture(click.clone()).await.expect("warm gesture");
+        assert!(
+            warm.detail.contains("clicked at"),
+            "the synthesis summary: {}",
+            warm.detail
+        );
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let receipt = client.gesture(click.clone()).await.expect("bench gesture");
+            assert!(receipt.frame_seq > 0, "the batch applied inside a frame");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- Client seam tree-dump sample (the M11/M13 half on the seam, m49) --------
+
+/// §15.1 `client_tree_dump`: one `ClientConn::tree_dump_under` read over
+/// the in-process door (m49 — the m13 record's dump-row half on the
+/// seam): the strict resolve with the driver's auto-wait (the
+/// `resolve_cached_index` index answer) plus the depth-first subtree walk
+/// and row build (the `tree_dump_filtered` shape on the four-button
+/// fixture) — the floor the TS client's `treeDumpUnder()` and the REPL's
+/// `snapshot under` row have carried since M3/M13, now on the Rust seam;
+/// a client-side sugar over an existing domain, no wire change.
+pub fn client_tree_dump() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::{SelectorV1, TextMatchV1};
+    use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let save = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+        // Warm-up: one subtree dump pins the carrier shape once (a leaf
+        // locator answers one row, itself).
+        let warm = client
+            .tree_dump_under(save.clone(), 2000)
+            .await
+            .expect("warm subtree dump");
+        assert_eq!(warm.nodes.len(), 1, "a leaf locator dumps itself");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let dump = client
+                .tree_dump_under(save.clone(), 2000)
+                .await
+                .expect("bench subtree dump");
+            assert_eq!(dump.nodes[0].name.as_deref(), Some("Save"));
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
