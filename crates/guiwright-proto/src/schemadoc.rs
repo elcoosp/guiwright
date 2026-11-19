@@ -37,7 +37,9 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// (M30, §8.2's set read), `HitTest` follows `ResolveAll`
 /// (M32, the hit-test read) and `Describe` follows `HitTest`
 /// (M36, the node-describe read), `DescribeAll` follows `Describe`
-/// (M39, the describe-all read); the pinning tests enforce the order.
+/// (M39, the describe-all read), `DescribeAllIdentity` follows
+/// `DescribeAll` (M64, the description fact's widening); the pinning
+/// tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -87,6 +89,11 @@ const REQUESTS: &[Variant] = &[
         "DescribeAll",
         "{ selector: SelectorV1 } — the §8.2 set read carrying facts (M39, the m37 record's standing gap): the resolve-all walk's rows plus the Described identity facts, one round trip instead of one Describe per row → DescribedAll; the connection's window scope narrows the walk exactly like ResolveAll (M30)",
     ),
+    v(
+        20,
+        "DescribeAllIdentity",
+        "{ selector: SelectorV1 } — the same walk carrying the description fact beside the identity four (M64, the m62/m63 records' reserved wire change: the M38 identity family's third assertion rides the door) → DescribedAllIdentity; the M39 encodings stay byte-pinned, the widening is its own domain reusing the DescribeAll payload",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
@@ -94,8 +101,9 @@ const REQUESTS: &[Variant] = &[
 /// `GestureDone` reply at 14, the M10 `Shot` reply at 15, the M11
 /// `TreeDump` reply at 16, the M12 event replies (`Event`,
 /// `Subscribed`) at 17–18, the M30 `ResolvedAll` reply at 19, the
-/// M32 `HitTest` reply at 20, the M36 `Described` reply at 21 and the
-/// M39 `DescribedAll` reply at 22.
+/// M32 `HitTest` reply at 20, the M36 `Described` reply at 21, the
+/// M39 `DescribedAll` reply at 22 and the M64 `DescribedAllIdentity`
+/// reply at 23.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -175,6 +183,11 @@ const RESPONSES: &[Variant] = &[
         22,
         "DescribedAll",
         "{ rows: seq<DescribedV1> } — the set read carrying facts (the resolve-all walk's rows plus the Described identity facts, one round trip instead of N, M39); document order, an empty set answers with an empty list",
+    ),
+    v(
+        23,
+        "DescribedAllIdentity",
+        "{ rows: seq<DescribedIdentityV1 { node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string> }> } — the same walk's rows carrying the description fact beside the identity four (M64); document order, an empty set answers with an empty list",
     ),
 ];
 
