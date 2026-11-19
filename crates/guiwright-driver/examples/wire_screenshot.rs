@@ -21,10 +21,10 @@ use guiwright_proto::schema::{RequestV1, ResponseV1, ScreenshotV1, SelectorV1, T
 use guiwright_proto::uds::Client;
 
 fn main() {
-    let out_dir = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("guiwright-wire-shots"));
+    let out_dir = std::env::args().nth(1).map_or_else(
+        || std::env::temp_dir().join("guiwright-wire-shots"),
+        PathBuf::from,
+    );
     std::fs::create_dir_all(&out_dir).expect("output dir");
 
     // App side: serve the buttons fixture with a scripted render surface
