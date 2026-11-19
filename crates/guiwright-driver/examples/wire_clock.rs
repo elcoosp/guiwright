@@ -26,10 +26,7 @@ fn render(state: &ResponseV1) -> String {
             virtual_time_ms,
             paused,
             steps,
-        } => format!(
-            "virtual {:?} paused {paused} steps {steps}",
-            virtual_time_ms
-        ),
+        } => format!("virtual {virtual_time_ms:?} paused {paused} steps {steps}"),
         other => format!("unexpected reply: {other:?}"),
     }
 }
