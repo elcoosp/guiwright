@@ -33,9 +33,11 @@ use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
 use guiwright_proto::ws;
 
+use crate::adapter::InputEvent;
 use crate::adapter::{AdapterMeta, FrameworkAdapter, SemAction};
 use crate::clock::FRAME_STEP;
 use crate::events::{EventHub, Subscriber};
+use crate::gesture::Gesture;
 use crate::log_tail::{LOG_TAIL_CAPACITY, LogTail, LogTapLayer};
 use crate::session::Session;
 use guiwright_core::{CoreError, NodeKey, Selector};
@@ -276,7 +278,12 @@ where
 {
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
-    GwpServerHandle::start(listener, Endpoint::Uds(path), make_adapter, options)
+    Ok(GwpServerHandle::start(
+        listener,
+        Endpoint::Uds(path),
+        make_adapter,
+        options,
+    ))
 }
 
 impl GwpServerHandle {
@@ -353,7 +360,12 @@ impl GwpServerHandle {
         listener.set_nonblocking(true)?;
         let bound = listener.local_addr()?;
         let listener = TcpListener::from_std(listener)?;
-        GwpServerHandle::start(listener, Endpoint::Tcp(bound), make_adapter, options)
+        Ok(GwpServerHandle::start(
+            listener,
+            Endpoint::Tcp(bound),
+            make_adapter,
+            options,
+        ))
     }
 
     /// Spawn the remote-mode stack over **WebSocket** (§7's third door,
@@ -395,12 +407,12 @@ impl GwpServerHandle {
         listener.set_nonblocking(true)?;
         let bound = listener.local_addr()?;
         let listener = TcpListener::from_std(listener)?;
-        GwpServerHandle::start(
+        Ok(GwpServerHandle::start(
             WsListener(listener),
             Endpoint::Ws(bound),
             make_adapter,
             options,
-        )
+        ))
     }
 
     /// Spawn the remote-mode stack over the **in-process door** (§7's
@@ -436,7 +448,7 @@ impl GwpServerHandle {
         F: FnOnce() -> A + Send + 'static,
     {
         let (listener, connect) = guiwright_proto::duplex::channel();
-        let handle = GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options)?;
+        let handle = GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options);
         Ok((handle, connect))
     }
 
@@ -456,7 +468,12 @@ impl GwpServerHandle {
         F: FnOnce() -> A + Send + 'static,
         L: Transport,
     {
-        GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options)
+        Ok(GwpServerHandle::start(
+            listener,
+            Endpoint::InProcess,
+            make_adapter,
+            options,
+        ))
     }
 
     /// Shared stack bring-up: session thread + accept loop bridged over
@@ -466,7 +483,7 @@ impl GwpServerHandle {
         endpoint: Endpoint,
         make_adapter: F,
         options: ServerOptions,
-    ) -> Result<GwpServerHandle, GwpError>
+    ) -> GwpServerHandle
     where
         A: FrameworkAdapter,
         F: FnOnce() -> A + Send + 'static,
@@ -485,12 +502,12 @@ impl GwpServerHandle {
                 .await;
         });
 
-        Ok(GwpServerHandle {
+        GwpServerHandle {
             cmd_tx,
             serve_task,
             session_thread,
             endpoint,
-        })
+        }
     }
 }
 
@@ -654,9 +671,9 @@ async fn session_loop<A: FrameworkAdapter>(
         // Idle tick: armed only while subscribers exist (§7, M12).
         let tick = async {
             if hub.is_empty() {
-                std::future::pending::<()>().await
+                std::future::pending::<()>().await;
             } else {
-                tokio::time::sleep(FRAME_STEP).await
+                tokio::time::sleep(FRAME_STEP).await;
             }
         };
         tokio::select! {
@@ -672,7 +689,7 @@ async fn session_loop<A: FrameworkAdapter>(
                         let response = handle_request(
                             &mut session,
                             request,
-                            window,
+                            window.as_deref(),
                             &mut hub,
                             events,
                             tail.is_some(),
@@ -693,7 +710,7 @@ async fn session_loop<A: FrameworkAdapter>(
                     }
                 }
             }
-            _ = tick => {
+            () = tick => {
                 // Frame cadence with subscribers: the app advances, and
                 // queued diffs/frames become events without any request.
                 session.pump();
@@ -772,7 +789,7 @@ fn publish_if_advanced<A: FrameworkAdapter>(
 fn handle_request<A: FrameworkAdapter>(
     session: &mut Session<A>,
     request: RequestV1,
-    window: Option<String>,
+    window: Option<&str>,
     hub: &mut EventHub,
     events: Option<(u64, mpsc::Sender<GwpEvent>)>,
     tail_enabled: bool,
@@ -810,150 +827,14 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Resolve {
             selector,
             timeout_ms,
-        } => {
-            // Window scope (§16 v0.4): the connection's active target
-            // narrows the resolution surface. Unknown/closed targets fail
-            // before any waiting happens.
-            let scope = match window.as_deref() {
-                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
-                    Ok(scope) => scope,
-                    Err(err) => return error_response(err),
-                },
-                _ => None,
-            };
-            session.set_resolve_scope(scope);
-            let result = resolve_result(session, selector, timeout_ms);
-            session.clear_resolve_scope();
-            match result {
-                Ok(Some(resolved)) => ResponseV1::Resolved {
-                    node: NodeKeyV1::from(resolved.key),
-                    generation: resolved.generation,
-                    rect: resolved.bounds.map(rect_to_array),
-                },
-                Ok(None) => ResponseV1::Error {
-                    code: ErrorCode::Internal,
-                    message: "resolve satisfied by absence".into(),
-                },
-                Err(err) => error_response(err),
-            }
-        }
-        RequestV1::ResolveAll { selector } => {
-            // The §8.2 set read over the wire (M30): the same walk the
-            // kit's `count()`/`all()` run — non-strict, never waiting, so
-            // an empty set answers with an empty list (the read is total,
-            // never an error). Window scope rides the same discipline the
-            // Resolve arm runs.
-            let scope = match window.as_deref() {
-                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
-                    Ok(scope) => scope,
-                    Err(err) => return error_response(err),
-                },
-                _ => None,
-            };
-            session.set_resolve_scope(scope);
-            let result = session.resolve_all(&Selector::from(selector));
-            session.clear_resolve_scope();
-            match result {
-                Ok(matches) => ResponseV1::ResolvedAll {
-                    matches: matches
-                        .into_iter()
-                        .map(|resolved| ResolvedMatchV1 {
-                            node: NodeKeyV1::from(resolved.key),
-                            generation: resolved.generation,
-                            rect: resolved.bounds.map(rect_to_array),
-                        })
-                        .collect(),
-                },
-                Err(err) => error_response(err),
-            }
-        }
-        RequestV1::HitTest { x, y } => {
-            // The hit-test read over the wire (M32): the §8.3 mechanism as
-            // a debugging read — which node occupies the point (physical
-            // px, the tree's bounds space). The connection's window scope
-            // narrows the answer (the §16 v0.4 scoping rule — a hit
-            // outside the aimed window reads None, the same discipline the
-            // resolve paths run); empty space answers None, never an error
-            // (the read is total).
-            let scope = match window.as_deref() {
-                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
-                    Ok(scope) => scope,
-                    Err(err) => return error_response(err),
-                },
-                _ => None,
-            };
-            session.set_resolve_scope(scope);
-            let result = session.hit_test(x, y);
-            session.clear_resolve_scope();
-            match result {
-                Ok(hit) => ResponseV1::HitTest {
-                    hit: hit.map(|resolved| ResolvedMatchV1 {
-                        node: NodeKeyV1::from(resolved.key),
-                        generation: resolved.generation,
-                        rect: resolved.bounds.map(rect_to_array),
-                    }),
-                },
-                Err(err) => error_response(err),
-            }
-        }
+        } => resolve_response(session, selector, timeout_ms, window),
+        RequestV1::ResolveAll { selector } => resolve_all_response(session, selector, window),
+        RequestV1::HitTest { x, y } => hit_test_response(session, x, y, window),
         RequestV1::Describe(DescribeV1 { node, generation }) => {
-            // The node-describe read over the wire (M36 — the m32
-            // record's standing gap): one node's identity facts for a
-            // handle the client holds (a resolve/hit/dump row, the
-            // dump-row rule). Handle-addressed, so no window scope
-            // applies — the Action boundary, not the resolve scoping
-            // (a point is ambiguous, a selector the tree answers; the
-            // handle IS the node). The generation guard is the Action
-            // arm's: stale (`StaleGeneration`) and unknown
-            // (`UnknownNode`) handles ride the typed errors.
-            let key: NodeKey = node.into();
-            match session.describe(&key, generation) {
-                Ok(row) => ResponseV1::Described(DescribedV1 {
-                    node: NodeKeyV1::from(row.key),
-                    generation: row.generation,
-                    role: row.role,
-                    name: row.name,
-                    value: row.value,
-                    bounds: row.bounds,
-                }),
-                Err(err) => error_response(err),
-            }
+            describe_response(session, node, generation)
         }
         RequestV1::DescribeAll(DescribeAllV1 { selector }) => {
-            // The describe-all read over the wire (M39 — the m37
-            // record's standing gap: "enumerating a set's facts would
-            // open one Describe round trip per row"): the resolve-all
-            // walk's rows carrying the Described identity facts, one
-            // round trip instead of N. Snapshot semantics (the m30
-            // rule): the read never waits, an empty set answers with an
-            // empty list. The connection's window scope narrows the
-            // walk exactly like the ResolveAll arm runs it.
-            let scope = match window.as_deref() {
-                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
-                    Ok(scope) => scope,
-                    Err(err) => return error_response(err),
-                },
-                _ => None,
-            };
-            session.set_resolve_scope(scope);
-            let result = session.describe_all(&Selector::from(selector));
-            session.clear_resolve_scope();
-            match result {
-                Ok(rows) => ResponseV1::DescribedAll {
-                    rows: rows
-                        .into_iter()
-                        .map(|row| DescribedV1 {
-                            node: NodeKeyV1::from(row.key),
-                            generation: row.generation,
-                            role: row.role,
-                            name: row.name,
-                            value: row.value,
-                            bounds: row.bounds,
-                        })
-                        .collect(),
-                },
-                Err(err) => error_response(err),
-            }
+            describe_all_response(session, selector, window)
         }
         RequestV1::Action {
             node,
@@ -961,36 +842,7 @@ fn handle_request<A: FrameworkAdapter>(
             action,
             force,
             timeout_ms,
-        } => {
-            let key: NodeKey = node.into();
-            let sem = convert_action(&action);
-            // Generation guard at the boundary (§8.2): the client's handle
-            // must still be live; a recycled id cannot slip through.
-            let resolved = guiwright_core::Resolved {
-                key,
-                generation,
-                bounds: None,
-            };
-            if let Err(err) = session.tree().check_generation(&resolved).and_then(|()| {
-                session
-                    .tree()
-                    .node(&resolved.key)
-                    .map(|_| ())
-                    .ok_or_else(|| CoreError::NoMatch {
-                        selector: resolved.key.describe(),
-                        last: Box::new(session.tree().summary()),
-                    })
-            }) {
-                return error_response(err);
-            }
-            match session.apply_action(resolved.key, sem, force, timeout_ms) {
-                Ok(outcome) => ResponseV1::ActionDone {
-                    frame_seq: outcome.applied_at_frame,
-                    detail: outcome.detail,
-                },
-                Err(err) => error_response(err),
-            }
-        }
+        } => action_response(session, node, generation, &action, force, timeout_ms),
         RequestV1::Input { events } => {
             // Raw input over the wire (§9, M7): the connection's active
             // window target steers the coordinates (the M6 handoff —
@@ -998,24 +850,23 @@ fn handle_request<A: FrameworkAdapter>(
             // the connection's active handle"); an unscoped connection
             // targets the session's default window. The batch applies
             // inside the next frame (one rendezvous pump).
-            match session.send_input(
-                events.into_iter().map(Into::into).collect(),
-                window.as_deref(),
-            ) {
+            let events: Vec<InputEvent> = events.into_iter().map(Into::into).collect();
+            match session.send_input(&events, window) {
                 Ok(frame_seq) => ResponseV1::InputQueued { frame_seq },
-                Err(err) => error_response(err),
+                Err(err) => error_response(&err),
             }
         }
         RequestV1::Gesture(gesture) => {
             // Gesture synthesis (§9, M7): the session synthesizes the raw
             // batch from its adapter's pacing table and injects it through
             // the same per-window path as `Input`.
-            match session.perform_gesture(gesture.into(), window.as_deref()) {
+            let gesture = Gesture::from(gesture);
+            match session.perform_gesture(&gesture, window) {
                 Ok(outcome) => ResponseV1::GestureDone {
                     frame_seq: outcome.applied_at_frame,
                     detail: outcome.detail,
                 },
-                Err(err) => error_response(err),
+                Err(err) => error_response(&err),
             }
         }
         RequestV1::Clock(cmd) => clock_response(session, cmd),
@@ -1023,9 +874,215 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
         RequestV1::Video(cmd) => video_response(session, cmd),
         RequestV1::Window(cmd) => window_response(session, cmd),
-        RequestV1::Screenshot(cmd) => screenshot_response(session, cmd, window.as_deref()),
+        RequestV1::Screenshot(cmd) => screenshot_response(session, cmd, window),
         RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd, window),
         RequestV1::Bye => ResponseV1::Bye,
+    }
+}
+
+/// The connection's window scope as the resolve-scoping guard (§16 v0.4):
+/// a non-empty active target narrows every resolution path to its subtree;
+/// unknown/closed targets fail before any waiting happens. Cleared by the
+/// caller through [`Session::clear_resolve_scope`] once the read lands.
+fn scoped_resolve<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    window: Option<&str>,
+) -> Result<(), CoreError> {
+    let scope = match window {
+        Some(handle) if !handle.is_empty() => session.window_scope(handle)?,
+        _ => None,
+    };
+    session.set_resolve_scope(scope);
+    Ok(())
+}
+
+/// The §8.2 point read over the wire (M0): resolve with auto-wait under
+/// the connection's window scope, the resolved handle answering with its
+/// generation and window-relative bounds.
+fn resolve_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    selector: SelectorV1,
+    timeout_ms: u64,
+    window: Option<&str>,
+) -> ResponseV1 {
+    if let Err(err) = scoped_resolve(session, window) {
+        return error_response(&err);
+    }
+    let result = resolve_result(session, selector, timeout_ms);
+    session.clear_resolve_scope();
+    match result {
+        Ok(Some(resolved)) => ResponseV1::Resolved {
+            node: NodeKeyV1::from(resolved.key),
+            generation: resolved.generation,
+            rect: resolved.bounds.map(rect_to_array),
+        },
+        Ok(None) => ResponseV1::Error {
+            code: ErrorCode::Internal,
+            message: "resolve satisfied by absence".into(),
+        },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The §8.2 set read over the wire (M30): the same walk the kit's
+/// `count()`/`all()` run — non-strict, never waiting, so an empty set
+/// answers with an empty list (the read is total, never an error). Window
+/// scope rides the same discipline the Resolve arm runs.
+fn resolve_all_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    selector: SelectorV1,
+    window: Option<&str>,
+) -> ResponseV1 {
+    if let Err(err) = scoped_resolve(session, window) {
+        return error_response(&err);
+    }
+    let result = session.resolve_all(&Selector::from(selector));
+    session.clear_resolve_scope();
+    match result {
+        Ok(matches) => ResponseV1::ResolvedAll {
+            matches: matches
+                .into_iter()
+                .map(|resolved| ResolvedMatchV1 {
+                    node: NodeKeyV1::from(resolved.key),
+                    generation: resolved.generation,
+                    rect: resolved.bounds.map(rect_to_array),
+                })
+                .collect(),
+        },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The hit-test read over the wire (M32): the §8.3 mechanism as a
+/// debugging read — which node occupies the point (physical px, the
+/// tree's bounds space). The connection's window scope narrows the answer
+/// (the §16 v0.4 scoping rule — a hit outside the aimed window reads
+/// None, the same discipline the resolve paths run); empty space answers
+/// None, never an error (the read is total).
+fn hit_test_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    x: f64,
+    y: f64,
+    window: Option<&str>,
+) -> ResponseV1 {
+    if let Err(err) = scoped_resolve(session, window) {
+        return error_response(&err);
+    }
+    let result = session.hit_test(x, y);
+    session.clear_resolve_scope();
+    match result {
+        Ok(hit) => ResponseV1::HitTest {
+            hit: hit.map(|resolved| ResolvedMatchV1 {
+                node: NodeKeyV1::from(resolved.key),
+                generation: resolved.generation,
+                rect: resolved.bounds.map(rect_to_array),
+            }),
+        },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The node-describe read over the wire (M36 — the m32 record's standing
+/// gap): one node's identity facts for a handle the client holds (a
+/// resolve/hit/dump row, the dump-row rule). Handle-addressed, so no
+/// window scope applies — the Action boundary, not the resolve scoping (a
+/// point is ambiguous, a selector the tree answers; the handle IS the
+/// node). The generation guard is the Action arm's: stale
+/// (`StaleGeneration`) and unknown (`UnknownNode`) handles ride the typed
+/// errors.
+fn describe_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    node: NodeKeyV1,
+    generation: u32,
+) -> ResponseV1 {
+    let key: NodeKey = node.into();
+    match session.describe(&key, generation) {
+        Ok(row) => ResponseV1::Described(DescribedV1 {
+            node: NodeKeyV1::from(row.key),
+            generation: row.generation,
+            role: row.role,
+            name: row.name,
+            value: row.value,
+            bounds: row.bounds,
+        }),
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The describe-all read over the wire (M39 — the m37 record's standing
+/// gap: "enumerating a set's facts would open one Describe round trip per
+/// row"): the resolve-all walk's rows carrying the Described identity
+/// facts, one round trip instead of N. Snapshot semantics (the m30 rule):
+/// the read never waits, an empty set answers with an empty list. The
+/// connection's window scope narrows the walk exactly like the `ResolveAll`
+/// arm runs it.
+fn describe_all_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    selector: SelectorV1,
+    window: Option<&str>,
+) -> ResponseV1 {
+    if let Err(err) = scoped_resolve(session, window) {
+        return error_response(&err);
+    }
+    let result = session.describe_all(&Selector::from(selector));
+    session.clear_resolve_scope();
+    match result {
+        Ok(rows) => ResponseV1::DescribedAll {
+            rows: rows
+                .into_iter()
+                .map(|row| DescribedV1 {
+                    node: NodeKeyV1::from(row.key),
+                    generation: row.generation,
+                    role: row.role,
+                    name: row.name,
+                    value: row.value,
+                    bounds: row.bounds,
+                })
+                .collect(),
+        },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The act half over the wire (M0/M17): the generation guard at the
+/// boundary (the client's handle must still be live — a recycled id
+/// cannot slip through), then the translated action applied through the
+/// session's actionability gate.
+fn action_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    node: NodeKeyV1,
+    generation: u32,
+    action: &SemActionV1,
+    force: bool,
+    timeout_ms: u64,
+) -> ResponseV1 {
+    let key: NodeKey = node.into();
+    let sem = convert_action(action);
+    // Generation guard at the boundary (§8.2): the client's handle must
+    // still be live; a recycled id cannot slip through.
+    let resolved = guiwright_core::Resolved {
+        key,
+        generation,
+        bounds: None,
+    };
+    if let Err(err) = session.tree().check_generation(&resolved).and_then(|()| {
+        session
+            .tree()
+            .node(&resolved.key)
+            .map(|_| ())
+            .ok_or_else(|| CoreError::NoMatch {
+                selector: resolved.key.describe(),
+                last: Box::new(session.tree().summary()),
+            })
+    }) {
+        return error_response(&err);
+    }
+    match session.apply_action(resolved.key, sem, force, timeout_ms) {
+        Ok(outcome) => ResponseV1::ActionDone {
+            frame_seq: outcome.applied_at_frame,
+            detail: outcome.detail,
+        },
+        Err(err) => error_response(&err),
     }
 }
 
@@ -1041,7 +1098,7 @@ fn screenshot_response<A: FrameworkAdapter>(
     match cmd {
         ScreenshotV1::Window => match session.screenshot_window() {
             Ok(shot) => shot_response(shot),
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
         ScreenshotV1::Element {
             selector,
@@ -1052,7 +1109,7 @@ fn screenshot_response<A: FrameworkAdapter>(
             let scope = match window {
                 Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
                     Ok(scope) => scope,
-                    Err(err) => return error_response(err),
+                    Err(err) => return error_response(&err),
                 },
                 _ => None,
             };
@@ -1065,7 +1122,7 @@ fn screenshot_response<A: FrameworkAdapter>(
             session.clear_resolve_scope();
             match result {
                 Ok(shot) => shot_response(shot),
-                Err(err) => error_response(err),
+                Err(err) => error_response(&err),
             }
         }
     }
@@ -1087,7 +1144,7 @@ fn shot_response(shot: crate::session::WireShot) -> ResponseV1 {
 fn tree_dump_response<A: FrameworkAdapter>(
     session: &mut Session<A>,
     cmd: SnapshotV1,
-    window: Option<String>,
+    window: Option<&str>,
 ) -> ResponseV1 {
     match cmd {
         SnapshotV1::Full => {
@@ -1104,26 +1161,21 @@ fn tree_dump_response<A: FrameworkAdapter>(
             // match's subtree. A dead selector expires as `Timeout` like
             // every other auto-wait; a non-matching one is a strict-mode
             // violation, exactly like `Resolve`.
-            let scope = match window.as_deref() {
-                Some(handle) if !handle.is_empty() => match session.window_scope(handle) {
-                    Ok(scope) => scope,
-                    Err(err) => return error_response(err),
-                },
-                _ => None,
-            };
-            session.set_resolve_scope(scope);
+            if let Err(err) = scoped_resolve(session, window) {
+                return error_response(&err);
+            }
             let resolved = resolve_result(session, selector, timeout_ms);
             session.clear_resolve_scope();
             match resolved {
                 Ok(Some(resolved)) => match session.tree_dump_under(&resolved.key) {
                     Ok(dump) => dump_response(dump),
-                    Err(err) => error_response(err),
+                    Err(err) => error_response(&err),
                 },
                 Ok(None) => ResponseV1::Error {
                     code: ErrorCode::Internal,
                     message: "resolve succeeded without a node".into(),
                 },
-                Err(err) => error_response(err),
+                Err(err) => error_response(&err),
             }
         }
     }
@@ -1195,7 +1247,7 @@ fn window_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: WindowV1)
         },
         WindowV1::Use { handle } => match session.window_scope(&handle) {
             Ok(_) => ResponseV1::WindowUsed { handle },
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
     }
 }
@@ -1213,7 +1265,7 @@ fn video_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: VideoV1) -
             };
             match result {
                 Ok(()) => ResponseV1::Pong,
-                Err(err) => error_response(err),
+                Err(err) => error_response(&err),
             }
         }
         VideoV1::Stop => match session.video_stop() {
@@ -1223,7 +1275,7 @@ fn video_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: VideoV1) -
                 dropped: file.dropped,
                 duration_ms: file.duration_ms,
             },
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
     }
 }
@@ -1257,7 +1309,7 @@ fn clock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: ClockV1) -
             paused: report.state.paused,
             steps: report.steps,
         },
-        Err(err) => error_response(err),
+        Err(err) => error_response(&err),
     }
 }
 
@@ -1280,11 +1332,11 @@ fn mock_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: MockV1) -> 
         }
         MockV1::ResetState { scope } => match session.reset_state(&scope) {
             Ok(detail) => ResponseV1::MockDone { id: scope, detail },
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
         MockV1::Call { id, scope } => match session.run_seam(&id, &scope) {
             Ok(detail) => ResponseV1::MockDone { id, detail },
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
     }
 }
@@ -1300,24 +1352,24 @@ fn inspect_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: InspectV
     match cmd {
         InspectV1::StartRecording => match session.codegen_start() {
             Ok(()) => ResponseV1::Pong,
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
         InspectV1::StopRecording => match session.codegen_stop() {
             Ok((code, warnings)) => ResponseV1::Codegen { code, warnings },
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
         InspectV1::EnableOverlay => match session.inspect_enable_overlay() {
             Ok(()) => ResponseV1::Pong,
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
         InspectV1::DisableOverlay => match session.inspect_disable_overlay() {
             Ok(()) => ResponseV1::Pong,
-            Err(err) => error_response(err),
+            Err(err) => error_response(&err),
         },
         InspectV1::Highlight { node } => {
             match session.inspect_highlight_key(node.map(Into::into)) {
                 Ok(_) => ResponseV1::Pong,
-                Err(err) => error_response(err),
+                Err(err) => error_response(&err),
             }
         }
     }
@@ -1354,7 +1406,7 @@ fn subscribe_on(
     ResponseV1::Subscribed { kinds: deduped }
 }
 
-fn error_response(err: CoreError) -> ResponseV1 {
+fn error_response(err: &CoreError) -> ResponseV1 {
     let (code, message) = match &err {
         CoreError::NoMatch { .. } | CoreError::Ambiguous { .. } => {
             (ErrorCode::StrictModeViolation, err.to_string())
@@ -1517,7 +1569,7 @@ mod tests {
             } => (node, generation),
             other => panic!("expected Resolved, got {other:?}"),
         };
-        assert!(generation == 0);
+        assert_eq!(generation, 0);
 
         // Act on it.
         let resp = send(
