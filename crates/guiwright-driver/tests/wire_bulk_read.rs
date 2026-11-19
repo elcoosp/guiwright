@@ -95,7 +95,7 @@ async fn resolve_all_enumerates_the_set_in_document_order() {
         .iter()
         .map(|m| match &m.node {
             NodeKeyV1::AccessKit { node, .. } => *node,
-            other => panic!("expected AccessKit keys, got {other:?}"),
+            other @ NodeKeyV1::Logical { .. } => panic!("expected AccessKit keys, got {other:?}"),
         })
         .collect();
     // The fixture's button NodeIds in document order (test_util's
@@ -167,7 +167,7 @@ async fn resolve_all_rides_the_connection_window_scope() {
                 "the enumerated row belongs to the aimed window"
             );
         }
-        other => panic!("expected an AccessKit key, got {other:?}"),
+        other @ NodeKeyV1::Logical { .. } => panic!("expected an AccessKit key, got {other:?}"),
     }
 }
 
