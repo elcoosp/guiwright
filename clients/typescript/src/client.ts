@@ -24,6 +24,7 @@ import {
   expectState,
   type ExpectKind,
 } from "./expect.ts";
+import { CountTracker, HAVE_COUNT_STATE, type CountCompare } from "./count.ts";
 import {
   type ClockCmd,
   type DescribedNode,
@@ -551,6 +552,105 @@ export class GwpClient {
           // last evaluation.
           await this.unsubscribe().catch(() => undefined);
           throw new GwpWaitTimeout(expectState(kind), rendered, timeoutMs, answer.reason);
+        }
+      }
+    } catch (err) {
+      // A protocol failure propagates as-is (the m41 fail-fast rule);
+      // the assertion's subscription window drops on the way out.
+      await this.unsubscribe().catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** The count assertion (m59/m60 — the kit's
+   * `expect(locator).toHaveCount(n)` over any door, the Rust
+   * `ClientConn::expect_count` mirrored, M22): the whole match set's
+   * size as a waitable assertion — the M30 resolve-all round trip's set
+   * read (strict mode never consulted), woken by the §7 event channel
+   * exactly like `waitFor()` and the m54 content pair. **No wire
+   * change**: the assertion rides existing domains byte-for-byte.
+   *
+   * **Answers.** The satisfied assertion resolves with the found count —
+   * the fact the assertion speaks (the Rust seam's m57 summary shape);
+   * the set's rows themselves ride `resolveAll()` (M30).
+   *
+   * **Absence is an answer.** An empty set is found 0 — satisfying
+   * `count 0` and every less-than row (Playwright's `toHaveCount(0)`
+   * parity), unlike the content pair's empty-set pending.
+   *
+   * A spent budget rejects with the typed `GwpWaitTimeout`, naming the
+   * assertion (`have count`), the locator and the last evaluation — the
+   * demanded comparison and the count the last evaluation found. The
+   * subscription window drops on every exit (the `waitFor()` ownership
+   * rule). */
+  async expectCount(selector: Selector, expected: number, timeoutMs = 5000): Promise<number> {
+    return this.expectCountWith(selector, { kind: "exact", bound: expected }, timeoutMs);
+  }
+
+  /** The one-sided count comparator (m59/m60 — the kit's
+   * `expect(locator).toHaveCountGreaterThan(n)` over any door, the Rust
+   * `ClientConn::expect_count_greater_than` mirrored, M25): satisfied
+   * while *more* than `min` nodes match, the same composition as
+   * `expectCount()` with the comparison as the only difference. */
+  async expectCountGreaterThan(selector: Selector, min: number, timeoutMs = 5000): Promise<number> {
+    return this.expectCountWith(selector, { kind: "greater_than", bound: min }, timeoutMs);
+  }
+
+  /** The one-sided count comparator (m59/m60 — the kit's
+   * `expect(locator).toHaveCountLessThan(n)` over any door, the Rust
+   * `ClientConn::expect_count_less_than` mirrored, M25): satisfied
+   * while *fewer* than `max` nodes match, the mirror of
+   * `expectCountGreaterThan()`. */
+  async expectCountLessThan(selector: Selector, max: number, timeoutMs = 5000): Promise<number> {
+    return this.expectCountWith(selector, { kind: "less_than", bound: max }, timeoutMs);
+  }
+
+  /** The shared count-assertion composition (m59/m60): the m54 loop
+   * shape over the M30 resolve-all round trip — one entry read,
+   * event-driven re-reads, the subscription window owned and dropped,
+   * the typed timeout naming locator/comparison/found. Tree and frame
+   * wakes both re-decide (a count has no `stable`-like frame
+   * discipline); `log` records are never wakes. */
+  private async expectCountWith(
+    selector: Selector,
+    comparison: CountCompare,
+    timeoutMs: number,
+  ): Promise<number> {
+    this.assertHandshaked();
+    await this.subscribe(["tree_changed", "frame_presented"]);
+    const rendered = renderSelector(selector);
+    const deadline = Date.now() + timeoutMs;
+    const tracker = new CountTracker(comparison);
+    try {
+      for (;;) {
+        const matches = await this.resolveAll(selector);
+        const answer = tracker.evaluate(matches);
+        if (answer.done) {
+          await this.unsubscribe();
+          return answer.found;
+        }
+        // The event race, the m45 shape: a tree or frame wake re-decides
+        // the whole read, `log` records are never wakes, and a spent
+        // budget ends the assertion — the expiry path below. The m44
+        // read-half contract makes the cancelled read harmless on the
+        // wire.
+        let woke = false;
+        while (!woke) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          const event = await this.nextEventWithin(remaining);
+          if (event === null) break;
+          if (event.kind === "tree_changed" || event.kind === "frame_presented") {
+            woke = true;
+          }
+          // `log` records: not a wake — keep waiting.
+        }
+        if (!woke) {
+          // Best-effort cleanup (the Rust `expire()` shape), then the
+          // typed timeout naming the assertion, the locator and the
+          // last evaluation.
+          await this.unsubscribe().catch(() => undefined);
+          throw new GwpWaitTimeout(HAVE_COUNT_STATE, rendered, timeoutMs, answer.reason);
         }
       }
     } catch (err) {
