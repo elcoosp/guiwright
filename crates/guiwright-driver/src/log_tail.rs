@@ -119,13 +119,13 @@ impl LogTap {
     /// drops the incoming record and counts it, never blocks (§15.6).
     pub fn send(&self, record: impl Into<String>) {
         match self.tx.try_send(record.into()) {
-            Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
-            // The tail (and its session) is gone — a stray tap clone is
-            // inert, the same rule the trace crate's sink lives by.
-            Err(TrySendError::Disconnected(_)) => {}
+            // Delivered, or the tail (and its session) is gone — a stray
+            // tap clone is inert, the same rule the trace crate's sink
+            // lives by. Both land quietly.
+            Ok(()) | Err(TrySendError::Disconnected(_)) => {}
         }
     }
 
