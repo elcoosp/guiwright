@@ -370,7 +370,7 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         } else {
             None
         };
-        let outcome = app.session.perform_gesture(gesture, window.as_deref())?;
+        let outcome = app.session.perform_gesture(&gesture, window.as_deref())?;
         app.record_event(
             "drag_to",
             format!(
@@ -1476,11 +1476,14 @@ impl<A: FrameworkAdapter> MockHandle<'_, A> {
 
     /// `mock.call(id, scope)` — run a registered seam once.
     pub fn call(&mut self, id: &str, scope: &str) -> Result<String, KitError> {
-        let detail = self
-            .app
-            .session
-            .run_seam(id, scope)
-            .map_err(|e| KitError::Mock(e.to_string()))?;
+        // The id and scope name the failure at this layer — the inner
+        // error carries the driver's detail (the registered-ids list, the
+        // hook's own message); a caller of a ten-seam suite should not
+        // have to guess which call failed.
+        let detail =
+            self.app.session.run_seam(id, scope).map_err(|e| {
+                KitError::Mock(format!("seam `{id}` failed (scope `{scope}`): {e}"))
+            })?;
         self.app
             .record_event("mock", format!("call {id}({scope}) → {detail}"));
         Ok(detail)
@@ -1488,11 +1491,10 @@ impl<A: FrameworkAdapter> MockHandle<'_, A> {
 
     /// `mock.reset_state(scope)` — fixture parity between tests (§14).
     pub fn reset_state(&mut self, scope: &str) -> Result<String, KitError> {
-        let detail = self
-            .app
-            .session
-            .reset_state(scope)
-            .map_err(|e| KitError::Mock(e.to_string()))?;
+        let detail =
+            self.app.session.reset_state(scope).map_err(|e| {
+                KitError::Mock(format!("reset_state failed (scope `{scope}`): {e}"))
+            })?;
         self.app
             .record_event("mock", format!("reset_state({scope}) → {detail}"));
         Ok(detail)
