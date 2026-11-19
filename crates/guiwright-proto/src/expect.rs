@@ -50,6 +50,17 @@ pub enum ExpectKind {
     /// source order, a form dump wants what the form *carries*. The same
     /// Email input answers `"ada@example.dev"` here.
     Value(TextMatchV1),
+    /// The head row's role, exact — the m62 identity row (the kit's
+    /// `to_have_role` over any door, M38): the AccessKit debug name the
+    /// describe rows print (`Button`, `TextInput`), the vocabulary the
+    /// role locators speak. The role is a structural fact, so the
+    /// comparison is exact — no matcher, no fuzz.
+    Role(String),
+    /// The label-only accessible name — the m62 identity row (the kit's
+    /// `to_have_accessible_name` over any door, M38): narrower than the
+    /// text kind's m29 order (the value never answers), the fact the
+    /// text row cannot pin.
+    Name(TextMatchV1),
 }
 
 impl ExpectKind {
@@ -59,22 +70,8 @@ impl ExpectKind {
         match self {
             ExpectKind::Text(_) => "have text",
             ExpectKind::Value(_) => "have value",
-        }
-    }
-
-    /// The wanted matcher, whatever the kind.
-    fn wanted(&self) -> &TextMatchV1 {
-        match self {
-            ExpectKind::Text(m) | ExpectKind::Value(m) => m,
-        }
-    }
-
-    /// The row's content by this kind's source order (the m46 derivation
-    /// rules, reused verbatim — one boundary, stated once).
-    fn content_of(&self, row: &DescribedV1) -> String {
-        match self {
-            ExpectKind::Text(_) => text_content(row),
-            ExpectKind::Value(_) => value_content(row),
+            ExpectKind::Role(_) => "have role",
+            ExpectKind::Name(_) => "have name",
         }
     }
 }
@@ -109,29 +106,66 @@ impl ExpectTracker {
         Self { kind }
     }
 
-    /// Evaluate one row set: the set's head answers by the kind's source
-    /// order; an empty set stays pending (waitable — nodes stream in,
-    /// Playwright parity).
+    /// Evaluate one row set: the set's head answers by the kind's read
+    /// (the m54 rule — document order, first row); an empty set stays
+    /// pending (waitable — nodes stream in, Playwright parity).
     pub fn evaluate(&self, rows: &[DescribedV1]) -> ExpectEval {
         let Some(row) = rows.first() else {
             return ExpectEval::Pending {
                 reason: "no match yet (the set is empty)".into(),
             };
         };
-        let found = self.kind.content_of(row);
-        let wanted = self.kind.wanted();
-        if TextMatch::from(wanted.clone()).matches(&found) {
+        match &self.kind {
+            // The content pair (m54): the m46 derivation orders — the
+            // text kind reads the m29 order (name first, value fallback),
+            // the value kind the m31 flip.
+            ExpectKind::Text(wanted) => {
+                Self::content_verdict(row, &text_content(row), wanted, "text")
+            }
+            ExpectKind::Value(wanted) => {
+                Self::content_verdict(row, &value_content(row), wanted, "value")
+            }
+            // The identity rows (m62 — the m38 vocabulary over the door):
+            // the role compares exactly, the name reads the label-only
+            // fact — a node with no name stays pending (waitable), the
+            // reason naming which fact is missing.
+            ExpectKind::Role(wanted) => {
+                if row.role == *wanted {
+                    ExpectEval::Satisfied(row.clone())
+                } else {
+                    ExpectEval::Pending {
+                        reason: format!("role is {:?}, expected {:?}", row.role, wanted),
+                    }
+                }
+            }
+            ExpectKind::Name(wanted) => match row.name.as_deref() {
+                Some(found) if TextMatch::from(wanted.clone()).matches(found) => {
+                    ExpectEval::Satisfied(row.clone())
+                }
+                Some(found) => ExpectEval::Pending {
+                    reason: format!("name is {found:?}, expected {}", render(wanted)),
+                },
+                None => ExpectEval::Pending {
+                    reason: "the set's head carries no accessible name".into(),
+                },
+            },
+        }
+    }
+
+    /// The content pair's verdict: the matcher decides, the pending
+    /// reason names both sides (the failures-name-names discipline — the
+    /// fact read, the wanted matcher).
+    fn content_verdict(
+        row: &DescribedV1,
+        found: &str,
+        wanted: &TextMatchV1,
+        fact: &'static str,
+    ) -> ExpectEval {
+        if TextMatch::from(wanted.clone()).matches(found) {
             ExpectEval::Satisfied(row.clone())
         } else {
             ExpectEval::Pending {
-                reason: format!(
-                    "{} is {found:?}, expected {}",
-                    match self.kind {
-                        ExpectKind::Text(_) => "text",
-                        ExpectKind::Value(_) => "value",
-                    },
-                    render(wanted),
-                ),
+                reason: format!("{fact} is {found:?}, expected {}", render(wanted)),
             }
         }
     }
