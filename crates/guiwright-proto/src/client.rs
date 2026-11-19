@@ -1172,6 +1172,54 @@ pub trait ClientConn: Send + 'static {
         self.expect_content(selector, ExpectKind::Value(expected), timeout)
     }
 
+    /// The identity assertion, role form (m62 — the kit's
+    /// `expect(locator).to_have_role(...)` over any door, M38): the head
+    /// row's role answers the exact string — the AccessKit debug name
+    /// the describe rows print (`Button`, `TextInput`), the vocabulary
+    /// the role locators speak. A structural fact, so the comparison is
+    /// exact (no matcher, no fuzz). The same composition as
+    /// [`Self::expect_text`]: the m42 wake loop over the M39
+    /// describe-all rows, the set's head pinned, the subscription window
+    /// owned and dropped. **No wire change**; every [`ClientConn`] impl
+    /// inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have role` and the role the last evaluation saw.
+    fn expect_role(
+        &mut self,
+        selector: SelectorV1,
+        role: String,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
+        self.expect_content(selector, ExpectKind::Role(role), timeout)
+    }
+
+    /// The identity assertion, name form (m62 — the kit's
+    /// `expect(locator).to_have_accessible_name(...)` over any door,
+    /// M38): the label-only accessible name — narrower than
+    /// [`Self::expect_text`]'s m29 order (the value never answers), the
+    /// fact the text row cannot pin. A node with no accessible name
+    /// stays pending (waitable — the m54 empty-content rule's shape).
+    /// The same composition; **no wire change**; every [`ClientConn`]
+    /// impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have name` and the name the last evaluation saw.
+    fn expect_name(
+        &mut self,
+        selector: SelectorV1,
+        expected: TextMatchV1,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
+        self.expect_content(selector, ExpectKind::Name(expected), timeout)
+    }
+
     /// The shared content-assertion composition (m54): the m42 wait's
     /// loop shape with the [`ExpectTracker`] evaluation — one entry read,
     /// event-driven re-reads, the subscription window owned and dropped,
