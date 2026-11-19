@@ -1,13 +1,15 @@
 /**
- * The client-side content-assertion evaluator (M54 — the kit's `expect`
- * vocabulary's content half over any door, the Rust seam's
+ * The client-side content- and identity-assertion evaluator (M54 — the
+ * kit's `expect` vocabulary's content half over any door, the Rust seam's
  * `crates/guiwright-proto/src/expect.rs` mirrored row-for-row, the m45
- * one-milestone-per-surface pattern). The vocabulary and the row-set
- * evaluation live here — a pure, transport-blind core — while the wire
- * composition (subscribe → describe-all re-reads → wake on the §7 event
- * channel) rides `GwpClient.expectText()` / `GwpClient.expectValue()`.
+ * one-milestone-per-surface pattern; the m62 identity kinds mirrored on
+ * the TS client in M63). The vocabulary and the row-set evaluation live
+ * here — a pure, transport-blind core — while the wire composition
+ * (subscribe → describe-all re-reads → wake on the §7 event channel)
+ * rides `GwpClient.expectText()` / `GwpClient.expectValue()` and the
+ * identity rows `GwpClient.expectRole()` / `GwpClient.expectName()`.
  *
- * Three boundaries keep this honest (the Rust seam's rules, mirrored):
+ * Four boundaries keep this honest (the Rust seam's rules, mirrored):
  *
  * - **No wire change.** The kinds below are a client-side vocabulary
  *   (never serialized): the assertion composes the existing
@@ -21,8 +23,10 @@
  *   the `text` kind reads the m29 order (accessible name first, value
  *   fallback) and the `value` kind reads the m31 order (value first,
  *   name fallback) — the two reads can never silently agree on the
- *   wrong datum. The assertion pins the set's first row (document
- *   order — the same pin the m42 wait speaks); later rows never answer.
+ *   wrong datum. The identity kinds (m62) read the row's structural
+ *   facts instead: the role compared exactly, the name label-only. The
+ *   assertion pins the set's first row (document order — the same pin
+ *   the m42 wait speaks); later rows never answer.
  * - **Failures name names** (§8.3): the typed timeout carries the
  *   locator render, the budget and the last evaluation — expected and
  *   found. (The evaluator mirrors `test/expect.test.ts`'s pinned cases;
@@ -32,15 +36,21 @@
 
 import type { DescribedNode, TextMatchV1 } from "./schema.ts";
 
-/** The content-assertion vocabulary (the kit's `to_have_text` /
- * `to_have_value` rows) — a client-side vocabulary, never serialized
- * (the Rust `ExpectKind` rule). */
-export type ExpectKind = "text" | "value";
+/** The content- and identity-assertion vocabulary (the kit's
+ * `to_have_text` / `to_have_value` rows, plus the M38 identity pair the
+ * m62 seam rows carry: `to_have_role` / `to_have_accessible_name`) — a
+ * client-side vocabulary, never serialized (the Rust `ExpectKind`
+ * rule). The role kind's payload rides beside the tracker (a structural
+ * fact takes no matcher); the other three carry a `TextMatchV1`. */
+export type ExpectKind = "text" | "value" | "role" | "name";
 
 /** The static state word the typed timeout names (the Rust
- * `ExpectKind::state()` wording). */
+ * `ExpectKind::state()` wording — the kit's stuck-on convention carried
+ * over the wire). */
 export function expectState(kind: ExpectKind): string {
-  return kind === "text" ? "have text" : "have value";
+  if (kind === "text") return "have text";
+  if (kind === "value") return "have value";
+  return kind === "role" ? "have role" : "have name";
 }
 
 /** The row's text content (the m29 order): the accessible name first,
@@ -93,36 +103,80 @@ export type ExpectEval =
   | { done: false; reason: string };
 
 /** The row-set evaluator behind `GwpClient.expectText()` /
- * `expectValue()`. Feed it fresh describe-all rows after every wake and
+ * `expectValue()` and the m63 identity rows `expectRole()` /
+ * `expectName()`. Feed it fresh describe-all rows after every wake and
  * it answers the assertion; the evaluator carries no cross-wake state
- * (content has no `stable`-like frame discipline — every wake re-decides
- * the whole read). */
+ * (content and identity have no `stable`-like frame discipline — every
+ * wake re-decides the whole read). */
 export class ExpectTracker {
   private readonly kind: ExpectKind;
-  private readonly expected: TextMatchV1;
+  private readonly expected: string | TextMatchV1;
 
-  /** A tracker for one assertion, in the kind and matcher it asserts. */
-  constructor(kind: ExpectKind, expected: TextMatchV1) {
+  /** A tracker for one assertion, in the kind and expected fact it
+   * asserts: the role kind carries the exact AccessKit debug name
+   * (`Button`, `TextInput` — the vocabulary the role locators speak),
+   * the other kinds a Playwright `TextMatchV1`. */
+  constructor(kind: "role", expected: string);
+  constructor(kind: Exclude<ExpectKind, "role">, expected: TextMatchV1);
+  constructor(kind: ExpectKind, expected: string | TextMatchV1) {
     this.kind = kind;
     this.expected = expected;
   }
 
-  /** Evaluate one row set: the set's head answers by the kind's source
-   * order (the m46 derivations, reused verbatim — one boundary, stated
-   * once); an empty set stays pending (waitable — nodes stream in,
-   * Playwright parity). */
+  /** Evaluate one row set: the set's head answers by the kind's read
+   * (the m54 rule — document order, first row); an empty set stays
+   * pending (waitable — nodes stream in, Playwright parity). The role
+   * compares exactly (a structural fact — no matcher, no fuzz, the m62
+   * rule); the name reads the label-only fact and a node with no
+   * accessible name stays pending, the reason naming which fact is
+   * missing. */
   evaluate(rows: DescribedNode[]): ExpectEval {
     const head = rows[0];
     if (head === undefined) {
       return { done: false, reason: "no match yet (the set is empty)" };
     }
-    const found = this.kind === "text" ? textContent(head) : valueContent(head);
-    if (textMatches(this.expected, found)) {
+    // The identity rows (m62 — the m38 vocabulary over the door): the
+    // role compares exactly, the name reads the label-only fact — the
+    // value never answers a name assertion (the fact the text row
+    // cannot pin).
+    if (this.kind === "role") {
+      const wanted = this.expected as string;
+      if (head.role === wanted) {
+        return { done: true, row: head };
+      }
+      return {
+        done: false,
+        reason: `role is ${JSON.stringify(head.role)}, expected ${JSON.stringify(wanted)}`,
+      };
+    }
+    if (this.kind === "name") {
+      const wanted = this.expected as TextMatchV1;
+      if (head.name === null) {
+        return {
+          done: false,
+          reason: "the set's head carries no accessible name",
+        };
+      }
+      if (textMatches(wanted, head.name)) {
+        return { done: true, row: head };
+      }
+      return {
+        done: false,
+        reason: `name is ${JSON.stringify(head.name)}, expected ${renderMatch(wanted)}`,
+      };
+    }
+    // The content pair (m54): the m46 derivation orders — the text kind
+    // reads the m29 order (name first, value fallback), the value kind
+    // the m31 flip.
+    const found =
+      this.kind === "text" ? textContent(head) : valueContent(head);
+    const wanted = this.expected as TextMatchV1;
+    if (textMatches(wanted, found)) {
       return { done: true, row: head };
     }
     return {
       done: false,
-      reason: `${this.kind} is ${JSON.stringify(found)}, expected ${renderMatch(this.expected)}`,
+      reason: `${this.kind} is ${JSON.stringify(found)}, expected ${renderMatch(wanted)}`,
     };
   }
 }
