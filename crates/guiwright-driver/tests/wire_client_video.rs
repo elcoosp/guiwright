@@ -87,7 +87,7 @@ async fn start_acks_and_stop_carries_the_finalized_artifact() {
     let stopped = client.video(VideoV1::Stop).await.expect("the stop");
     let file = match stopped {
         VideoReply::File(file) => file,
-        other => panic!("expected the File arm, got {other:?}"),
+        other @ VideoReply::Started => panic!("expected the File arm, got {other:?}"),
     };
     assert!(
         file.frames >= 1,
