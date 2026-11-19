@@ -20,6 +20,11 @@ export { PROTO_VERSION } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
 import { renderSelector, WaitTracker, type WaitState } from "./wait.ts";
 import {
+  ExpectTracker,
+  expectState,
+  type ExpectKind,
+} from "./expect.ts";
+import {
   type ClockCmd,
   type DescribedNode,
   type EventKind,
@@ -34,6 +39,7 @@ import {
   type SemAction,
   type NodeKey,
   type Shot,
+  type TextMatchV1,
   type TreeDump,
   type VideoCmd,
   type Welcome,
@@ -454,6 +460,105 @@ export class GwpClient {
         },
       );
     });
+  }
+
+  /** The content assertion, text order (m54 — the kit's
+   * `expect(locator).toHaveText(...)` over any door, the Rust
+   * `ClientConn::expect_text` mirrored): the m29 source order (the
+   * accessible name first, the value as the fallback — the M41
+   * derivation reused verbatim) as a waitable assertion. Composes the
+   * §7 event channel with the M39 describe-all re-reads exactly like
+   * `waitFor()`: subscribe, evaluate the set's head (the
+   * `ExpectTracker` rules), and re-read on every wake until the content
+   * matches or `timeoutMs` expires. **No wire change**: the assertion
+   * rides existing domains byte-for-byte.
+   *
+   * **Answers.** The satisfied assertion resolves with the row itself —
+   * directly usable as an `action()` node (the dump-row rule). A spent
+   * budget rejects with the typed `GwpWaitTimeout`, naming the assertion
+   * (`have text`), the locator and the last evaluation — expected and
+   * found. The subscription window drops on every exit (the `waitFor()`
+   * ownership rule): a connection running its own long-lived
+   * subscription (the viewer's live feed) should not hand the same
+   * client to an assertion. */
+  async expectText(
+    selector: Selector,
+    expected: TextMatchV1,
+    timeoutMs = 5000,
+  ): Promise<DescribedNode> {
+    return this.expectContent(selector, "text", expected, timeoutMs);
+  }
+
+  /** The content assertion, value order (m54 — the kit's
+   * `expect(locator).toHaveValue(...)` over any door, the Rust
+   * `ClientConn::expect_value` mirrored): the m31 source order (the
+   * value first, the accessible name as the fallback — the form-dump
+   * flip, so the two reads can never silently agree on the wrong datum),
+   * the same composition as `expectText()`. */
+  async expectValue(
+    selector: Selector,
+    expected: TextMatchV1,
+    timeoutMs = 5000,
+  ): Promise<DescribedNode> {
+    return this.expectContent(selector, "value", expected, timeoutMs);
+  }
+
+  /** The shared content-assertion composition (m54): the m45 wait's
+   * loop shape with the `ExpectTracker` evaluation — one entry read,
+   * event-driven re-reads, the subscription window owned and dropped,
+   * the typed timeout naming locator/expected/found. Tree and frame
+   * wakes both re-decide (content has no `stable`-like frame
+   * discipline); `log` records are never wakes. */
+  private async expectContent(
+    selector: Selector,
+    kind: ExpectKind,
+    expected: TextMatchV1,
+    timeoutMs: number,
+  ): Promise<DescribedNode> {
+    this.assertHandshaked();
+    await this.subscribe(["tree_changed", "frame_presented"]);
+
+    const rendered = renderSelector(selector);
+    const deadline = Date.now() + timeoutMs;
+    const tracker = new ExpectTracker(kind, expected);
+    try {
+      for (;;) {
+        const rows = await this.describeAll(selector);
+        const answer = tracker.evaluate(rows);
+        if (answer.done) {
+          await this.unsubscribe();
+          return answer.row;
+        }
+        // The event race, the m45 shape: a tree or frame wake re-decides
+        // the whole read, `log` records are never wakes, and a spent
+        // budget ends the assertion — the expiry path below. The m44
+        // read-half contract makes the cancelled read harmless on the
+        // wire.
+        let woke = false;
+        while (!woke) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          const event = await this.nextEventWithin(remaining);
+          if (event === null) break;
+          if (event.kind === "tree_changed" || event.kind === "frame_presented") {
+            woke = true;
+          }
+          // `log` records: not a wake — keep waiting.
+        }
+        if (!woke) {
+          // Best-effort cleanup (the Rust `expire()` shape), then the
+          // typed timeout naming the assertion, the locator and the
+          // last evaluation.
+          await this.unsubscribe().catch(() => undefined);
+          throw new GwpWaitTimeout(expectState(kind), rendered, timeoutMs, answer.reason);
+        }
+      }
+    } catch (err) {
+      // A protocol failure propagates as-is (the m41 fail-fast rule);
+      // the assertion's subscription window drops on the way out.
+      await this.unsubscribe().catch(() => undefined);
+      throw err;
+    }
   }
 
   async action(
