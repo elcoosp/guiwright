@@ -148,7 +148,7 @@ impl MockAdapter {
     /// The multi-window persona (§16 v0.4, M6): scripts the grafted
     /// two-window fixture (root tree + one subtree per window, delivered
     /// over successive pumps) and the matching `windows()` metadata — the
-    /// handles are the fixture's subtree TreeIds, the same identity the
+    /// handles are the fixture's subtree `TreeIds`, the same identity the
     /// tree scopes resolution with.
     pub fn with_multi_window(fixture: &MultiWindowFixture) -> Self {
         let mut me = Self::bare();
