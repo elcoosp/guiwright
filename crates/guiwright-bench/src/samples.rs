@@ -2204,3 +2204,139 @@ pub fn client_tree_dump() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+// --- Client seam screenshot sample (the M10 render half on the seam, m50) ----
+
+/// §15.1 `client_screenshot`: one `ClientConn::screenshot_element` read
+/// over the in-process door (m50 — the M10 render half as typed seam
+/// sugar): the strict resolve with the driver's auto-wait (the
+/// `resolve_cached_index` index answer) plus the one §10 render, the
+/// clip-aware crop and the PNG encode the `Shot` reply ships (the
+/// `wire_screenshot_window` shape plus the resolve, on the 480×240
+/// fixture) — the floor the TS client's `screenshotElement()` and the
+/// REPL's `screenshot element` row have carried since M9/M10, now on the
+/// Rust seam; a client-side sugar over an existing domain, no wire change.
+pub fn client_screenshot() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::{SelectorV1, TextMatchV1};
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let rgba: Vec<u8> = (0..240u32)
+        .flat_map(|y| (0..480u32).map(move |x| (x, y)))
+        .flat_map(|(x, y)| [(x & 0xff) as u8, (y & 0xff) as u8, 99u8, 255u8])
+        .collect();
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || {
+                MockAdapter::with_fixture(&Fixture::buttons()).with_frame_pixels(480, 240, rgba)
+            },
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let save = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+        // Warm-up: one element shot pins the carrier shape once (the Save
+        // button's clip-aware crop).
+        let warm = client
+            .screenshot_element(save.clone(), 2000)
+            .await
+            .expect("warm element shot");
+        assert_eq!((warm.width, warm.height), (120, 32));
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let shot = client
+                .screenshot_element(save.clone(), 2000)
+                .await
+                .expect("bench element shot");
+            assert_eq!((shot.width, shot.height), (120, 32), "still the crop");
+            assert!(!shot.png.is_empty(), "the PNG payload ships");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
+
+// --- Client seam clock sample (the §14 half on the seam, m51) ----------------
+
+/// §15.1 `client_clock`: one `ClientConn::clock` fast-forward over the
+/// in-process door (m51 — the §14 virtual-clock half as typed seam sugar):
+/// the wire `Clock` round trip with the §14 pacing service planning the
+/// frame-sized steps (the session's `clock` path, one pump per step) and
+/// the `ClockState` reply marshalled back — the floor the TS client's
+/// `clock()`/`fastForward()` helpers and the REPL's `clock ff` row have
+/// carried since §14/M4, now on the Rust seam; a client-side sugar over an
+/// existing domain, no wire change.
+pub fn client_clock() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::ClockV1;
+    use std::time::Instant;
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        // Warm-up: install + one jump pins the carrier shape once (the
+        // whole budget lands on the virtual clock, steps reported).
+        client
+            .clock(ClockV1::InstallVirtual)
+            .await
+            .expect("warm install");
+        let warm = client
+            .clock(ClockV1::FastForward { ms: 100 })
+            .await
+            .expect("warm fast-forward");
+        assert_eq!(warm.virtual_time_ms, Some(100));
+        assert!(warm.steps >= 1);
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let state = client
+                .clock(ClockV1::FastForward { ms: 100 })
+                .await
+                .expect("bench fast-forward");
+            assert!(
+                state.virtual_time_ms.is_some(),
+                "still on the virtual clock"
+            );
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
