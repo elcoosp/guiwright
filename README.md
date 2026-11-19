@@ -312,7 +312,11 @@ the `ClockState` carrier the REPL's `clock` family and the TS `clock()`/
 half, `inspect(cmd)` (m53), answering the `InspectReply` union (the codegen
 recording's kit code, the overlay/highlight acks) the way the TS
 `inspectOverlay()`/`inspectHighlight()` and the REPL `codegen`/`inspect` rows
-speak. The raw `request()` covers the rest.
+speak, and the §8 content-assertion pair, `expect_text(selector, expected,
+timeout)` / `expect_value(…)` (m54), the kit's `to_have_text` / `to_have_value`
+over any door — the m46 source orders made waitable on the m42 wake loop, the
+typed timeout naming locator, expected and found. The raw `request()` covers
+the rest.
 
 </details>
 
@@ -434,13 +438,14 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M51**       | The client seam's clock row: `clock(cmd)` answering the `ClockState` carrier (the §14 virtual-clock half as typed sugar, the m48 take-the-wire-enum rule) — the whole §14 vocabulary in one call, the chaining contract (every reply carries the full state), the probe's totality and the paused `run_for` rejection pinned as shipped, one budget row, no wire change |
 | **M52**       | The client seam's mock row: `mock(cmd)` answering the `MockReceipt` carrier (the §14 state-seam half as typed sugar, the m48/m51 take-the-wire-enum rule) — the whole §14 mock vocabulary in one call (install / clear / call / reset-state), the runner-context honesty and the unknown-id / failing-hook typed rejections pinned as shipped, one budget row, no wire change |
 | **M53**       | The client seam's inspect row: `inspect(cmd)` answering the `InspectReply` union (the §13 inspector half as typed sugar, the m48/m51/m52 take-the-wire-enum rule) — the whole §13 vocabulary in one call (codegen start/stop, overlay enable/disable, highlight aim/clear), the reply union named client-side instead of collapsed to an `Option`, the recorder's single-slot honesty pinned as shipped, one budget row, no wire change |
+| **M54**       | The client seam's content assertions: `expect_text(selector, expected, timeout)` / `expect_value(selector, expected, timeout)` (the kit's `expect` vocabulary's content half over any door, the m46 source orders made waitable) — the m42 wait's wake loop composed with the m46 bulk-read derivations, the set's head pinned, the typed timeout naming locator / expected / found; the TS half rides the same evaluator (`expectText()` / `expectValue()` + the cross-language e2e leg, the m45 pattern), one budget row, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m53-client-seam-inspect.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m54-client-seam-content-assert.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
