@@ -327,6 +327,23 @@ export class GwpClient {
     return resp.rows;
   }
 
+  /** The describe-all identity read over the wire (m64/m65 — the m62/m63
+   * records' reserved wire change, the Rust `ClientConn::
+   * describe_all_identity` mirrored): the same walk as `describeAll()`,
+   * the rows carrying the accessible description beside the identity
+   * four — the fact the M38 identity family's third assertion reads.
+   * Appended, not reshaped: the M39 encodings stay byte-pinned, the
+   * widening rides its own `describe_all_identity` domain reusing the
+   * `describe_all` payload. Snapshot semantics unchanged: no strict
+   * mode, never waiting, an empty set answers an empty list. */
+  async describeAllIdentity(selector: Selector): Promise<DescribedIdentityNode[]> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "describe_all_identity", selector });
+    if (resp.kind !== "described_all_identity")
+      throw new Error(`expected DescribedAllIdentity, got ${resp.kind}`);
+    return resp.rows;
+  }
+
   /** The m29 bulk text read at set width (M41 — the m29 record's remote
    * note: "a remote bulk read would extend the `Resolve` reply exactly
    * as the m26/m22 records name … and stays open until a remote suite
@@ -532,6 +549,69 @@ export class GwpClient {
    * composition; **no wire change**. */
   async expectName(selector: Selector, expected: TextMatchV1, timeoutMs = 5000): Promise<DescribedNode> {
     return this.expectContent(selector, "name", expected, timeoutMs);
+  }
+
+  /** The identity assertion, description form (m64/m65 — the kit's
+   * `expect(locator).toHaveAccessibleDescription(...)` over any door,
+   * the Rust `ClientConn::expect_description` mirrored, M38): the third
+   * identity fact, the one the M39 rows left out — the description-only
+   * read (the name and the value never answer), a node with no
+   * description staying pending (waitable — descriptions arrive with
+   * the node's restatement), the timeout naming the missing fact. The
+   * same composition over the appended `describeAllIdentity()` read:
+   * the wake loop, the set's head pinned, the subscription window owned
+   * and dropped. The satisfied answer hands back the full identity row. */
+  async expectDescription(
+    selector: Selector,
+    expected: TextMatchV1,
+    timeoutMs = 5000,
+  ): Promise<DescribedIdentityNode> {
+    return this.expectIdentityContent(selector, "description", expected, timeoutMs);
+  }
+
+  /** The identity-row assertion composition (m65): the `expectContent()`
+   * loop shape over the appended `describeAllIdentity()` re-reads — one
+   * entry read, event-driven re-reads, the subscription window owned
+   * and dropped, the typed timeout naming locator/expected/found. */
+  private async expectIdentityContent(
+    selector: Selector,
+    kind: ExpectKind,
+    expected: TextMatchV1 | string,
+    timeoutMs: number,
+  ): Promise<DescribedIdentityNode> {
+    this.assertHandshaked();
+    await this.subscribe(["tree_changed", "frame_presented"]);
+
+    const rendered = renderSelector(selector);
+    const deadline = Date.now() + timeoutMs;
+    const tracker = new ExpectTracker(kind, expected);
+    try {
+      for (;;) {
+        const rows = await this.describeAllIdentity(selector);
+        const answer = tracker.evaluate(rows);
+        if (answer.done) {
+          await this.unsubscribe();
+          return answer.row as DescribedIdentityNode;
+        }
+        let woke = false;
+        while (!woke) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          const event = await this.nextEventWithin(remaining);
+          if (event === null) break;
+          if (event.kind === "tree_changed" || event.kind === "frame_presented") {
+            woke = true;
+          }
+        }
+        if (!woke) {
+          await this.unsubscribe().catch(() => undefined);
+          throw new GwpWaitTimeout(expectState(kind), rendered, timeoutMs, answer.reason);
+        }
+      }
+    } catch (err) {
+      await this.unsubscribe().catch(() => undefined);
+      throw err;
+    }
   }
 
   /** The shared content- and identity-assertion composition (m54; the
