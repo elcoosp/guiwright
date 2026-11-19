@@ -88,7 +88,7 @@ fn main() {
             .await
             .expect("the empty set read");
         println!(
-            "resolve-all role Button "Ghost" — {} matches (total, no error)",
+            "resolve-all role Button \"Ghost\" — {} matches (total, no error)",
             empty.len()
         );
 
