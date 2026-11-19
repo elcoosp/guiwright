@@ -170,6 +170,21 @@ pub enum RequestV1 {
     /// [`ResponseV1::DescribedAll`]. Wire discipline: appended after
     /// `Describe` (discriminant 19); see [`RequestV1::Video`].
     DescribeAll(DescribeAllV1),
+    /// Describe-all identity read (§8.1's identity fact set over the
+    /// §8.2 walk, M64 — the m62/m63 records' reserved wire change, the
+    /// m63 record's "the wire design is the next milestone's first
+    /// decision"): the same non-strict walk as [`RequestV1::DescribeAll`]
+    /// answering rows that carry the description fact beside the
+    /// identity four — the fact the M38 identity family's third
+    /// assertion (`to_have_accessible_description`, kit-side since M38)
+    /// reads and the M39 rows left out. [`DescribedV1`]'s encoding is
+    /// byte-pinned (older clients keep their exact encodings), so the
+    /// widening lands as its own appended domain reusing the
+    /// [`DescribeAllV1`] payload — the read costs what
+    /// [`RequestV1::DescribeAll`] costs. The reply is
+    /// [`ResponseV1::DescribedAllIdentity`]. Wire discipline: appended
+    /// after `DescribeAll` (discriminant 20); see [`RequestV1::Video`].
+    DescribeAllIdentity(DescribeAllV1),
 }
 
 /// The describe-all read's request payload (§8.1/§8.2, M39): the
@@ -618,6 +633,18 @@ pub enum ResponseV1 {
         /// ordering).
         rows: Vec<DescribedV1>,
     },
+    /// Describe-all identity reply (§8.1's identity fact set over the
+    /// walk, M64): one [`DescribedIdentityV1`] row per match, document
+    /// order — the [`ResponseV1::DescribedAll`] rows plus the
+    /// description fact, the m62/m63 records' reserved wire change. An
+    /// empty set answers with an empty list — the set read is total,
+    /// never an error. Append-only wire discipline — see
+    /// [`RequestV1::Video`].
+    DescribedAllIdentity {
+        /// One row per match, document order (the `all()`/`count()`
+        /// ordering).
+        rows: Vec<DescribedIdentityV1>,
+    },
 }
 
 /// One node's identity facts ([`ResponseV1::Described`], M36) — the
@@ -640,6 +667,54 @@ pub struct DescribedV1 {
     /// Window-relative bounds, physical px (AccessKit convention) — the
     /// same rect [`ResponseV1::Resolved`] reports.
     pub bounds: Option<[f64; 4]>,
+}
+
+/// One node's identity facts, description included
+/// ([`ResponseV1::DescribedAllIdentity`], M64) — the M39
+/// [`DescribedV1`] row's fields plus the accessible description, the
+/// fact the M38 identity family's third assertion reads (the m62/m63
+/// records' reserved wire change; `DescribedV1` keeps its byte-exact
+/// M39 encoding, the append-only rule — the widening lands as its own
+/// row rather than a reshape).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DescribedIdentityV1 {
+    /// The described node — the request's handle, echoed (a row is
+    /// directly usable as the [`RequestV1::Action`] node, the dump-row
+    /// rule).
+    pub node: NodeKeyV1,
+    /// The node's current resolve generation (the handle is live at this
+    /// generation — the guard the boundary enforced).
+    pub generation: u32,
+    /// AccessKit role `Debug` name (`Button`, `TextInput`, …).
+    pub role: String,
+    /// Accessible name, when the node has one.
+    pub name: Option<String>,
+    /// Value (inputs), when the node carries one.
+    pub value: Option<String>,
+    /// Window-relative bounds, physical px (AccessKit convention) — the
+    /// same rect [`ResponseV1::Resolved`] reports.
+    pub bounds: Option<[f64; 4]>,
+    /// Accessible description, when the node carries one — the m38
+    /// read's fact (`description()` only, never the name or the value:
+    /// a value never satisfies a description).
+    pub description: Option<String>,
+}
+
+impl From<&DescribedIdentityV1> for DescribedV1 {
+    /// The M39 row shape: the identity four projected off the m64 row —
+    /// the projection the content and identity kinds read when they
+    /// evaluate over the wider rows (the description fact rides beside
+    /// them, never instead of them).
+    fn from(row: &DescribedIdentityV1) -> Self {
+        Self {
+            node: row.node.clone(),
+            generation: row.generation,
+            role: row.role.clone(),
+            name: row.name.clone(),
+            value: row.value.clone(),
+            bounds: row.bounds,
+        }
+    }
 }
 
 /// One row of a [`ResponseV1::ResolvedAll`] (M30): the identity facts the
@@ -1670,6 +1745,56 @@ mod tests {
             22
         );
         assert_eq!(discriminant(&ResponseV1::Described(described_shell())), 21);
+    }
+
+    /// The M64 describe-all identity pins — the m62/m63 records'
+    /// reserved wire change, appended after the M39 domain (one
+    /// statement per milestone keeps the append-only sequence a readable
+    /// table, the m36 pin split's rule).
+    #[test]
+    fn m64_describe_all_identity_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        // M64 (the identity-fact widening): the domain appends after
+        // DescribeAll, reusing its payload.
+        assert_eq!(
+            discriminant(&RequestV1::DescribeAllIdentity(DescribeAllV1 {
+                selector: SelectorV1::TestId(String::new()),
+            })),
+            20
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::DescribedAllIdentity { rows: Vec::new() }),
+            23
+        );
+    }
+
+    /// The M64 identity row round-trips (the widening fact rides the
+    /// struct, `postcard` both ways — the m11 pin shape at row width).
+    #[test]
+    fn described_identity_rows_round_trip() {
+        let row = DescribedIdentityV1 {
+            node: NodeKeyV1::Logical {
+                adapter: "test".into(),
+                id: 9,
+            },
+            generation: 4,
+            role: "Button".into(),
+            name: Some("Install".into()),
+            value: None,
+            bounds: Some([16.0, 204.0, 136.0, 236.0]),
+            description: Some("Installs the latest build".into()),
+        };
+        let bytes = postcard::to_allocvec(&row).expect("encode");
+        let back: DescribedIdentityV1 = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(back, row);
+        // The M39 projection: the identity four, the description dropped
+        // (the wider row's view beside the byte-pinned M39 encoding).
+        let projected = DescribedV1::from(&row);
+        assert_eq!(projected.name.as_deref(), Some("Install"));
+        assert_eq!(projected.value, None);
     }
 
     /// The M36 describe pin's payload — a `DescribedV1` shell whose fields
