@@ -22,14 +22,14 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-zip = { version = "9.4.1", default-features = false, features = ["time"] }
 # The M18 live-mode tests ride the driver's in-process door (the mock
 # adapter + spawn_inprocess) and the proto clients — no OS socket needed.
+# `zip` / `guiwright-proto` / `tokio` are already dependencies; only the
+# test-only extras are declared here.
 guiwright-driver.workspace = true
-guiwright-proto.workspace = true
 guiwright-core.workspace = true
 accesskit.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "time", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
