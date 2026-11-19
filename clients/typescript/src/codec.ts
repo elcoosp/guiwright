@@ -8,6 +8,7 @@ import {
   type CapsV1,
   ClockV1,
   type DescribedNode,
+  type DescribedIdentityNode,
   type ClockCmd,
   ErrorCode,
   GwpRequest,
@@ -101,6 +102,13 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       // §8.2 set read carrying facts (M39): the ResolveAll payload's
       // exact shape — the walk enumerates, the rows carry the facts.
       enc.u32(RequestV1.DescribeAll);
+      encodeSelector(enc, req.selector);
+      break;
+    case "describe_all_identity":
+      // §8.2 set read carrying the description fact (M64): the same
+      // payload — the walk enumerates, the rows carry the identity four
+      // plus the description (the M39 encodings stay byte-pinned).
+      enc.u32(RequestV1.DescribeAllIdentity);
       encodeSelector(enc, req.selector);
       break;
     case "action":
@@ -595,9 +603,31 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       for (let i = 0; i < n; i += 1) rows.push(decodeDescribedNode(dec));
       return { kind: "described_all", rows };
     }
+    case 23: {
+      // §8.2 set read reply carrying the description fact (M64): one
+      // DescribedIdentityNode row per match, document order (the m62/m63
+      // records' reserved wire change).
+      const n = dec.varint();
+      const rows: DescribedIdentityNode[] = [];
+      for (let i = 0; i < n; i += 1) rows.push(decodeDescribedIdentityNode(dec));
+      return { kind: "described_all_identity", rows };
+    }
     default:
       throw new Error(`unknown response variant ${variant}`);
   }
+}
+
+function decodeDescribedIdentityNode(dec: Decoder): DescribedIdentityNode {
+  const node = decodeNodeKey(dec);
+  const generation = dec.u32();
+  const role = dec.str();
+  const name = dec.optionTag() ? dec.str() : null;
+  const value = dec.optionTag() ? dec.str() : null;
+  const bounds = dec.optionTag()
+    ? ([dec.f64(), dec.f64(), dec.f64(), dec.f64()] as [number, number, number, number])
+    : null;
+  const description = dec.optionTag() ? dec.str() : null;
+  return { node, generation, role, name, value, bounds, description };
 }
 
 function decodeEventKind(dec: Decoder): EventKind {
