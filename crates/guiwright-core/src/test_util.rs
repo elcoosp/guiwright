@@ -473,6 +473,29 @@ impl Fixture {
         }
     }
 
+    /// Incremental update: stamp the Save button with its accessible
+    /// description (the m64 restatement conversation — the description
+    /// fact arriving with the node's restatement, the m38 pending
+    /// rule's wake half: a missing description stays pending until the
+    /// node says something about itself).
+    pub fn describe_save_update(&self) -> TreeUpdate {
+        let mut save = Node::new(Role::Button);
+        save.set_label("Save");
+        save.set_description("Saves every change");
+        save.set_bounds(Rect {
+            x0: 16.0,
+            y0: 16.0,
+            x1: 136.0,
+            y1: 48.0,
+        });
+        TreeUpdate {
+            nodes: vec![(self.save_button, save)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        }
+    }
+
     /// Incremental update: disable the Save button (actionability diff).
     pub fn disable_save_update(&self) -> TreeUpdate {
         let mut save = Node::new(Role::Button);
