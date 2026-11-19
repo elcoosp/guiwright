@@ -299,7 +299,7 @@ async fn describe_all_carries_the_set_facts_in_document_order() {
         .await
         .expect("empty describe-all round-trip")
     {
-        ResponseV1::DescribedAll { rows } => assert!(rows.is_empty()),
+        ResponseV1::DescribedAll { rows } => assert_eq!(rows.len(), 0),
         other => panic!("expected DescribedAll, got {other:?}"),
     }
 
