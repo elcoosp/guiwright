@@ -502,3 +502,12 @@ p95_us = 250
 notes = "the m53 client seam's §13 inspector half as typed sugar: one ClientConn::inspect overlay-enable round trip over the embedded door — the wire Inspect round trip rebuilding the overlay plan from the tree indexes (one pump + the adapter show_overlay) and the Pong ack marshalled into the union carrier; the floor the TS client's inspectOverlay() helper and the REPL inspect row have carried since §13/M8, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
 m0_measurable = true
 sample = "client_inspect"
+
+[[budget]]
+id = "client_assert"
+name = "Client seam content assertion, satisfied on entry (in-process door)"
+p50_us = 1500
+p95_us = 6000
+notes = "the m54 client seam's content-assertion rows (the kit's expect vocabulary's content half over any door): one ClientConn::expect_text satisfied on entry over the embedded door — the subscribe round-trip, the describe-all entry evaluation (the describe_all_wire round-trip shape with the m46 name-first derivation on top) and the unsubscribe cleanup; the Save row satisfies on the first row set, so no wake and no re-read ride this number (the event-driven cost is the wire_event_delivery row's); a client-side composition of existing domains, no wire change"
+m0_measurable = true
+sample = "client_assert"
