@@ -165,7 +165,10 @@ pub struct SnapshotNode {
 /// One node's identity facts (§7 describe domain, M36): the one-row read
 /// beside [`TreeDump`]'s whole-tree walk — the same facts a
 /// [`SnapshotNode`] carries, minus the walk (`children`). The wire reply
-/// ([`guiwright_proto::schema::DescribedV1`]) mirrors it field for field.
+/// ([`guiwright_proto::schema::DescribedV1`]) mirrors it field for field;
+/// the description fact (M64) rides the session row and the appended
+/// [`guiwright_proto::schema::DescribedIdentityV1`] read — the M36 wire
+/// encoding stays byte-pinned, the widening is its own domain.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeDescription {
     /// The described node — the handle the read was asked with.
@@ -181,6 +184,10 @@ pub struct NodeDescription {
     pub value: Option<String>,
     /// Window-relative bounds, physical px (AccessKit convention).
     pub bounds: Option<[f64; 4]>,
+    /// Accessible description, when the node carries one — the m38 read's
+    /// fact (`description()` only, never the name or the value), the m64
+    /// identity read's widening.
+    pub description: Option<String>,
 }
 
 /// The full-tree dump (§7 tree-dump domain, M11): the whole logical tree
@@ -910,7 +917,9 @@ impl<A: FrameworkAdapter> Session<A> {
     /// (`CoreError::StaleNode`), while a handle the tree does not know
     /// is `CoreError::UnknownNode`. Handle-addressed, so no window
     /// scope applies: the handle IS the node, unlike a point
-    /// (ambiguous) or a selector (the tree answers).
+    /// (ambiguous) or a selector (the tree answers). The row carries the
+    /// description fact too (M64) — the wire's M36 `Described` encoding
+    /// stays byte-pinned; the fact rides the appended identity read.
     pub fn describe(
         &mut self,
         node: &NodeKey,
@@ -935,6 +944,7 @@ impl<A: FrameworkAdapter> Session<A> {
             name: n.label(),
             value: n.value(),
             bounds: n.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
+            description: n.description(),
         })
     }
 
@@ -948,7 +958,9 @@ impl<A: FrameworkAdapter> Session<A> {
     /// scope before calling (the server's set/read/clear rendezvous, the
     /// resolve-all arm's exact shape) — the walk narrows like every
     /// resolve path, and the rows' generations are current (freshly
-    /// resolved, no stale-guard path).
+    /// resolved, no stale-guard path). The rows carry the description
+    /// fact too (M64) — the wire's M39 `DescribedAll` encoding stays
+    /// byte-pinned; the fact rides the appended identity read.
     pub fn describe_all(&mut self, selector: &Selector) -> Result<Vec<NodeDescription>, CoreError> {
         self.pump();
         let resolved = self.tree.resolve_all(selector)?;
@@ -966,6 +978,7 @@ impl<A: FrameworkAdapter> Session<A> {
                     name: n.label(),
                     value: n.value(),
                     bounds: n.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
+                    description: n.description(),
                 }
             })
             .collect())
