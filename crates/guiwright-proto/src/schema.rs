@@ -887,7 +887,17 @@ fn adapter_registry() -> &'static Mutex<HashSet<&'static str>> {
 }
 
 fn leak_adapter_name(name: String) -> &'static str {
-    let mut registry = adapter_registry().lock().expect("adapter registry");
+    // Poison recovery, deliberately: the registry holds plain leaked
+    // strings, so a poisoned lock (a panic in some other decoder thread
+    // while holding the guard) leaves the data valid — the set is only
+    // ever grown with dedup-checked names. Abandoning the conversation
+    // over an already-consistent table would trade a recoverable state
+    // for a panic in a decode path; errors carry context, panics carry
+    // nothing.
+    let mut registry = match adapter_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if let Some(existing) = registry.get(name.as_str()) {
         return existing;
     }
