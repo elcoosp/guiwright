@@ -110,7 +110,7 @@ path; `FLOEM_FORCE_TINY_SKIA=1` proves the route), and softbuffer too.
 // src/window/handle.rs — PaintState::new
 let paint_state = if headless {
     // §4.7 contribution 2: CPU offscreen surface (tiny-skia), no GPU.
-    PaintState::TinySkia(guiwright_paint::PaintState::new(w, h)?)
+    PaintState::TinySkia(guiwright_adapter_floem::paint::PaintState::new(w, h)?)
 } else {
     /* existing GPU-backed path */
 };
