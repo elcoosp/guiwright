@@ -17,10 +17,10 @@ use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::client::ClientConn;
 use guiwright_proto::schema::{
-    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
-    EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1,
-    RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1,
-    TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
+    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1, ErrorCode,
+    EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1,
+    PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1,
+    SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
 };
 use guiwright_proto::wait::WaitState;
 
@@ -792,13 +792,15 @@ impl Repl {
         }
     }
 
-    /// `assert text|value|role|name|count <get-args…> is <expected>` (m61/m62
-    /// — the m54/m59 client-seam assertions' interactive half, the m43
-    /// one-milestone-per-surface pattern): the kit's waitable
+    /// `assert text|value|role|name|description|count <get-args…> is
+    /// <expected>` (m61/m62/m64 — the m54/m59 client-seam assertions'
+    /// interactive half, the m43 one-milestone-per-surface pattern): the
+    /// kit's waitable
     /// `expect(locator).to_*` vocabulary at the prompt, riding the
     /// [`ClientConn::expect_text`] / [`ClientConn::expect_value`] /
     /// [`ClientConn::expect_role`] / [`ClientConn::expect_name`] /
-    /// [`ClientConn::expect_count`] seam rows — event-driven re-reads on
+    /// [`ClientConn::expect_description`] / [`ClientConn::expect_count`]
+    /// seam rows — event-driven re-reads on
     /// the §7 channel, no polling, the `timeout <ms>` budget.
     ///
     /// The rows land under their own `assert` word: `expect` already owns
@@ -826,6 +828,7 @@ impl Repl {
             Some("value") => self.assert_content_command(tokens, true).await,
             Some("role") => self.assert_role_command(tokens).await,
             Some("name") => self.assert_name_command(tokens).await,
+            Some("description") => self.assert_description_command(tokens).await,
             Some("count") => self.assert_count_command(tokens).await,
             Some(other) => Err(format!("unknown kind `{other}` — {ASSERT_KINDS_USAGE}")),
         }
@@ -907,6 +910,31 @@ impl Repl {
             .await;
         self.restore_events().await;
         identity_line(outcome, "name")
+    }
+
+    /// The description-assertion row (m64 — the m38
+    /// `to_have_accessible_description` vocabulary's interactive half,
+    /// the m62 grammar's third identity fact): the description-only read
+    /// (the name and the value never answer — the fact neither content
+    /// row can pin), the REPL's matching posture (substring,
+    /// case-insensitive). A node with no accessible description stays
+    /// pending on the seam (descriptions arrive with the node's
+    /// restatement, the m38 rule), so a spent budget names the missing
+    /// fact. The satisfying row renders the m37 facts with the
+    /// description fact named (the m64 render).
+    async fn assert_description_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let (locator_tokens, expected_tokens) = split_at_is(assert_tail(tokens)?)?;
+        let (selector, _describe) = parse_selector(locator_tokens)?;
+        let expected = match_arg(
+            Some(expected_tokens),
+            r"an expected description after `is` — e.g. `assert description role Button Install is Installs`",
+        )?;
+        let outcome = self
+            .conn
+            .expect_description(selector, expected, Duration::from_millis(self.timeout_ms))
+            .await;
+        self.restore_events().await;
+        identity_line_description(outcome)
     }
 
     /// The count-assertion row (m59 — the exact form and both
@@ -1491,7 +1519,7 @@ impl Repl {
             "  values <get-args…>          the set's values, value first (M40)",
             "  wait <state> <get-args…>    attached|visible|hidden|stable (m43)",
             "  assert text|value <get-args…> is <text>   waitable content assertion (m61)",
-            "  assert role|name <get-args…> is <Role|text>  waitable identity assertion (m62)",
+            "  assert role|name|description <get-args…> is <Role|text>  waitable identity assertion (m62/m64)",
             "  assert count <get-args…> is <N>|> <N>|< <N>  waitable count assertion (m61)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
@@ -1575,6 +1603,17 @@ fn render_described(row: &DescribedV1) -> String {
     let _ = write!(out, " (generation {})", row.generation);
     if let Some([x0, y0, x1, y1]) = row.bounds {
         let _ = write!(out, " rect=[{x0:.0},{y0:.0} → {x1:.0},{y1:.0}]");
+    }
+    out
+}
+
+/// The m64 identity row, rendered for the REPL: the m37 facts plus the
+/// description fact when the row carries one (the fact the description
+/// assertion speaks — the same quoted shape the content renders use).
+fn render_identity(row: &DescribedIdentityV1) -> String {
+    let mut out = render_described(&DescribedV1::from(row));
+    if let Some(description) = row.description.as_deref() {
+        let _ = write!(out, " description {description:?}");
     }
     out
 }
@@ -1731,11 +1770,11 @@ fn parse_ms(value: Option<&String>) -> Result<u64, String> {
         .map_err(|_| format!("not a millisecond value: {value}"))
 }
 
-/// The `assert` row's vocabulary words (m61/m62): the kind list every
-/// validation error names, so one error line teaches the whole grammar
-/// (the survival rule's hint shape).
+/// The `assert` row's vocabulary words (m61/m62/m64): the kind list
+/// every validation error names, so one error line teaches the whole
+/// grammar (the survival rule's hint shape).
 const ASSERT_KINDS_USAGE: &str =
-    "text | value | count | role | name (e.g. `assert count role Button is 4`)";
+    "text | value | count | role | name | description (e.g. `assert count role Button is 4`)";
 
 /// The `assert count` expectation's forms (the m59 comparator shapes).
 const ASSERT_COUNT_USAGE: &str = "`is <N>` | `is > <N>` | `is < <N>`";
@@ -1783,6 +1822,22 @@ fn identity_line(
         Ok(row) => Ok(vec![Line::Ok(format!(
             "assert {kind_word} — {}",
             render_described(&row)
+        ))]),
+        Err(err) => Err(render_gwp_error(&err)),
+    }
+}
+
+/// The description-assertion answer line (m64): the satisfying identity
+/// row rendered as the m37 facts with the description fact named (the
+/// fact the assertion speaks); a spent budget renders the seam's typed
+/// timeout verbatim.
+fn identity_line_description(
+    outcome: Result<DescribedIdentityV1, GwpError>,
+) -> Result<Vec<Line>, String> {
+    match outcome {
+        Ok(row) => Ok(vec![Line::Ok(format!(
+            "assert description — {}",
+            render_identity(&row)
         ))]),
         Err(err) => Err(render_gwp_error(&err)),
     }
