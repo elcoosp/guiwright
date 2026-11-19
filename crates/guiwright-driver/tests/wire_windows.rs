@@ -99,7 +99,7 @@ async fn window_use_scopes_later_resolution() {
             }
             other @ NodeKeyV1::Logical { .. } => panic!("expected an AccessKit key, got {other:?}"),
         },
-        other @ NodeKeyV1::Logical { .. } => panic!("expected Resolved, got {other:?}"),
+        other => panic!("expected Resolved, got {other:?}"),
     }
 }
 
