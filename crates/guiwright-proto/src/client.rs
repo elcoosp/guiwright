@@ -26,9 +26,9 @@ use guiwright_core::Selector;
 
 use crate::GwpError;
 use crate::schema::{
-    AdapterInfoV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1, GestureV1,
-    GwpEvent, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, SelectorV1, SemActionV1,
-    SnapshotNodeV1, SnapshotV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1,
+    GestureV1, GwpEvent, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1,
+    SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 
@@ -77,6 +77,44 @@ pub struct TreeDump {
     /// Depth-first per window root (§16 v0.4): every window's subtree
     /// appears once, roots in adapter-reported window order.
     pub nodes: Vec<SnapshotNodeV1>,
+}
+
+/// The client-side carrier for the wire `Shot` reply (m50): field-for-field
+/// the M10 payload — the session frame the pixels came from, the pixel
+/// dimensions and the PNG bytes. Never serialized itself (the reply rides
+/// `ResponseV1::Shot` byte-for-byte; PNG is already losslessly compressed,
+/// the §15.6 LZ4 blob stage would double-encode without shrinking it), so
+/// the schema stays byte-pinned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Shot {
+    /// The session frame the pixels came from (the same seq space the
+    /// [`ActionReceipt::frame_seq`] reports — clients can correlate).
+    pub frame_seq: u64,
+    /// Pixel width of `png` (the full frame for a window shot, the crop
+    /// width for an element shot).
+    pub width: u32,
+    /// Pixel height of `png`.
+    pub height: u32,
+    /// PNG-encoded RGBA8 (lossless, §10 "Output: PNG").
+    pub png: Vec<u8>,
+}
+
+/// The client-side carrier for the wire `ClockState` reply (m51):
+/// field-for-field the §14 payload — the virtual clock's time in
+/// milliseconds (`None` while the adapter still runs real time), the
+/// paused flag and the frame-sized jumps the servicing command applied.
+/// Never serialized itself (the reply rides `ResponseV1::ClockState`
+/// byte-for-byte), so the schema stays byte-pinned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockState {
+    /// Virtual time in milliseconds, `None` before the clock is installed
+    /// (the probe is total — a read, never a mutation).
+    pub virtual_time_ms: Option<u64>,
+    /// Whether the virtual clock is paused.
+    pub paused: bool,
+    /// Frame-sized jumps applied by the servicing command (the §14 pacing
+    /// the ledger records, §12 `clock.bin`).
+    pub steps: u64,
 }
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
@@ -512,6 +550,128 @@ pub trait ClientConn: Send + 'static {
                 other => Err(GwpError::Protocol(format!(
                     "TreeDump answered by {other:?}"
                 ))),
+            }
+        }
+    }
+
+    /// The §7 render domain as typed seam sugar (m50 — the m13-style read
+    /// half of the M10 wire surface): one `RequestV1::Screenshot(
+    /// ScreenshotV1::Window)` round trip — the driver renders the window
+    /// frame once (the §10 headless on-demand path, no re-render) and
+    /// answers the [`Shot`] carrier: the frame the pixels came from, the
+    /// pixel dimensions and the PNG payload. The same shape the TypeScript
+    /// client has spoken since M9 (`screenshotWindow()`) and the REPL since
+    /// M10 (`screenshot window`). No wire change: the shot rides the
+    /// `Screenshot` domain byte-for-byte as M10 blessed it; every
+    /// [`ClientConn`] impl inherits the sugar.
+    ///
+    /// Adapters without a pixel path answer the typed `Unsupported` (§6.2
+    /// capability row) — the sugar surfaces that rejection rather than
+    /// degrading, the same honesty the embedded `App::screenshot` gives.
+    fn screenshot_window(&mut self) -> impl Future<Output = Result<Shot, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::Screenshot(ScreenshotV1::Window))
+                .await?
+            {
+                ResponseV1::Shot {
+                    frame_seq,
+                    width,
+                    height,
+                    png,
+                } => Ok(Shot {
+                    frame_seq,
+                    width,
+                    height,
+                    png,
+                }),
+                other => Err(GwpError::Protocol(format!(
+                    "Screenshot::Window answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// One element shot as typed seam sugar (m50): resolve `selector` (the
+    /// driver's auto-wait `Attached` within `timeout_ms`, honoring the
+    /// connection's window scope — the same resolve [`Self::resolve`] and
+    /// [`Self::tree_dump_under`] run) and crop the window frame by the
+    /// resolved node's clip-aware physical bounds — never a re-render (§10
+    /// element rule). The same shape the TypeScript client has spoken since
+    /// M9 (`screenshotElement(selector, timeoutMs)`) and the REPL since M10
+    /// (`screenshot element`). No wire change: the crop rides the
+    /// `Screenshot` domain byte-for-byte as M10 blessed it; every
+    /// [`ClientConn`] impl inherits the sugar.
+    ///
+    /// The resolve's honesty rides the sugar unchanged: a selector that
+    /// never matches inside the budget answers `ErrorCode::Timeout` naming
+    /// the stuck check; strict mode is the wire's own policy (§8.2), so an
+    /// ambiguous locator answers `ErrorCode::StrictModeViolation`. A node
+    /// without bounds (laid out virtually) answers the honest error the
+    /// M9 wording records — nothing to crop, not an empty crop.
+    fn screenshot_element(
+        &mut self,
+        selector: SelectorV1,
+        timeout_ms: u64,
+    ) -> impl Future<Output = Result<Shot, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::Screenshot(ScreenshotV1::Element {
+                    selector,
+                    timeout_ms,
+                }))
+                .await?
+            {
+                ResponseV1::Shot {
+                    frame_seq,
+                    width,
+                    height,
+                    png,
+                } => Ok(Shot {
+                    frame_seq,
+                    width,
+                    height,
+                    png,
+                }),
+                other => Err(GwpError::Protocol(format!(
+                    "Screenshot::Element answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// The §14 virtual-clock domain as typed seam sugar (m51): one
+    /// [`RequestV1::Clock`] round trip — install / fast-forward / run-for /
+    /// pause / resume / set-time / probe — answering the [`ClockState`]
+    /// carrier (virtual time in ms, the paused flag, the frame-sized jumps
+    /// the command applied). The whole wire vocabulary in one call taking
+    /// the wire's own [`ClockV1`] enum — no parallel client-side vocabulary
+    /// to keep in sync, the same rule the m48 sugar set for `GestureV1`.
+    /// Every reply carries the full state, so a client chains the next
+    /// command off the state it just produced — the affordance the REPL's
+    /// `clock` family and the TypeScript `clock()` / `fastForward()` helpers
+    /// have spoken since §14/M4. No wire change: the command rides the
+    /// `Clock` domain byte-for-byte as §14 blessed it; every [`ClientConn`]
+    /// impl inherits the sugar.
+    ///
+    /// The boundary's honesty carries over unchanged: the probe is total
+    /// (a read, never a mutation — `virtual_time_ms` reads `None` before
+    /// the clock is installed); a `run_for` on a paused clock answers the
+    /// session's typed `ClockPaused` rejection (run-for paces real time);
+    /// the jumps ride the §14 ledger so traces replay timing (§12).
+    fn clock(&mut self, cmd: ClockV1) -> impl Future<Output = Result<ClockState, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Clock(cmd)).await? {
+                ResponseV1::ClockState {
+                    virtual_time_ms,
+                    paused,
+                    steps,
+                } => Ok(ClockState {
+                    virtual_time_ms,
+                    paused,
+                    steps,
+                }),
+                other => Err(GwpError::Protocol(format!("Clock answered by {other:?}"))),
             }
         }
     }
