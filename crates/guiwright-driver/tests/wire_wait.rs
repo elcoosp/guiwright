@@ -97,7 +97,7 @@ fn late_button_update() -> TreeUpdate {
 fn node_id_of(row: &DescribedV1) -> u64 {
     match &row.node {
         NodeKeyV1::AccessKit { node, .. } => *node,
-        other => panic!("expected AccessKit keys, got {other:?}"),
+        other @ NodeKeyV1::Logical { .. } => panic!("expected AccessKit keys, got {other:?}"),
     }
 }
 
@@ -349,7 +349,7 @@ async fn wait_scope_rides_the_window_target() {
                 "the Preview subtree, not the Editor's Save"
             );
         }
-        other => panic!("expected AccessKit keys, got {other:?}"),
+        other @ NodeKeyV1::Logical { .. } => panic!("expected AccessKit keys, got {other:?}"),
     }
 
     // And a selector that only matches inside the Editor never satisfies
