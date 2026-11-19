@@ -340,7 +340,7 @@ async fn scoped_resolution_survives_window_local_updates() {
             }
             other @ NodeKeyV1::Logical { .. } => panic!("expected AccessKit key, got {other:?}"),
         },
-        other @ NodeKeyV1::Logical { .. } => panic!("expected Resolved, got {other:?}"),
+        other => panic!("expected Resolved, got {other:?}"),
     }
 
     server.shutdown();
