@@ -386,6 +386,11 @@
       "index": 19,
       "name": "DescribeAll",
       "payload": "{ selector: SelectorV1 } — the §8.2 set read carrying facts (M39, the m37 record's standing gap): the resolve-all walk's rows plus the Described identity facts, one round trip instead of one Describe per row → DescribedAll; the connection's window scope narrows the walk exactly like ResolveAll (M30)"
+    },
+    {
+      "index": 20,
+      "name": "DescribeAllIdentity",
+      "payload": "{ selector: SelectorV1 } — the same walk carrying the description fact beside the identity four (M64, the m62/m63 records' reserved wire change: the M38 identity family's third assertion rides the door) → DescribedAllIdentity; the M39 encodings stay byte-pinned, the widening is its own domain reusing the DescribeAll payload"
     }
   ],
   "responses": [
@@ -503,6 +508,11 @@
       "index": 22,
       "name": "DescribedAll",
       "payload": "{ rows: seq<DescribedV1> } — the set read carrying facts (the resolve-all walk's rows plus the Described identity facts, one round trip instead of N, M39); document order, an empty set answers with an empty list"
+    },
+    {
+      "index": 23,
+      "name": "DescribedAllIdentity",
+      "payload": "{ rows: seq<DescribedIdentityV1 { node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string> }> } — the same walk's rows carrying the description fact beside the identity four (M64); document order, an empty set answers with an empty list"
     }
   ],
   "schema": "gwp-schema/v1",
