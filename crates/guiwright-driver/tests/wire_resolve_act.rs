@@ -186,7 +186,9 @@ async fn stale_and_dead_rows_are_the_typed_rejections() {
     let dead = NodeKeyV1::AccessKit {
         tree: match &row.node {
             NodeKeyV1::AccessKit { tree, .. } => *tree,
-            other => panic!("expected an AccessKit handle, got {other:?}"),
+            other @ NodeKeyV1::Logical { .. } => {
+                panic!("expected an AccessKit handle, got {other:?}")
+            }
         },
         node: 9999,
     };
