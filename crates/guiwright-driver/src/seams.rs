@@ -71,14 +71,6 @@ impl SeamRegistry {
     pub fn ids(&self) -> Vec<&str> {
         self.seams.keys().map(String::as_str).collect()
     }
-
-    pub fn len(&self) -> usize {
-        self.seams.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.seams.is_empty()
-    }
 }
 
 /// Compile a seam for `run_in`: the closure captures the hook and scope;
@@ -101,7 +93,7 @@ mod tests {
     #[test]
     fn registry_stores_and_fetches_hooks() {
         let mut reg = SeamRegistry::new();
-        assert!(reg.is_empty());
+        assert_eq!(reg.ids(), Vec::<&str>::new());
         reg.register("reset_db", |state, scope| {
             let app = state
                 .downcast_mut::<AppState>()
@@ -117,7 +109,6 @@ mod tests {
             app.users = 3;
             Ok("3 users seeded".into())
         });
-        assert_eq!(reg.len(), 2);
         assert_eq!(reg.ids(), vec!["reset_db", "seed_users"]);
         assert!(reg.get("missing").is_none());
     }
@@ -177,7 +168,7 @@ mod tests {
         patch.register("reset_db", |_state, _scope| Ok("patch".into()));
         patch.register("extra", |_state, _scope| Ok("extra".into()));
         base.merge(&patch);
-        assert_eq!(base.len(), 2);
+        assert_eq!(base.ids(), vec!["extra", "reset_db"]);
         let mut state: Box<dyn Any + Send> = Box::new(AppState::default());
         let hook = base.get("reset_db").expect("hook");
         let task = compile_task(hook, String::new());
