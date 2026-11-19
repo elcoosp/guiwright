@@ -484,3 +484,21 @@ p95_us = 250
 notes = "the m51 client seam's §14 virtual-clock half as typed sugar: one ClientConn::clock fast-forward over the embedded door — the wire Clock round trip with the §14 pacing service planning the frame-sized steps (one pump per step) and the ClockState reply marshalled back; the floor the TS client's clock()/fastForward() helpers and the REPL clock ff row have carried since §14/M4, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
 m0_measurable = true
 sample = "client_clock"
+
+[[budget]]
+id = "client_mock"
+name = "Client seam mock call, in-process door (run_in + settle pump)"
+p50_us = 50
+p95_us = 250
+notes = "the m52 client seam's §14 state-seam half as typed sugar: one ClientConn::mock call over the embedded door — the wire Mock round trip running a registered seam inside the adapter's runner context (run_in + the settle pump) and the MockDone reply marshalled into the carrier; the floor the TS client's mock()/callSeam()/resetState() helpers and the REPL mock rows have carried since §14/M4, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_mock"
+
+[[budget]]
+id = "client_inspect"
+name = "Client seam inspect overlay enable, in-process door (plan build + pump)"
+p50_us = 50
+p95_us = 250
+notes = "the m53 client seam's §13 inspector half as typed sugar: one ClientConn::inspect overlay-enable round trip over the embedded door — the wire Inspect round trip rebuilding the overlay plan from the tree indexes (one pump + the adapter show_overlay) and the Pong ack marshalled into the union carrier; the floor the TS client's inspectOverlay() helper and the REPL inspect row have carried since §13/M8, now on the Rust seam; a client-side sugar over an existing domain, no wire change"
+m0_measurable = true
+sample = "client_inspect"
