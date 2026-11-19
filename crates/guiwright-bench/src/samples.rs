@@ -2466,3 +2466,70 @@ pub fn client_inspect() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+/// §15.1 `client_assert`: one `ClientConn::expect_text` satisfied on
+/// entry over the in-process door (m54 — the kit's `expect` vocabulary's
+/// content half as a client-side composition): the subscribe round-trip,
+/// the describe-all entry evaluation (the `describe_all_wire` round-trip
+/// shape with the m46 name-first derivation on top) and the unsubscribe
+/// cleanup — the Save row satisfies on the first row set, so no wake and
+/// no re-read ride this number (the event-driven cost is the
+/// `wire_event_delivery` row's); a client-side composition of existing
+/// domains, no wire change.
+pub fn client_assert() -> Duration {
+    const ITERATIONS: u32 = 32;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::{SelectorV1, TextMatchV1};
+    use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        let save = SelectorV1::Role {
+            role: "Button".into(),
+            name: Some(TextMatchV1 {
+                text: "Save".into(),
+                exact: true,
+                ignore_case: false,
+            }),
+        };
+        let expected = TextMatchV1 {
+            text: "Save".into(),
+            exact: true,
+            ignore_case: false,
+        };
+        // Warm-up: one full satisfied assertion (subscription window,
+        // entry evaluation, cleanup) pins the row shape once.
+        let warm = client
+            .expect_text(save.clone(), expected.clone(), Duration::from_secs(1))
+            .await
+            .expect("warm assertion");
+        assert_eq!(warm.name.as_deref(), Some("Save"));
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let done = client
+                .expect_text(save.clone(), expected.clone(), Duration::from_secs(1))
+                .await
+                .expect("bench assertion");
+            assert_eq!(done.name.as_deref(), Some("Save"), "still the Save row");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
