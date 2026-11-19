@@ -34,7 +34,7 @@
  *   `crates/guiwright-proto/tests/expect_tracker.rs`.)
  */
 
-import type { DescribedNode, TextMatchV1 } from "./schema.ts";
+import type { DescribedIdentityNode, DescribedNode, TextMatchV1 } from "./schema.ts";
 
 /** The content- and identity-assertion vocabulary (the kit's
  * `to_have_text` / `to_have_value` rows, plus the M38 identity pair the
@@ -42,7 +42,7 @@ import type { DescribedNode, TextMatchV1 } from "./schema.ts";
  * client-side vocabulary, never serialized (the Rust `ExpectKind`
  * rule). The role kind's payload rides beside the tracker (a structural
  * fact takes no matcher); the other three carry a `TextMatchV1`. */
-export type ExpectKind = "text" | "value" | "role" | "name";
+export type ExpectKind = "text" | "value" | "role" | "name" | "description";
 
 /** The static state word the typed timeout names (the Rust
  * `ExpectKind::state()` wording — the kit's stuck-on convention carried
@@ -50,6 +50,7 @@ export type ExpectKind = "text" | "value" | "role" | "name";
 export function expectState(kind: ExpectKind): string {
   if (kind === "text") return "have text";
   if (kind === "value") return "have value";
+  if (kind === "description") return "have description";
   return kind === "role" ? "have role" : "have name";
 }
 
@@ -130,7 +131,9 @@ export class ExpectTracker {
    * rule); the name reads the label-only fact and a node with no
    * accessible name stays pending, the reason naming which fact is
    * missing. */
-  evaluate(rows: DescribedNode[]): ExpectEval {
+  evaluate(
+    rows: (DescribedNode & { description?: string | null })[],
+  ): ExpectEval {
     const head = rows[0];
     if (head === undefined) {
       return { done: false, reason: "no match yet (the set is empty)" };
@@ -147,6 +150,28 @@ export class ExpectTracker {
       return {
         done: false,
         reason: `role is ${JSON.stringify(head.role)}, expected ${JSON.stringify(wanted)}`,
+      };
+    }
+    if (this.kind === "description") {
+      // The m64/m65 kind: the description fact rides the identity rows
+      // (the appended `describeAllIdentity()` read) — the description
+      // only read, the name and the value never answer, and a missing
+      // description stays pending naming the missing fact (the m38
+      // rule: descriptions arrive with the node's restatement).
+      const wanted = this.expected as TextMatchV1;
+      const description = (head as DescribedIdentityNode).description ?? null;
+      if (description === null) {
+        return {
+          done: false,
+          reason: "the set's head carries no accessible description",
+        };
+      }
+      if (textMatches(wanted, description)) {
+        return { done: true, row: head };
+      }
+      return {
+        done: false,
+        reason: `description is ${JSON.stringify(description)}, expected ${renderMatch(wanted)}`,
       };
     }
     if (this.kind === "name") {
