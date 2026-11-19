@@ -93,7 +93,12 @@ pub fn synthesize(gesture: &Gesture, pacing: &GesturePacing) -> Vec<InputEvent> 
             } else {
                 f64::INFINITY
             };
-            let steps = ((dx.abs().max(dy.abs())) / ratchet).ceil().max(1.0) as usize;
+            // The quotient is ≥ 1 by the floor above; the i64 hop keeps
+            // the float→int conversion explicit and the usize conversion
+            // checked.
+            let steps =
+                usize::try_from(((dx.abs().max(dy.abs())) / ratchet).ceil().max(1.0) as i64)
+                    .unwrap_or(1);
             let mut events = Vec::with_capacity(steps + 2);
             events.push(InputEvent::PointerDown {
                 x: *from_x,
@@ -408,7 +413,7 @@ mod tests {
             },
             &default_pacing(),
         );
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 0);
     }
 
     #[test]
