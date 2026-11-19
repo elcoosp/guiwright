@@ -23,7 +23,7 @@ use std::sync::Arc;
 pub type SeamFn = Arc<dyn Fn(&mut dyn Any, &str) -> Result<String, String> + Send + Sync>;
 
 /// A seam compiled for execution inside the adapter's runner context
-/// (§14 "state writes run in the runner context via run_in").
+/// (§14 "state writes run in the runner context via `run_in`").
 pub type SeamTask = Box<dyn FnOnce(&mut dyn Any) -> Result<String, String> + Send>;
 
 /// Registry of app-registered seams (name → hook). Populated at app boot
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(task(state.as_mut_dyn()).expect("run"), "patch");
     }
 
-    /// Helper: `Box<dyn Any + Send>` → `&mut dyn Any` (the run_in shape).
+    /// Helper: `Box<dyn Any + Send>` → `&mut dyn Any` (the `run_in` shape).
     trait AsMutDyn {
         fn as_mut_dyn(&mut self) -> &mut dyn Any;
     }
