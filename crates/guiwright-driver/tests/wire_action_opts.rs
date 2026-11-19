@@ -175,7 +175,7 @@ async fn action_without_force_waits_out_the_gap() {
 
 /// `force: true` skips the hit-test gate: an occluded button is clicked
 /// anyway — while the same request without force refuses, stuck on
-/// `receives events` (the ActionOpts contract: force skips stability +
+/// `receives events` (the `ActionOpts` contract: force skips stability +
 /// hit-test, nothing else).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn action_with_force_skips_the_hit_test_gate() {
