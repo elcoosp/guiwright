@@ -131,13 +131,14 @@ fn response_variants() -> usize {
         | ResponseV1::ResolvedAll { .. }
         | ResponseV1::HitTest { .. }
         | ResponseV1::Described(_)
-        | ResponseV1::DescribedAll { .. } => 23usize,
+        | ResponseV1::DescribedAll { .. }
+        | ResponseV1::DescribedAllIdentity { .. } => 24usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    20 + match RequestV1::Ping {
+    21 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -157,7 +158,8 @@ fn request_variants() -> usize {
         | RequestV1::ResolveAll { .. }
         | RequestV1::HitTest { .. }
         | RequestV1::Describe(_)
-        | RequestV1::DescribeAll(_) => 0,
+        | RequestV1::DescribeAll(_)
+        | RequestV1::DescribeAllIdentity(_) => 0,
     }
 }
 
