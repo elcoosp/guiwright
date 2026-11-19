@@ -2787,3 +2787,63 @@ pub fn client_bye() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+/// §15.1 `client_count_assert`: one `ClientConn::expect_count` satisfied
+/// on entry over the in-process door (m59 — the kit's `to_have_count`
+/// family as a client-side composition): the subscribe round-trip, the
+/// resolve-all entry evaluation (the `resolve_all_wire` round-trip shape
+/// with the `CountMatch` comparison on top) and the unsubscribe cleanup —
+/// the whole-match-set floor satisfies on the first row set, so no wake
+/// and no re-read ride this number (the event-driven cost is the
+/// `wire_event_delivery` row's); a client-side composition of existing
+/// domains, no wire change.
+pub fn client_count_assert() -> Duration {
+    const ITERATIONS: u32 = 32;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_driver::server::GwpServerHandle;
+    use guiwright_proto::DuplexClient;
+    use guiwright_proto::client::ClientConn;
+    use guiwright_proto::schema::SelectorV1;
+    use std::time::{Duration, Instant};
+    use tokio::runtime::Runtime;
+
+    let runtime = Runtime::new().expect("bench runtime");
+    let (measured, handle) = runtime.block_on(async {
+        let (handle, connect) = GwpServerHandle::spawn_inprocess(
+            move || MockAdapter::with_fixture(&Fixture::buttons()),
+            guiwright_driver::SeamRegistry::new(),
+        )
+        .expect("bench in-process server starts");
+        let mut client = DuplexClient::connect(&connect)
+            .await
+            .expect("bench in-process client");
+        client.handshake("gw-bench/0.1").await.expect("handshake");
+
+        // The whole match set (strict mode never consulted — the m22
+        // record's set read): the fixture's four buttons.
+        let buttons = SelectorV1::Role {
+            role: "Button".into(),
+            name: None,
+        };
+        // Warm-up: one full satisfied assertion (subscription window,
+        // entry evaluation, cleanup) pins the row shape once.
+        let warm = client
+            .expect_count(buttons.clone(), 4, Duration::from_secs(1))
+            .await
+            .expect("warm assertion");
+        assert_eq!(warm, 4, "the fixture's four buttons");
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let found = client
+                .expect_count(buttons.clone(), 4, Duration::from_secs(1))
+                .await
+                .expect("bench assertion");
+            assert_eq!(found, 4, "still the four-button set");
+        }
+        (started.elapsed() / ITERATIONS, handle)
+    });
+
+    handle.shutdown();
+    measured.max(Duration::from_nanos(1))
+}
