@@ -28,9 +28,9 @@ use crate::GwpError;
 use crate::expect::{ExpectEval, ExpectKind, ExpectTracker};
 use crate::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1,
-    GestureV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1,
-    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1, WindowInfoV1,
-    WindowV1,
+    GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1,
+    ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1,
+    VideoV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 
@@ -171,6 +171,55 @@ pub struct ClockState {
     /// Frame-sized jumps applied by the servicing command (the §14 pacing
     /// the ledger records, §12 `clock.bin`).
     pub steps: u64,
+}
+
+/// The client-side carrier for the wire `VideoFile` reply (m55):
+/// field-for-field the §10 payload — the finalized recording file's path
+/// (the client-owned artifact dir the `Start` options named, Playwright-style),
+/// the frames actually encoded (dedup survivors), the frames shed by the
+/// §10 hash-equality backpressure (a static UI compresses to a keyframe +
+/// no-ops) and the wall-clock span the recording covers. Never serialized
+/// itself (the reply rides `ResponseV1::VideoFile` byte-for-byte), so the
+/// schema stays byte-pinned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoOutput {
+    /// The finalized recording file's path (the `VideoFile` path — the
+    /// same line the REPL's `video stop` row renders).
+    pub path: String,
+    /// Frames actually encoded (the §10 dedup survivors).
+    pub frames: u64,
+    /// Frames shed by hash-equality dedup, fps pacing and ring pressure
+    /// (the §10 backpressure — dropped frames are the design working).
+    pub dropped: u64,
+    /// Wall-clock span from the first accepted frame to the last.
+    pub duration_ms: u64,
+}
+
+/// The reply a [`ClientConn::video`] call answers (m55): the §10 domain's
+/// replies are heterogeneous by wire design — the `Start` arm rides the
+/// shared `Pong` ack (the recorder is live), and only the `Stop` arm
+/// carries the finalized `VideoFile` payload. The union names that shape
+/// client-side instead of collapsing it into a bare `Option` that hides
+/// which command answered what — the same honesty the m53 [`InspectReply`]
+/// union draws (never serialized itself, so the schema stays byte-pinned).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VideoReply {
+    /// The recorder is live — the `Start` arm's ack (`Pong` on the wire).
+    Started,
+    /// The `Stop` arm's answer: the finalized recording file.
+    File(VideoOutput),
+}
+
+/// The receipt a [`ClientConn::input`] answers (m56): the frame the raw
+/// batch queued against (the §15.4 rendezvous — clients can await exactly
+/// this frame, the same affordance the [`GestureReceipt::frame_seq`] and
+/// [`ActionReceipt::frame_seq`] fields carry for their domains). A
+/// client-side carrier for the wire `InputQueued` payload — never
+/// serialized itself, so the schema stays byte-pinned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputReceipt {
+    /// The frame the batch was applied at.
+    pub frame_seq: u64,
 }
 
 /// The client half of a GWP conversation, transport-blind (§7, M18).
@@ -808,6 +857,83 @@ pub trait ClientConn: Send + 'static {
                     Ok(InspectReply::Codegen(CodegenOutput { code, warnings }))
                 }
                 other => Err(GwpError::Protocol(format!("Inspect answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §10 recording domain as typed seam sugar (m55): one
+    /// [`RequestV1::Video`] round trip — start the presented-frame recorder
+    /// (the client-owned artifact dir, fps cap; `0` selects the driver
+    /// default) / stop and finalize it — answering the [`VideoReply`] union
+    /// (the start arm acks [`VideoReply::Started`], the stop arm carries the
+    /// finalized file as [`VideoOutput`]: path, encoded frames, dropped
+    /// frames, wall-clock span). The whole wire vocabulary in one call
+    /// taking the wire's own [`VideoV1`] enum — no parallel client-side
+    /// vocabulary to keep in sync, the same rule the m48 sugar set for
+    /// `GestureV1` and the m51/m52/m53 sugars set for the rest. The same
+    /// shapes the TypeScript client has spoken since M3 (`videoStart()` /
+    /// `videoStop()`) and the REPL since M3 (`video start` / `video stop`).
+    /// No wire change: the command rides the `Video` domain byte-for-byte
+    /// as M3 blessed it; every [`ClientConn`] impl inherits the sugar.
+    ///
+    /// The domain's honesty carries over unchanged: the recorder needs the
+    /// adapter's §6.2 pixel capability row, so an adapter without a pixel
+    /// path answers the typed `Unsupported`; a second `Start` while a
+    /// recording runs answers the session's typed rejection (single-slot,
+    /// the M3 rule); a `Stop` with nothing running answers the same
+    /// rejection ("idempotence via error", mirroring the `Clock` rules).
+    /// Frames presented faster than the fps cap collapse by hash-equality
+    /// dedup — the reply's `dropped` count is the §10 backpressure working,
+    /// never an anomaly.
+    fn video(&mut self, cmd: VideoV1) -> impl Future<Output = Result<VideoReply, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Video(cmd)).await? {
+                ResponseV1::Pong => Ok(VideoReply::Started),
+                ResponseV1::VideoFile {
+                    path,
+                    frames,
+                    dropped,
+                    duration_ms,
+                } => Ok(VideoReply::File(VideoOutput {
+                    path,
+                    frames,
+                    dropped,
+                    duration_ms,
+                })),
+                other => Err(GwpError::Protocol(format!("Video answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §9 raw-injection half as typed seam sugar (m56): one
+    /// [`RequestV1::Input`] round trip — the client hand-builds the
+    /// [`InputEventV1`] batch (pointer/keyboard/wheel/IME/window
+    /// primitives, §9 vocabulary) and the driver injects it through the
+    /// target window's real pipeline, applying the batch inside the next
+    /// frame (one rendezvous pump, §15.4). Answers the [`InputReceipt`] —
+    /// the frame the batch applied at. No wire change: the batch rides the
+    /// `Input` domain byte-for-byte as M0 blessed it; every [`ClientConn`]
+    /// impl inherits the sugar, the same shape the TypeScript client has
+    /// spoken since M7 (`input(events)`).
+    ///
+    /// **Un-synthesized, on purpose.** The sugar stays the escape hatch
+    /// the m48 gesture row's contract names — gestures synthesize their
+    /// batches from the driver's per-adapter pacing table (§9), this row
+    /// applies exactly the primitives the client sent, in order (a test
+    /// that needs the pacing fidelity asks [`Self::gesture`], a test that
+    /// needs raw fidelity sends the batch). The connection's window scope
+    /// (§16 v0.4) steers the batch the way it steers gesture coordinates.
+    /// An empty batch is an honest no-op that still pumps (the session's
+    /// own rule) — the receipt names the frame the pump applied at, never
+    /// a synthesized sentinel.
+    fn input(
+        &mut self,
+        events: Vec<InputEventV1>,
+    ) -> impl Future<Output = Result<InputReceipt, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Input { events }).await? {
+                ResponseV1::InputQueued { frame_seq } => Ok(InputReceipt { frame_seq }),
+                other => Err(GwpError::Protocol(format!("Input answered by {other:?}"))),
             }
         }
     }
