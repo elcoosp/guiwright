@@ -325,6 +325,41 @@ try {
   await client.ping(); // the spent wait left the door healthy
   console.log("✓ waitFor: satisfied on entry + the typed expiry — door healthy (M45)");
 
+  // --- the content assertions: expect(locator).toHaveText/Value over a
+  // real door (M54) --- the label-first read answers the Save button's
+  // name, the value-first read answers the demo email input's value, and
+  // a mismatched expectation expires with the typed timeout naming
+  // expected and found (the same connection keeps driving afterwards).
+  const textRow = await client.expectText(
+    { kind: "role", role: "Button", name: { text: "Save", exact: true, ignore_case: true } },
+    { text: "sav", exact: false, ignore_case: true },
+    2000,
+  );
+  assert.equal(textRow.name, "Save", "the label-first read answers the name");
+  const valueRow = await client.expectValue(
+    { kind: "role", role: "TextInput", name: { text: "Email", exact: true, ignore_case: true } },
+    { text: "ada@example.dev", exact: true, ignore_case: false },
+    2000,
+  );
+  assert.equal(valueRow.value, "ada@example.dev", "the value-first read answers the value");
+  await assert.rejects(
+    () =>
+      client.expectText(
+        { kind: "role", role: "Button", name: { text: "Save", exact: true, ignore_case: true } },
+        { text: "Done", exact: true, ignore_case: false },
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have text", "the static state word");
+      assert.match(timeout.message, /Save/, "the found content rides the line");
+      return true;
+    },
+  );
+  await client.ping(); // the spent assertion left the door healthy
+  console.log("✓ expectText/expectValue: both source orders + the typed expiry — door healthy (M54)");
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
