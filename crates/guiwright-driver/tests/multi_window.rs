@@ -338,9 +338,9 @@ async fn scoped_resolution_survives_window_local_updates() {
             NodeKeyV1::AccessKit { tree, .. } => {
                 assert_eq!(tree, *fx.w1.0.as_bytes(), "landed in the editor window");
             }
-            other => panic!("expected AccessKit key, got {other:?}"),
+            other @ NodeKeyV1::Logical { .. } => panic!("expected AccessKit key, got {other:?}"),
         },
-        other => panic!("expected Resolved, got {other:?}"),
+        other @ NodeKeyV1::Logical { .. } => panic!("expected Resolved, got {other:?}"),
     }
 
     server.shutdown();
@@ -361,7 +361,7 @@ fn resolve_scope_is_transient() {
     assert!(session.tree().scope().is_none(), "scope cleared");
 }
 
-/// NodeKey stays the window discriminator end-to-end: two same-local-id
+/// `NodeKey` stays the window discriminator end-to-end: two same-local-id
 /// buttons in different windows carry different identities, so `Action`
 /// requests are already window-unique without extra scoping (§16 v0.4
 /// "targets per window" — the target only narrows resolution).
