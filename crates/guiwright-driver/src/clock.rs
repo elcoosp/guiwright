@@ -93,6 +93,9 @@ impl ClockService {
     /// Plan `dt` as frame-sized steps (§14). The last step carries the
     /// remainder, so the total is exact.
     pub fn plan_steps(dt: Duration) -> Vec<Duration> {
+        // Plan stays bounded: a tail beyond 1023 full steps folds into one
+        // remainder jump (huge jumps still step, just without 60 k pumps).
+        const MAX_FULL_STEPS: u128 = 1023;
         let nanos = dt.as_nanos();
         if nanos == 0 {
             return Vec::new();
@@ -100,9 +103,6 @@ impl ClockService {
         let step_nanos = FRAME_STEP.as_nanos();
         let full = nanos / step_nanos;
         let rem = nanos % step_nanos;
-        // Plan stays bounded: a tail beyond 1023 full steps folds into one
-        // remainder jump (huge jumps still step, just without 60 k pumps).
-        const MAX_FULL_STEPS: u128 = 1023;
         let folded_full = full.min(MAX_FULL_STEPS);
         let mut steps = Vec::with_capacity((folded_full + u128::from(rem > 0)) as usize);
         steps.extend(std::iter::repeat_n(FRAME_STEP, folded_full as usize));
@@ -130,10 +130,7 @@ impl ClockService {
         self.paused = state.paused;
         self.virtual_time = state.virtual_time;
         self.total_steps += steps;
-        let virtual_time_us = state
-            .virtual_time
-            .map(|t| t.as_micros() as u64)
-            .unwrap_or(0);
+        let virtual_time_us = state.virtual_time.map_or(0, |t| t.as_micros() as u64);
         self.ledger.push(ClockLedgerEntry {
             frame_seq,
             command,
@@ -154,7 +151,7 @@ mod tests {
         assert_eq!(steps.len(), 4);
         assert_eq!(steps[0], FRAME_STEP);
         assert_eq!(steps[3], Duration::from_millis(5));
-        let total: u128 = steps.iter().map(|s| s.as_nanos()).sum();
+        let total: u128 = steps.iter().map(Duration::as_nanos).sum();
         assert_eq!(total, dt.as_nanos(), "the plan is exact");
     }
 
@@ -166,14 +163,14 @@ mod tests {
 
     #[test]
     fn zero_jump_plans_nothing() {
-        assert!(ClockService::plan_steps(Duration::ZERO).is_empty());
+        assert_eq!(ClockService::plan_steps(Duration::ZERO).len(), 0);
     }
 
     #[test]
     fn huge_jump_folds_into_bounded_plan() {
         let steps = ClockService::plan_steps(Duration::from_secs(3600));
         assert_eq!(steps.len(), 1024, "plan stays bounded");
-        let total: u128 = steps.iter().map(|s| s.as_nanos()).sum();
+        let total: u128 = steps.iter().map(Duration::as_nanos).sum();
         assert_eq!(total, Duration::from_secs(3600).as_nanos());
     }
 
