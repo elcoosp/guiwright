@@ -13,6 +13,9 @@
 //!   trait every shipped client implements (M18), the mirror of [`Handler`]
 //! * [`wait`] — the client-side wait (m42): the `waitFor(state)` row-set
 //!   evaluator behind [`ClientConn::wait_for`], no wire change
+//! * [`bulk`] — the bulk-content derivations (m46): the kit's m29/m31
+//!   source orders over the describe-all rows, behind
+//!   [`ClientConn::all_text_contents`] / [`ClientConn::all_values`]
 //! * [`schemadoc`] — the published, machine-readable wire schema (§16)
 //!
 //! Anything larger than a frame rides the blob side-channel so command
@@ -21,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blob;
+pub mod bulk;
 pub mod client;
 pub mod conn;
 pub mod convert;
