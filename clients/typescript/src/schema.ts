@@ -50,6 +50,8 @@ export const RequestV1 = {
   Describe: 18,
   /** §8.2 set read carrying facts (M39): the describe-all enumeration, no timeout. */
   DescribeAll: 19,
+  /** §8.2 set read carrying the description fact (M64): the identity widening, no timeout. */
+  DescribeAllIdentity: 20,
 } as const;
 
 export const ClockV1 = {
@@ -161,6 +163,8 @@ export const ResponseV1 = {
   Described: 21,
   /** §8.2 set read carrying facts (M39): one Described row per match. */
   DescribedAll: 22,
+  /** §8.2 set read carrying the description fact (M64): one identity row per match. */
+  DescribedAllIdentity: 23,
 } as const;
 
 export const ErrorCode = {
@@ -287,6 +291,20 @@ export interface DescribedNode {
   bounds: [number, number, number, number] | null;
 }
 
+/** §8.2 set-read row carrying the description fact (M64): the
+ * `DescribedNode` identity four plus the accessible description — the
+ * fact the M38 identity family's third assertion reads (the M39 rows
+ * stay byte-pinned; the widening rides its own domain). */
+export interface DescribedIdentityNode {
+  node: NodeKey;
+  generation: number;
+  role: string;
+  name: string | null;
+  value: string | null;
+  bounds: [number, number, number, number] | null;
+  description: string | null;
+}
+
 export type NodeKey =
   | { kind: "accesskit"; tree: string; node: number }  // tree = 32 hex chars (16 bytes)
   | { kind: "logical"; adapter: string; id: number };
@@ -375,7 +393,8 @@ export type GwpRequest =
   | { kind: "resolve_all"; selector: Selector }
   | { kind: "hit_test"; x: number; y: number }
   | { kind: "describe"; node: NodeKey; generation: number }
-  | { kind: "describe_all"; selector: Selector };
+  | { kind: "describe_all"; selector: Selector }
+  | { kind: "describe_all_identity"; selector: Selector };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -511,4 +530,5 @@ export type GwpResponse =
   | { kind: "resolved_all"; matches: ResolvedMatch[] }
   | { kind: "hit_test"; hit: ResolvedMatch | null }
   | ({ kind: "described" } & DescribedNode)
-  | { kind: "described_all"; rows: DescribedNode[] };
+  | { kind: "described_all"; rows: DescribedNode[] }
+  | { kind: "described_all_identity"; rows: DescribedIdentityNode[] };
