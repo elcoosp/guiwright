@@ -75,6 +75,15 @@ guiwright-driver = { path = "crates/guiwright-driver", version = "0.4.0" }
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 
+[workspace.lints.cargo]
+# §18 "adapters are thin & feature-gated": the iced/freya harness glue
+# features compile-verify their dependency chains (iced_test →
+# iced_renderer/wgpu, freya_testing → software Skia) while the glue
+# implementations land downstream — the harness deps are named by the
+# feature docs, not by a use-site yet, so the unused-dependency lint rides
+# this table (with its rationale) rather than an in-code #[allow].
+unused_dependencies = "allow"
+
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 # Pedantic rides the workspace table (§17 policy): every carve-out lives
