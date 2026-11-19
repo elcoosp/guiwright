@@ -144,6 +144,8 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("client_mock", crate::samples::client_mock),
     ("client_inspect", crate::samples::client_inspect),
     ("client_assert", crate::samples::client_assert),
+    ("client_video", crate::samples::client_video),
+    ("client_input", crate::samples::client_input),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
