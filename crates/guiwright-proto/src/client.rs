@@ -25,10 +25,12 @@ use std::time::{Duration, Instant};
 use guiwright_core::Selector;
 
 use crate::GwpError;
+use crate::expect::{ExpectEval, ExpectKind, ExpectTracker};
 use crate::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, EventKindV1, EventV1,
     GestureV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1,
-    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, WindowInfoV1, WindowV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1, WindowInfoV1,
+    WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 
@@ -887,34 +889,119 @@ pub trait ClientConn: Send + 'static {
                         // a frame wake may confirm `Stable`, `Log` records
                         // are never wakes, and a spent budget answers
                         // `None` — the expiry path below.
-                        let next = loop {
-                            tokio::select! {
-                                event = self.next_event() => {
-                                    // `GwpEvent` has the single `V1`
-                                    // variant, so this bind is
-                                    // irrefutable (the version check
-                                    // pattern the connection loop uses).
-                                    let GwpEvent::V1(event) = event?;
-                                    match event {
-                                        EventV1::TreeChanged { .. } => {
-                                            break Some(Wake::Tree)
-                                        }
-                                        EventV1::FramePresented { .. } => {
-                                            break Some(Wake::Frame)
-                                        }
-                                        // `Log` is never a wake: fall
-                                        // through to the next wake
-                                        // window (the loop body's tail).
-                                        EventV1::Log { .. } => {}
-                                    }
-                                }
-                                () = tokio::time::sleep_until(deadline) => break None,
-                            }
-                        };
+                        let next = next_wake(self, deadline).await?;
                         let Some(next_wake) = next else {
                             return Err(expire(self, state, rendered, timeout, reason).await);
                         };
                         wake = next_wake;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The content assertion, text order (m54 — the kit's
+    /// `expect(locator).to_have_text(...)` over any door): the m29
+    /// source order (the accessible name first, the value as the
+    /// fallback — the source order the text locators match, the m46
+    /// derivation reused verbatim) as a waitable assertion. Composes the
+    /// §7 event channel with the M39 describe-all re-reads exactly like
+    /// [`Self::wait_for`]: subscribe, evaluate the set's head (the
+    /// [`crate::expect::ExpectTracker`] rules), and re-read on every wake
+    /// until the content matches or `timeout` expires. **No wire
+    /// change**: the assertion rides existing domains byte-for-byte;
+    /// every [`ClientConn`] impl inherits it.
+    ///
+    /// **Answers.** The satisfied assertion hands back the row itself —
+    /// directly usable as a `RequestV1::Action` handle (the dump-row
+    /// rule, M11). The timeout is the typed [`GwpError::WaitTimeout`],
+    /// naming the assertion (`have text`), the locator and the last
+    /// evaluation — expected and found — never a wire answer.
+    ///
+    /// **Subscription ownership.** The assertion installs the
+    /// `TreeChanged` + `FramePresented` filter for its duration and
+    /// drops it on return, both on success and on expiry — the same
+    /// rule [`Self::wait_for`] states: a connection running its own
+    /// long-lived subscription (the viewer's live feed) should not hand
+    /// the same connection to an assertion.
+    ///
+    /// # Errors
+    ///
+    /// Protocol failures (`subscribe`, the describe-all round trips,
+    /// `next_event`) propagate as-is — a driver that predates M39
+    /// answers `DescribeAll` with the typed `Unsupported` and the
+    /// assertion surfaces that rejection rather than degrading (the m41
+    /// fail-fast rule). A spent budget answers [`GwpError::WaitTimeout`].
+    fn expect_text(
+        &mut self,
+        selector: SelectorV1,
+        expected: TextMatchV1,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
+        self.expect_content(selector, ExpectKind::Text(expected), timeout)
+    }
+
+    /// The content assertion, value order (m54 — the kit's
+    /// `expect(locator).to_have_value(...)` over any door): the m31
+    /// source order (the value first, the accessible name as the
+    /// fallback — the form-dump flip, so the two reads can never
+    /// silently agree on the wrong datum), the same composition as
+    /// [`Self::expect_text`]. **No wire change**; every [`ClientConn`]
+    /// impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have value`.
+    fn expect_value(
+        &mut self,
+        selector: SelectorV1,
+        expected: TextMatchV1,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
+        self.expect_content(selector, ExpectKind::Value(expected), timeout)
+    }
+
+    /// The shared content-assertion composition (m54): the m42 wait's
+    /// loop shape with the [`ExpectTracker`] evaluation — one entry read,
+    /// event-driven re-reads, the subscription window owned and dropped,
+    /// the typed timeout built by [`expire_expect`]. Tree and frame wakes
+    /// both re-decide (content has no `Stable`-like frame discipline);
+    /// `Log` records are never wakes.
+    fn expect_content(
+        &mut self,
+        selector: SelectorV1,
+        kind: ExpectKind,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedV1, GwpError>> + Send {
+        async move {
+            // The locator string for the timeout line (the kit's render
+            // vocabulary — one conversion, not one per re-read).
+            let rendered = Selector::from(selector.clone()).render();
+
+            // The assertion owns the event filter for its duration, the
+            // wait's rule (a driver that rejects Log-less subscriptions
+            // answers the same `Subscribed` ack every door speaks).
+            self.subscribe(&[EventKindV1::TreeChanged, EventKindV1::FramePresented])
+                .await?;
+
+            let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);
+            let tracker = ExpectTracker::new(kind.clone());
+            loop {
+                let rows = self.describe_all(selector.clone()).await?;
+                match tracker.evaluate(&rows) {
+                    ExpectEval::Satisfied(row) => {
+                        self.unsubscribe().await?;
+                        return Ok(row);
+                    }
+                    ExpectEval::Pending { reason } => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(expire_expect(self, kind, rendered, timeout, reason).await);
+                        }
+                        if next_wake(self, deadline).await?.is_none() {
+                            return Err(expire_expect(self, kind, rendered, timeout, reason).await);
+                        }
                     }
                 }
             }
@@ -930,6 +1017,35 @@ enum Wake {
     Frame,
 }
 
+/// The shared event-wait behind the client-side compositions (`wait_for`,
+/// m42; the content assertions, m54): block on the §7 event channel or
+/// the deadline, whichever lands first. `Log` records are never wakes —
+/// the loop keeps waiting through them. `Ok(None)` is the spent budget
+/// (the caller decides the expiry); event errors propagate as-is.
+async fn next_wake<C: ClientConn + ?Sized>(
+    client: &mut C,
+    deadline: tokio::time::Instant,
+) -> Result<Option<Wake>, GwpError> {
+    loop {
+        tokio::select! {
+            event = client.next_event() => {
+                // `GwpEvent` has the single `V1` variant, so this bind is
+                // irrefutable (the version check pattern the connection
+                // loop uses).
+                let GwpEvent::V1(event) = event?;
+                match event {
+                    EventV1::TreeChanged { .. } => return Ok(Some(Wake::Tree)),
+                    EventV1::FramePresented { .. } => return Ok(Some(Wake::Frame)),
+                    // `Log` is never a wake: fall through to the next
+                    // wake window.
+                    EventV1::Log { .. } => {}
+                }
+            }
+            () = tokio::time::sleep_until(deadline) => return Ok(None),
+        }
+    }
+}
+
 /// Build the typed timeout and drop the wait's subscription (best
 /// effort — the timeout outcome is the answer; a failed cleanup leaves
 /// the filter on, surfaced by the next conversation).
@@ -942,6 +1058,27 @@ async fn expire<C: ClientConn + ?Sized>(
 ) -> GwpError {
     let outcome = GwpError::WaitTimeout {
         state: state.describe(),
+        selector,
+        timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        last,
+    };
+    let _ = client.unsubscribe().await;
+    outcome
+}
+
+/// Build the content assertion's typed timeout (m54) and drop its
+/// subscription (the wait's cleanup rule) — the assertion names the
+/// state word (`have text` / `have value`), the locator and the last
+/// evaluation (expected and found).
+async fn expire_expect<C: ClientConn + ?Sized>(
+    client: &mut C,
+    kind: ExpectKind,
+    selector: String,
+    timeout: Duration,
+    last: String,
+) -> GwpError {
+    let outcome = GwpError::WaitTimeout {
+        state: kind.state(),
         selector,
         timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
         last,
