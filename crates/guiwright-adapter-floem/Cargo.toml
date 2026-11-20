@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Guiwright Level-2 adapter engine for Floem (architecture §4.7): the test-id registry and tiny-skia headless PaintState contributions, role metadata, logical-tree engine, harness-timer clock plan and input vocabulary; the harness glue runs downstream (floem 0.2.0 predates the HeadlessHarness — recorded constraint)"
 
 [dependencies]
