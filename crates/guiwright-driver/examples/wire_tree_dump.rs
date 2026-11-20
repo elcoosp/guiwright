@@ -23,7 +23,9 @@ use guiwright_proto::schema::{RequestV1, ResponseV1, SelectorV1, SnapshotV1};
 fn describe(key: &guiwright_proto::schema::NodeKeyV1) -> String {
     match key {
         guiwright_proto::schema::NodeKeyV1::AccessKit { node, .. } => format!("accesskit#{node}"),
-        other => format!("{other:?}"),
+        other @ guiwright_proto::schema::NodeKeyV1::Logical { .. } => {
+            format!("{other:?}")
+        }
     }
 }
 
@@ -60,10 +62,7 @@ fn main() {
         {
             println!(
                 "full dump @ tree {tree_seq}: {node_count} nodes, focus {}",
-                focus
-                    .as_ref()
-                    .map(describe)
-                    .unwrap_or_else(|| "none".into())
+                focus.as_ref().map_or_else(|| "none".into(), describe)
             );
             for row in &nodes {
                 println!(
