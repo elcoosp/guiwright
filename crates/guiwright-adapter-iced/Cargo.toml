@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Guiwright Level-2 adapter for iced (architecture §4.6): logical-tree engine, role registry, action routing; harness glue behind the `iced` feature"
 
 [dependencies]
