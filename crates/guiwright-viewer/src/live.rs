@@ -441,6 +441,7 @@ fn response_kind(response: &ResponseV1) -> &'static str {
         ResponseV1::Described(_) => "Described",
         ResponseV1::DescribedAll { .. } => "DescribedAll",
         ResponseV1::DescribedAllIdentity { .. } => "DescribedAllIdentity",
+        ResponseV1::DescribedIdentity(_) => "DescribedIdentity",
     }
 }
 
