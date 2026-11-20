@@ -24,10 +24,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use guiwright_proto::GwpError;
 use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1,
-    ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION,
-    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1,
-    SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
+    DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1,
+    NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1,
+    SemActionV1, SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -842,6 +842,9 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::DescribeIdentity(DescribeV1 { node, generation }) => {
             describe_identity_response(session, node, generation)
         }
+        RequestV1::DescribeIdentityState(DescribeV1 { node, generation }) => {
+            describe_identity_state_response(session, node, generation)
+        }
         RequestV1::Action {
             node,
             generation,
@@ -1040,6 +1043,29 @@ fn described_identity_row(row: crate::session::NodeDescription) -> DescribedIden
     }
 }
 
+/// The session row's m68 wire shape — the identity row flattened with the
+/// state three, the one mapping the m68 single-node arm speaks. One copy
+/// (the m64 `described_row` factoring's rule: every future field change
+/// stays a one-line edit), the m64 row-widening rule's third link — the
+/// state facts ride beside the identity row, never instead of it.
+fn described_identity_state_row(
+    row: crate::session::NodeStateDescription,
+) -> DescribedIdentityStateV1 {
+    let identity = described_identity_row(row.row);
+    DescribedIdentityStateV1 {
+        node: identity.node,
+        generation: identity.generation,
+        role: identity.role,
+        name: identity.name,
+        value: identity.value,
+        bounds: identity.bounds,
+        description: identity.description,
+        focused: row.focused,
+        enabled: row.enabled,
+        checked: row.checked,
+    }
+}
+
 /// The describe-all read over the wire (M39 — the m37 record's standing
 /// gap: "enumerating a set's facts would open one Describe round trip per
 /// row"): the resolve-all walk's rows carrying the Described identity
@@ -1108,6 +1134,29 @@ fn describe_identity_response<A: FrameworkAdapter>(
     let key: NodeKey = node.into();
     match session.describe(&key, generation) {
         Ok(row) => ResponseV1::DescribedIdentity(described_identity_row(row)),
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The single-node identity-state describe read over the wire (m68 — the
+/// m67 record's named standing gap: "no state flags on the identity row:
+/// the checked/focused/enabled facts ride the dump rows and the kit
+/// assertion vocabulary"): one node's facts — the identity four, the
+/// description fact plus the state three — for a handle the client
+/// already holds, one round trip instead of one question per assertion.
+/// The M36 `Describe` arm's boundary verbatim: handle-addressed, so no
+/// window scope applies (a point is ambiguous, a selector the tree
+/// answers; the handle IS the node); the generation guard rejects a
+/// recycled id (`StaleGeneration`) and a dead one (`UnknownNode`) as
+/// the typed errors; a pump runs first (consistency, like `Describe`).
+fn describe_identity_state_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    node: NodeKeyV1,
+    generation: u32,
+) -> ResponseV1 {
+    let key: NodeKey = node.into();
+    match session.describe_state(&key, generation) {
+        Ok(row) => ResponseV1::DescribedIdentityState(described_identity_state_row(row)),
         Err(err) => error_response(&err),
     }
 }
