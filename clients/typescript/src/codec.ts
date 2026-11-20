@@ -130,6 +130,13 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       encodeNodeKey(enc, req.node);
       enc.u32(req.generation);
       break;
+    case "describe_all_identity_state":
+      // §8.1 state facts at set width (M70): the M64 walk payload's
+      // exact shape — the m64 payload-reuse rule at set width (the frame
+      // differs from describe_all_identity only in the variant byte).
+      enc.u32(RequestV1.DescribeAllIdentityState);
+      encodeSelector(enc, req.selector);
+      break;
     case "action":
       enc.u32(RequestV1.Action);
       encodeNodeKey(enc, req.node);
@@ -642,6 +649,15 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       // row for the request's handle, echoed (the dump-row rule) — the
       // M64 row's fields plus the state three.
       return { kind: "described_identity_state", ...decodeDescribedIdentityStateNode(dec) };
+    }
+    case 26: {
+      // §8.1 identity row's state facts at set width (M70): the M68 row
+      // per match, document order (the m68/m69 records' named standing
+      // gap — the m64 row-widening rule's fourth link).
+      const n = dec.varint();
+      const rows: DescribedIdentityStateNode[] = [];
+      for (let i = 0; i < n; i += 1) rows.push(decodeDescribedIdentityStateNode(dec));
+      return { kind: "described_all_identity_state", rows };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
