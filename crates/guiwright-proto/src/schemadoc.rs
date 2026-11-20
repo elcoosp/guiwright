@@ -38,9 +38,11 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// (M32, the hit-test read) and `Describe` follows `HitTest`
 /// (M36, the node-describe read), `DescribeAll` follows `Describe`
 /// (M39, the describe-all read), `DescribeAllIdentity` follows
-/// `DescribeAll` (M64, the description fact's widening) and
+/// `DescribeAll` (M64, the description fact's widening),
 /// `DescribeIdentity` follows `DescribeAllIdentity` (M66, the same
-/// fact set at handle width); the pinning tests enforce the order.
+/// fact set at handle width) and `DescribeIdentityState` follows
+/// `DescribeIdentity` (M68, the state facts' widening); the pinning
+/// tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -100,6 +102,11 @@ const REQUESTS: &[Variant] = &[
         "DescribeIdentity",
         "{ node: NodeKeyV1, generation: u32 varint } — the identity fact set at handle width (M66, the m64 record's named standing gap): the M36 Describe handle pair in, the M64 identity row out — the identity four plus the description fact, one round trip instead of the whole-set walk → DescribedIdentity; handle-addressed, the Action boundary's generation guard (StaleGeneration / UnknownNode)",
     ),
+    v(
+        22,
+        "DescribeIdentityState",
+        "{ node: NodeKeyV1, generation: u32 varint } — the identity fact set plus the state facts at handle width (M68, the m67 record's named standing gap): the M36 Describe handle pair in, the M68 identity-state row out — the identity four, the description fact plus the state three (focused / enabled / checked, see domains.checked_state), one round trip instead of one question per assertion → DescribedIdentityState; handle-addressed, the Action boundary's generation guard (StaleGeneration / UnknownNode)",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
@@ -109,7 +116,8 @@ const REQUESTS: &[Variant] = &[
 /// `Subscribed`) at 17–18, the M30 `ResolvedAll` reply at 19, the
 /// M32 `HitTest` reply at 20, the M36 `Described` reply at 21, the
 /// M39 `DescribedAll` reply at 22, the M64 `DescribedAllIdentity`
-/// reply at 23 and the M66 `DescribedIdentity` reply at 24.
+/// reply at 23, the M66 `DescribedIdentity` reply at 24 and the M68
+/// `DescribedIdentityState` reply at 25.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -199,6 +207,11 @@ const RESPONSES: &[Variant] = &[
         24,
         "DescribedIdentity",
         "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string> } — the M64 identity row at handle width (M66): the request's handle echoed, the identity four plus the description fact; stale and unknown handles ride the typed Error codes",
+    ),
+    v(
+        25,
+        "DescribedIdentityState",
+        "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) } — the identity row's state facts at handle width (M68, the m67 record's named standing gap): the request's handle echoed, the M64 identity row's fields plus the state three (the core Check::Focused / Check::Enabled / Check::Checked reads' shapes at fact width); stale and unknown handles ride the typed Error codes",
     ),
 ];
 
@@ -292,6 +305,12 @@ fn domains_json() -> serde_json::Value {
                 (0, "TreeChanged", "the logical tree changed (the seq space TreeSnapshot/TreeDump report)"),
                 (1, "FramePresented", "a frame was presented { seq, hash } — the same vocabulary the trace recorder dedups on (§15.5)"),
                 (2, "Log", "a log record — one logs.ndjson-shape JSON line per record, streamed from the session thread's per-session tracing tap; the tap is opt-in (ServerOptions::log_tail), and a session spawned without it still rejects the kind with Error { Unsupported } (the log-tail milestone)"),
+            ]),
+            "checked_state": domain_table("CheckedStateV1", &[
+                (0, "NotCheckable", "the node exposes no checked state (not a checkable role) — a total fact on the M68 identity-state row, never an Error"),
+                (1, "Unchecked", "the AccessKit Toggled::False state (the M20 to_be_unchecked vocabulary)"),
+                (2, "Checked", "the AccessKit Toggled::True state (the M20 to_be_checked vocabulary)"),
+                (3, "Mixed", "the AccessKit Toggled::Mixed tri-state — its own word, never squeezed into an Option<bool> (a mixed checkbox is not an unchecked one)"),
             ]),
     })
 }
