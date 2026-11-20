@@ -1,6 +1,6 @@
 # Guiwright — Technical Architecture
 
-**Status:** living design doc — the original v0.1 draft, amended through milestone 75 (records: `docs/m2-*.md` … `docs/m75-ts-state-assertions.md`); the §16 parity map and §7 transport list track what shipped
+**Status:** living design doc — the original v0.1 draft, amended through milestone 77 (records: `docs/m2-*.md` … `docs/m77-egui-headless-pixels.md`); the §16 parity map and §7 transport list track what shipped
 **Date:** 2026-11-06 (drafted), 2026-11-20 (last amended)
 **Scope:** a Playwright-grade test & automation driver for Rust GUI frameworks — GPUI, Xilem/Masonry, Floem, Iced, egui, Slint, Freya
 **Evidence base:** shallow clones of `zed`, `linebender/xilem`, `lapce/floem`, `iced-rs/iced`, `emilk/egui`, `slint-ui/slint`, `marc2332/freya`, `AccessKit/accesskit`, `rerun-io/kittest` (HEADs of 2026-11-03..06; versions and file paths cited inline). Paths are relative to each repo root.
@@ -141,7 +141,7 @@ Each dossier states: (a) how Guiwright embeds, (b) how the semantic tree is obta
 
 ### 4.6 Iced (Level 2, mostly pre-built)
 
-- **Embed:** `iced_test::Emulator` drives a real `Program` (update + subscriptions + tasks) headlessly with determinism modes (`Zen` = settle-to-quiescence, `Patient`, `Immediate`) and `Preset` reproducible boot state; `Simulator` drives a bare `Element` for widget-level tests. Injection = `UserInterface::update(&[core::Event])`. Screenshots via the `Headless` renderer trait (`screenshot(size, scale, background)`), backend chosen by `ICED_TEST_BACKEND` (wgpu-30 offscreen readback or tiny-skia CPU).
+- **Embed:** `iced_test::Emulator` drives a real `Program` (update + subscriptions + tasks) headlessly with determinism modes (`Zen` = settle-to-quiescence, `Patient`, `Immediate`) and `Preset` reproducible boot state; `Simulator` drives a bare `Element` for widget-level tests. Injection = `UserInterface::update(&[core::Event])`. Screenshots via the `Headless` renderer trait (`screenshot(size, scale, background)`), backend chosen by `ICED_TEST_BACKEND` (wgpu-30 offscreen readback or tiny-skia CPU). **Bound (m76):** the embed paragraph is the implemented contract — one renderer for the harness's lifetime, `Zen` settles prove instructions applied, and the read-back is the live-mode pattern (a `Task::widget` operation shipping the walk over an mpsc channel); iced_test 0.14 names no renderer backend, so the `iced` feature pins `tiny-skia` explicitly.
 - **Locators:** `iced_selector` already provides the `Selector` trait (matches by `&str` text, `widget::Id`, `Point`, closures, focus) and `Find`/`FindAll` `Operation`s returning `Target { id, bounds, visible_bounds }` with scrollable-aware clipping. Guiwright maps `get_by_text`/`get_by_id` onto it and adds role semantics via a contributed widget-kind registry (button/text-input/checkbox map to `Tag`/widget type introspection).
 - **Live mode:** injection via `iced_runtime::Action::Event { window, event }` pushed through the event-loop `Proxy` (pattern proven at `winit/src/lib.rs:1770`; the `Proxy` wraps winit's proxy with 100-slot backpressure). Read-back via `Task`/`task::effect(Action::Widget(op))` with an `Operation` that ships `{id, bounds, visible_bounds, text}` over an mpsc channel — operations run on the loop thread, the channel is the safe boundary. Window capture via `window::screenshot(id)`.
 - **Gaps:** no a11y tree (nothing to piggyback — Guiwright builds its logical tree from selector ops); widget `Id`s are optional → text/geometry fallbacks matter; snapshot hashes are renderer- and font-dependent (baselines must record `renderer.name()` and load fonts via `Settings.fonts`); `iced_tester`'s `.ice` format stays experimental — Guiwright does not depend on it.
@@ -604,7 +604,7 @@ Ranked by (a) harness completeness today, (b) a11y substrate, (c) integration ri
 
 1. **egui** — full a11y, existing harness + existing driver protocol; adapter ≈ glue.
 2. **Masonry/Xilem** — `WidgetId↔NodeId` identity, headless deterministic harness, wgpu-free screenshots; gaps: kittest TODO (we fill), EnableAccessTree laziness (known).
-3. **Iced** — `Emulator`+`iced_selector`+headless screenshots are 80 % of a Level-2 adapter; gap: no a11y (logical tree), role registry contribution.
+3. **Iced** — `Emulator`+`iced_selector`+headless screenshots are 80 % of a Level-2 adapter; gap: no a11y (logical tree), role registry contribution. **Shipped (m76):** the logical-tree engine + role registry + the real `Emulator` harness — `SimulatorSeam` bound to `iced_test::Emulator`, the §4.6 `Task::widget` read-back, runtime CI; the pixel rows stay explicit until the §10 baseline pass binds `Emulator::screenshot`.
 4. **Freya** — `TestingRunner` + software Skia + a11y ids; gap: key-event fidelity, multi-window headless.
 5. **Slint** — testing backend is complete but semver-exempt (per-release maintenance) and needs debug-info builds; a11y door exists for live apps.
 6. **Floem** — great headless event harness; needs test-id + role metadata + headless pixels (two scoped contributions).
