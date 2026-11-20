@@ -207,6 +207,29 @@ pub enum RequestV1 {
     /// appended after `DescribeAllIdentity` (discriminant 21); see
     /// [`RequestV1::Video`].
     DescribeIdentity(DescribeV1),
+    /// Single-node identity-state describe (§8.1's identity fact set
+    /// plus the state facts at handle width, M68 — the m67 record's
+    /// named standing gap: "no state flags on the identity row: the
+    /// checked/focused/enabled facts ride the dump rows and the kit
+    /// assertion vocabulary"): one node's facts — the identity four, the
+    /// accessible description **plus the state three** (focused /
+    /// enabled / checked) — for a handle the client already holds, one
+    /// round trip instead of one question per assertion (the kit's
+    /// `to_be_checked` / `to_be_focused` vocabulary answers one fact at
+    /// a time, and the dump row carries none of them). The payloads
+    /// reuse the shapes every client already speaks: the request is the
+    /// M36 [`DescribeV1`] handle pair (the [`RequestV1::Action`] guard's
+    /// exact shape), the reply is the M68 [`DescribedIdentityStateV1`]
+    /// row — the m64 row-widening rule's third link. Handle-addressed,
+    /// not scoped, the [`RequestV1::Describe`] boundary: the generation
+    /// guard rejects a recycled id (`ErrorCode::StaleGeneration`) and a
+    /// dead one (`ErrorCode::UnknownNode`) as the typed `Error`. A
+    /// driver older than M68 cannot decode the appended request at all
+    /// (the append-only cost every appended domain has carried since
+    /// M3). The reply is [`ResponseV1::DescribedIdentityState`]. Wire
+    /// discipline: appended after `DescribeIdentity` (discriminant 22);
+    /// see [`RequestV1::Video`].
+    DescribeIdentityState(DescribeV1),
 }
 
 /// The describe-all read's request payload (§8.1/§8.2, M39): the
@@ -678,6 +701,17 @@ pub enum ResponseV1 {
     /// unknown handles ride the typed `Error` codes, never a partial
     /// row. Append-only wire discipline — see [`RequestV1::Video`].
     DescribedIdentity(DescribedIdentityV1),
+    /// Single-node identity-state describe reply (§8.1's state facts at
+    /// handle width, M68): the M68 [`DescribedIdentityStateV1`] row —
+    /// the M64 [`DescribedIdentityV1`] row's fields plus the focused /
+    /// enabled / checked facts — for the request's handle, echoed (a
+    /// row is directly usable as the [`RequestV1::Action`] node, the
+    /// dump-row rule). The M64 identity encoding stays byte-pinned (the
+    /// widening is its own appended domain — the m64 record's
+    /// payload-reuse rule at state width). Stale and unknown handles
+    /// ride the typed `Error` codes, never a partial row. Append-only
+    /// wire discipline — see [`RequestV1::Video`].
+    DescribedIdentityState(DescribedIdentityStateV1),
 }
 
 /// One node's identity facts ([`ResponseV1::Described`], M36) — the
@@ -746,6 +780,100 @@ impl From<&DescribedIdentityV1> for DescribedV1 {
             name: row.name.clone(),
             value: row.value.clone(),
             bounds: row.bounds,
+        }
+    }
+}
+
+/// The checked-state fact's wire vocabulary ([`DescribedIdentityStateV1`],
+/// M68): AccessKit's tri-state beside the not-checkable fact — the m67
+/// record's named standing gap, closed as a four-way word. Never
+/// squeezed into an `Option<bool>`: a mixed checkbox is not an unchecked
+/// one, and squeezing would lie on the wire.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CheckedStateV1 {
+    /// The node exposes no checked state (not a checkable role — the
+    /// core `Check::Checked` read's fail-fast shape, a total fact here,
+    /// never an error).
+    NotCheckable,
+    /// The AccessKit `Toggled::False` state.
+    Unchecked,
+    /// The AccessKit `Toggled::True` state.
+    Checked,
+    /// The AccessKit `Toggled::Mixed` tri-state.
+    Mixed,
+}
+
+impl From<accesskit::Toggled> for CheckedStateV1 {
+    /// The AccessKit tri-state mapped onto the wire vocabulary — the
+    /// one mapping the driver's state read speaks (the core check
+    /// vocabulary's shapes, at fact width).
+    fn from(toggled: accesskit::Toggled) -> Self {
+        match toggled {
+            accesskit::Toggled::False => Self::Unchecked,
+            accesskit::Toggled::True => Self::Checked,
+            accesskit::Toggled::Mixed => Self::Mixed,
+        }
+    }
+}
+
+/// One node's identity facts, description and state facts included
+/// ([`ResponseV1::DescribedIdentityState`], M68) — the M64
+/// [`DescribedIdentityV1`] row's fields plus the state three, the m67
+/// record's named standing gap (the checked/focused/enabled facts rode
+/// the dump rows and the kit assertion vocabulary only; the dump row
+/// carries none of them and the assertion vocabulary answers one
+/// question at a time). `DescribedIdentityV1` keeps its byte-exact M64
+/// encoding, the append-only rule — the widening lands as its own row
+/// rather than a reshape (the m64 row-widening rule's third link).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DescribedIdentityStateV1 {
+    /// The described node — the request's handle, echoed (a row is
+    /// directly usable as the [`RequestV1::Action`] node, the dump-row
+    /// rule).
+    pub node: NodeKeyV1,
+    /// The node's current resolve generation (the handle is live at this
+    /// generation — the guard the boundary enforced).
+    pub generation: u32,
+    /// AccessKit role `Debug` name (`Button`, `TextInput`, …).
+    pub role: String,
+    /// Accessible name, when the node has one.
+    pub name: Option<String>,
+    /// Value (inputs), when the node carries one.
+    pub value: Option<String>,
+    /// Window-relative bounds, physical px (AccessKit convention) — the
+    /// same rect [`ResponseV1::Resolved`] reports.
+    pub bounds: Option<[f64; 4]>,
+    /// Accessible description, when the node carries one — the m38
+    /// read's fact (`description()` only, never the name or the value:
+    /// a value never satisfies a description).
+    pub description: Option<String>,
+    /// The focused fact: the node IS the tree's focus right now (the
+    /// core `Check::Focused` read's shape, `tree.focus()` equality).
+    pub focused: bool,
+    /// The enabled fact: false = the AccessKit `Disabled` state flag set
+    /// (the core `Check::Enabled` / `Check::Disabled` read's shape).
+    pub enabled: bool,
+    /// The checked tri-state beside the not-checkable fact — the
+    /// [`CheckedStateV1`] vocabulary word, never an `Option<bool>` (a
+    /// mixed checkbox is not an unchecked one).
+    pub checked: CheckedStateV1,
+}
+
+impl From<&DescribedIdentityStateV1> for DescribedIdentityV1 {
+    /// The M64 row shape: the identity row projected off the m68 row —
+    /// the projection the identity and content kinds read when they
+    /// evaluate over the wider row (the state facts ride beside the
+    /// row, never instead of it; the m64 `From<&DescribedIdentityV1>`
+    /// projection's third link).
+    fn from(row: &DescribedIdentityStateV1) -> Self {
+        Self {
+            node: row.node.clone(),
+            generation: row.generation,
+            role: row.role.clone(),
+            name: row.name.clone(),
+            value: row.value.clone(),
+            bounds: row.bounds,
+            description: row.description.clone(),
         }
     }
 }
@@ -1899,6 +2027,100 @@ mod tests {
                 value: None,
                 bounds: Some([16.0, 204.0, 136.0, 236.0]),
                 description: Some("Installs the latest build".into()),
+            },
+        ))];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
+    }
+
+    /// M68 (the identity read's state facts at handle width): the domain
+    /// appends after `DescribeIdentity`, reusing the M36 request payload;
+    /// the reply is the m64 row-widening rule's third link — the state
+    /// three riding beside the identity row, never a reshape of it (the
+    /// m67 record's named standing gap).
+    #[test]
+    fn m68_describe_identity_state_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        assert_eq!(
+            discriminant(&RequestV1::DescribeIdentityState(DescribeV1 {
+                node: NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                },
+                generation: 0,
+            })),
+            22
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::DescribedIdentityState(
+                DescribedIdentityStateV1 {
+                    node: NodeKeyV1::Logical {
+                        adapter: String::new(),
+                        id: 0
+                    },
+                    generation: 0,
+                    role: String::new(),
+                    name: None,
+                    value: None,
+                    bounds: None,
+                    description: None,
+                    focused: false,
+                    enabled: true,
+                    checked: CheckedStateV1::NotCheckable,
+                }
+            )),
+            25
+        );
+        // The checked vocabulary is its own pinned enum (a mixed checkbox
+        // is not an unchecked one — never squeezed into an Option<bool>).
+        let checked = |c: CheckedStateV1| discriminant(&c);
+        assert_eq!(checked(CheckedStateV1::NotCheckable), 0);
+        assert_eq!(checked(CheckedStateV1::Unchecked), 1);
+        assert_eq!(checked(CheckedStateV1::Checked), 2);
+        assert_eq!(checked(CheckedStateV1::Mixed), 3);
+    }
+
+    /// §7 single-node identity-state describe round-trip (M68): the M36
+    /// handle request and the M68 identity-plus-state reply (the state
+    /// three riding beside the M64 row's fields) survive postcard both
+    /// ways.
+    #[test]
+    fn describe_identity_state_domain_roundtrip() {
+        let requests = [GwpRequest::V1(RequestV1::DescribeIdentityState(
+            DescribeV1 {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 2,
+                },
+                generation: 0,
+            },
+        ))];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [GwpResponse::V1(ResponseV1::DescribedIdentityState(
+            DescribedIdentityStateV1 {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 9,
+                },
+                generation: 0,
+                role: "CheckBox".into(),
+                name: Some("Subscribe".into()),
+                value: None,
+                bounds: Some([16.0, 276.0, 136.0, 308.0]),
+                description: None,
+                focused: true,
+                enabled: true,
+                checked: CheckedStateV1::Mixed,
             },
         ))];
         for resp in responses {
