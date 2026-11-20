@@ -448,6 +448,48 @@ pub trait ClientConn: Send + 'static {
         }
     }
 
+    /// The single-node identity describe read over the wire (m66 — the
+    /// m64 record's named standing gap: the M36 [`Self::describe`] read
+    /// keeps its identity-four encoding and the description fact rides
+    /// the identity *set* read only): one node's facts — the identity
+    /// four plus the accessible description — for a handle the client
+    /// already holds (a [`Self::resolve_all`] row, a hit row, a dump
+    /// row: the dump-row rule, M11), one round trip instead of the
+    /// whole-set walk [`Self::describe_all_identity`] runs.
+    ///
+    /// The payloads reuse the shapes every client already speaks (the
+    /// m64 payload-reuse rule at handle width): the request is the M36
+    /// `Describe` handle pair — the [`RequestV1::Action`] guard's exact
+    /// shape — and the reply is the M64 identity row, so a client that
+    /// can act on a row can describe it at identity width.
+    /// Handle-addressed, so no window scope applies (the
+    /// [`RequestV1::Action`] boundary); the generation guard rejects a
+    /// recycled id (`ErrorCode::StaleGeneration`) and a dead one
+    /// (`ErrorCode::UnknownNode`) as the typed `Error` — the same
+    /// honesty an [`RequestV1::Action`] on the row would meet. A driver
+    /// older than m66 cannot decode the appended request at all (the
+    /// append-only cost every appended domain has carried since M3), so
+    /// there is no fallback derivation (the m41 fail-fast rule); the
+    /// REPL's per-row fallback is the interactive surface's concession,
+    /// never this one's.
+    fn describe_identity(
+        &mut self,
+        node: NodeKeyV1,
+        generation: u32,
+    ) -> impl Future<Output = Result<DescribedIdentityV1, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::DescribeIdentity(DescribeV1 { node, generation }))
+                .await?
+            {
+                ResponseV1::DescribedIdentity(described) => Ok(described),
+                other => Err(GwpError::Protocol(format!(
+                    "DescribeIdentity answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
     /// The kit's bulk text read over the wire (m46 — the m41 record's
     /// Rust-client half, closed): every current match of `selector` with
     /// its content derived client-side from the [`Self::describe_all`]
