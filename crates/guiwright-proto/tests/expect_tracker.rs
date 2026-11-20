@@ -306,7 +306,7 @@ fn the_identity_rows_pin_the_set_head() {
     }
     match tracker.evaluate_identity(&[]) {
         ExpectIdentityEval::Pending { reason } => {
-            assert!(reason.contains("no match"), "{reason:?}")
+            assert!(reason.contains("no match"), "{reason:?}");
         }
         ExpectIdentityEval::Satisfied(_) => panic!("an empty set cannot satisfy"),
     }
