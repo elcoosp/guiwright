@@ -426,6 +426,11 @@
       "index": 22,
       "name": "DescribeIdentityState",
       "payload": "{ node: NodeKeyV1, generation: u32 varint } — the identity fact set plus the state facts at handle width (M68, the m67 record's named standing gap): the M36 Describe handle pair in, the M68 identity-state row out — the identity four, the description fact plus the state three (focused / enabled / checked, see domains.checked_state), one round trip instead of one question per assertion → DescribedIdentityState; handle-addressed, the Action boundary's generation guard (StaleGeneration / UnknownNode)"
+    },
+    {
+      "index": 23,
+      "name": "DescribeAllIdentityState",
+      "payload": "{ selector: SelectorV1 } — the same walk carrying the state three beside the identity four and the description fact (M70, the m68/m69 records' named standing gap: the state facts at set width) → DescribedAllIdentityState; the M64/M68 encodings stay byte-pinned, the widening is its own domain reusing the DescribeAll payload — one round trip instead of one DescribeIdentityState per row"
     }
   ],
   "responses": [
@@ -558,6 +563,11 @@
       "index": 25,
       "name": "DescribedIdentityState",
       "payload": "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) } — the identity row's state facts at handle width (M68, the m67 record's named standing gap): the request's handle echoed, the M64 identity row's fields plus the state three (the core Check::Focused / Check::Enabled / Check::Checked reads' shapes at fact width); stale and unknown handles ride the typed Error codes"
+    },
+    {
+      "index": 26,
+      "name": "DescribedAllIdentityState",
+      "payload": "{ rows: seq<DescribedIdentityStateV1 { node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) }> } — the same walk's rows carrying the state three beside the identity four and the description fact (M70, the m68/m69 records' named standing gap); document order, an empty set answers with an empty list"
     }
   ],
   "schema": "gwp-schema/v1",
