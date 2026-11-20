@@ -111,6 +111,14 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       enc.u32(RequestV1.DescribeAllIdentity);
       encodeSelector(enc, req.selector);
       break;
+    case "describe_identity":
+      // §8.1 identity fact set at handle width (M66): the M36 Describe
+      // payload's exact shape — the dump-row handle plus the generation
+      // it was minted at (the Action boundary's guard).
+      enc.u32(RequestV1.DescribeIdentity);
+      encodeNodeKey(enc, req.node);
+      enc.u32(req.generation);
+      break;
     case "action":
       enc.u32(RequestV1.Action);
       encodeNodeKey(enc, req.node);
@@ -611,6 +619,12 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       const rows: DescribedIdentityNode[] = [];
       for (let i = 0; i < n; i += 1) rows.push(decodeDescribedIdentityNode(dec));
       return { kind: "described_all_identity", rows };
+    }
+    case 24: {
+      // §8.1 identity fact set at handle width (M66): the M64 row for
+      // the request's handle, echoed (the dump-row rule) — the identity
+      // four plus the description fact.
+      return { kind: "described_identity", ...decodeDescribedIdentityNode(dec) };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
