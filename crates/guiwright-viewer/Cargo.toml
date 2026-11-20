@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Guiwright trace viewer (architecture §5.2/§12): reads gwtrace/v1 zip archives, resolves the UI tree at any frame from snapshots + diffs, emits a self-contained trace.html scrubber"
 
 [dependencies]
