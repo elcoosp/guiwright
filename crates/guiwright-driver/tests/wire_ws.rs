@@ -123,7 +123,9 @@ async fn events_flow_over_ws() {
         .expect("event parses");
     match event {
         guiwright_proto::GwpEvent::V1(guiwright_proto::EventV1::FramePresented { .. }) => {}
-        other => panic!("expected FramePresented, got {other:?}"),
+        other @ guiwright_proto::GwpEvent::V1(_) => {
+            panic!("expected FramePresented, got {other:?}")
+        }
     }
 
     client.unsubscribe().await.expect("unsubscribe");
