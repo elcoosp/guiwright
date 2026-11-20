@@ -9,6 +9,8 @@ import {
   ClockV1,
   type DescribedNode,
   type DescribedIdentityNode,
+  type DescribedIdentityStateNode,
+  type CheckedState,
   type ClockCmd,
   ErrorCode,
   GwpRequest,
@@ -116,6 +118,15 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
       // payload's exact shape — the dump-row handle plus the generation
       // it was minted at (the Action boundary's guard).
       enc.u32(RequestV1.DescribeIdentity);
+      encodeNodeKey(enc, req.node);
+      enc.u32(req.generation);
+      break;
+    case "describe_identity_state":
+      // §8.1 identity row's state facts at handle width (M68): the M36
+      // Describe payload's exact shape — the m66 payload-reuse rule, one
+      // more domain (the frame differs from describe_identity only in
+      // the variant byte).
+      enc.u32(RequestV1.DescribeIdentityState);
       encodeNodeKey(enc, req.node);
       enc.u32(req.generation);
       break;
@@ -626,6 +637,12 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       // four plus the description fact.
       return { kind: "described_identity", ...decodeDescribedIdentityNode(dec) };
     }
+    case 25: {
+      // §8.1 identity row's state facts at handle width (M68): the M68
+      // row for the request's handle, echoed (the dump-row rule) — the
+      // M64 row's fields plus the state three.
+      return { kind: "described_identity_state", ...decodeDescribedIdentityStateNode(dec) };
+    }
     default:
       throw new Error(`unknown response variant ${variant}`);
   }
@@ -642,6 +659,25 @@ function decodeDescribedIdentityNode(dec: Decoder): DescribedIdentityNode {
     : null;
   const description = dec.optionTag() ? dec.str() : null;
   return { node, generation, role, name, value, bounds, description };
+}
+
+function decodeDescribedIdentityStateNode(dec: Decoder): DescribedIdentityStateNode {
+  const identity = decodeDescribedIdentityNode(dec);
+  const focused = dec.bool();
+  const enabled = dec.bool();
+  const checked = decodeCheckedState(dec);
+  return { ...identity, focused, enabled, checked };
+}
+
+/** The M68 checked vocabulary (a four-way word, never an Option): the
+ * postcard unit-variant index maps onto the schema's words. */
+function decodeCheckedState(dec: Decoder): CheckedState {
+  const variant = dec.u32();
+  if (variant === 0) return "not_checkable";
+  if (variant === 1) return "unchecked";
+  if (variant === 2) return "checked";
+  if (variant === 3) return "mixed";
+  throw new Error(`unknown checked-state variant ${variant}`);
 }
 
 function decodeEventKind(dec: Decoder): EventKind {
