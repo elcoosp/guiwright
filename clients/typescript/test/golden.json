@@ -152,6 +152,10 @@
     {
       "frame_hex": "15000000001600010101010101010101010101010101010200",
       "name": "describe_identity_state_save_handle"
+    },
+    {
+      "frame_hex": "0d00000000170008436865636b426f7800",
+      "name": "describe_all_identity_state_checkboxes"
     }
   ],
   "responses": [
@@ -447,6 +451,57 @@
       },
       "frame_hex": "5900000000190001010101010101010101010101010101090008436865636b426f7801135061727469616c6c7920696e7374616c6c6564000100000000000030400000000000c0714000000000000061400000000000c0734000010103",
       "name": "described_identity_state_mixed_checkbox"
+    },
+    {
+      "decoded": {
+        "kind": "described_all_identity_state",
+        "rows": [
+          {
+            "bounds": [
+              16.0,
+              236.0,
+              136.0,
+              268.0
+            ],
+            "checked": "checked",
+            "description": null,
+            "enabled": true,
+            "focused": false,
+            "generation": 0,
+            "name": "Notifications",
+            "node": {
+              "kind": "accesskit",
+              "node": 9,
+              "tree": "01010101010101010101010101010101"
+            },
+            "role": "CheckBox",
+            "value": null
+          },
+          {
+            "bounds": [
+              16.0,
+              284.0,
+              136.0,
+              316.0
+            ],
+            "checked": "mixed",
+            "description": null,
+            "enabled": true,
+            "focused": false,
+            "generation": 0,
+            "name": "Partially installed",
+            "node": {
+              "kind": "accesskit",
+              "node": 11,
+              "tree": "01010101010101010101010101010101"
+            },
+            "role": "CheckBox",
+            "value": null
+          }
+        ]
+      },
+      "frame_hex": "ab000000001a020001010101010101010101010101010101090008436865636b426f78010d4e6f74696669636174696f6e73000100000000000030400000000000806d4000000000000061400000000000c070400000010200010101010101010101010101010101010b0008436865636b426f7801135061727469616c6c7920696e7374616c6c6564000100000000000030400000000000c0714000000000000061400000000000c0734000000103",
+      "name": "described_all_identity_state_checkboxes"
     },
     {
       "decoded": {
