@@ -435,9 +435,9 @@ shard-aware discovery without touching the wire. Reports: `report.json` (`gwrun/
 
 | Framework            | Crate                                          | Accessibility source                                                                                | CI coverage                             |
 | -------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| egui                 | `guiwright-adapter-egui`                       | egui's own AccessKit tree (Level 1)                                                                 | embedded tests on Linux, macOS, Windows |
+| egui                 | `guiwright-adapter-egui`                       | egui's own AccessKit tree (Level 1); headless wgpu pixel path (m77)                                  | embedded tests on Linux, macOS, Windows |
 | Masonry / Xilem      | `guiwright-adapter-masonry`                    | `RenderRoot` via `masonry_testing::TestHarness` (Level 1)                                           | embedded tests on Linux, macOS, Windows |
-| iced                 | `guiwright-adapter-iced`                       | Guiwright-built logical tree + app role registry (Level 2); glue behind the `iced` feature          | compile-verified in CI                  |
+| iced                 | `guiwright-adapter-iced`                       | Guiwright-built logical tree + app role registry (Level 2); real `iced_test::Emulator` harness behind the `iced` feature (m76) | runtime-tested in CI                    |
 | Freya                | `guiwright-adapter-freya`                      | `freya_testing` harness + `a11y_id` bridge (Level 1); glue behind the `freya` feature               | compile-verified in CI                  |
 | Slint / Floem / GPUI | `guiwright-adapter-slint` / `-floem` / `-gpui` | framework-free adapter engines (Level 1/2 hybrids — see crate docs); platform glue ships downstream | engine tests in the normal CI matrix    |
 
@@ -453,8 +453,9 @@ shard-aware discovery without touching the wire. Reports: `report.json` (`gwrun/
 > crate docs and `docs/m3-floem-contributions.md`).
 
 **CI on every push:** the full test suite on Linux, macOS and Windows (Linux renders through
-software Vulkan / lavapipe) · the TypeScript client suite + cross-language e2e · compile
-verification of the feature-gated iced and freya glue · the perf-budget guard.
+software Vulkan / lavapipe) · the TypeScript client suite + cross-language e2e · the
+feature-gated iced glue runtime-tested through a real `iced_test::Emulator` (m76) · freya
+compile-verified until its glue binds · the perf-budget guard.
 
 The milestone stream ([architecture doc](docs/architecture.md), records in `docs/m*.md`):
 
@@ -518,13 +519,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M73**       | The seam's waitable state assertions: `ClientConn::expect_checked` / `expect_enabled` / `expect_focused` — the kit's `to_be_checked` / `to_be_enabled` / `to_be_focused` vocabulary over any door (the m54/m59/m62 content/count/identity families' pattern carried to the state three), the m54 wake loop composed over the m70 set-width state read (`describe_all_identity_state` re-reads, event-driven, no polling), the satisfying m68 row handed back as the dump-row handle, the tri-state demanded exactly (a mixed checkbox is not an unchecked one), the typed timeout naming `be checked` / `be enabled` / `be focused` and the fact the last evaluation found, no wire change (the m68/m70 encodings byte-pinned), no budget row (the m54-family rule) |
 | **M74**       | The REPL's state-assert rows: `assert checked <get-args…> is checked\|unchecked\|mixed\|not-checkable` / `assert enabled <get-args…> is enabled\|disabled` / `assert focused <get-args…>` (the m73 seam assertions' interactive half, the m43/m61/m62 pattern) — the m68 four-way word demanded exactly at the prompt (the not-checkable total fact answering, never an error), the focus row taking no expectation (the fact itself is the demand), the satisfying row rendered as the m68 facts with the state three named, the typed timeout printed verbatim, the `events on` filter restored, no wire change, no budget row |
 | **M75**       | The TypeScript client's state assertions: `expectChecked(selector, expected, timeoutMs)` / `expectEnabled(selector, expected, timeoutMs)` / `expectFocused(selector, timeoutMs)` answering the satisfying m68 row — the m73 Rust rows mirrored on the other-language client (the m45/m60/m63/m65/m67/m69/m71 one-milestone-per-surface pattern), the pure `StateTracker` evaluator row-for-row (`src/expect.ts`), the wake loop over the m70 `describeAllIdentityState()` re-reads, the cross-language e2e leg against the real Rust server (the tri-state demanded exactly, the typed expiry naming `be checked` and both sides), the consumer demo (`npm run example:state-assertions`), no wire change |
+| **M76**       | The real iced harness: `SimulatorSeam` bound to `iced_test::Emulator` over a real `Program` (the §17 MVP trio's last leg — the m41–m75 stream's retired "one-milestone-per-surface" cadence did not move this debt, this record pays it) — interactions inject real `core::Event`s through `UserInterface::update` (§4.6), the semantic tree comes from the §4.6 `Task::widget` read-back (the laid-out widget walk over an mpsc channel, `HarnessApp::hook` + the default `run_hook`), kinds are the app's contribution (`kind_of` over `Id`-carrying containers — iced 0.14 passes a button's `Id` to no operation hook), the `tiny-skia` backend explicit (`iced_test` names none; the default is the `()` null renderer), the CI `adapter-iced` job runs `cargo test --features iced` (freya stays check-only), the read-back bench + the `iced_tree_readback` design-target row, no wire change |
+| **M77**       | The egui headless pixel path: `render_frame` / `last_frame` real through `egui_wgpu` (the §4.1 wgpu offscreen render + buffer readback, the `egui_kittest` shape, no surface) — render-once keyed by `Context::cumulative_pass_nr` (the pump renders its own pass; video capture and screenshots share the cache through the existing §15.5 substrates), the backend probe cached both ways (GPU-less hosts answer `Unsupported` — the masonry precedent), the frame hash staying the §10 scene digest so traces/video-dedup keep their meaning, wgpu 30 beside masonry's 26, dual-behaved pixel tests (real on the CI lavapipe/metal/dx12 legs, the honest row on GPU-less hosts), no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m75-ts-state-assertions.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m77-egui-headless-pixels.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
