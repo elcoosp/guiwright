@@ -438,6 +438,7 @@ fn response_kind(response: &ResponseV1) -> &'static str {
         ResponseV1::DescribedAllIdentity { .. } => "DescribedAllIdentity",
         ResponseV1::DescribedIdentity(_) => "DescribedIdentity",
         ResponseV1::DescribedIdentityState(_) => "DescribedIdentityState",
+        ResponseV1::DescribedAllIdentityState { .. } => "DescribedAllIdentityState",
     }
 }
 
@@ -565,6 +566,29 @@ mod tests {
                 }
             )),
             "DescribedIdentityState"
+        );
+        // The m70 row (the append-only vocabulary's frontier): the
+        // set-width identity-state reply names itself the way every
+        // reply does.
+        assert_eq!(
+            response_kind(&ResponseV1::DescribedAllIdentityState {
+                rows: vec![guiwright_proto::schema::DescribedIdentityStateV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0u8; 16],
+                        node: 2,
+                    },
+                    generation: 0,
+                    role: String::new(),
+                    name: None,
+                    value: None,
+                    bounds: None,
+                    description: None,
+                    focused: false,
+                    enabled: true,
+                    checked: guiwright_proto::schema::CheckedStateV1::NotCheckable,
+                }],
+            }),
+            "DescribedAllIdentityState"
         );
     }
 }
