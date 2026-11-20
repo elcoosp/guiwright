@@ -19,7 +19,8 @@
     "example:identity": "node examples/identity_assertions.ts",
     "example:description": "node examples/description_assertions.ts",
     "example:describe-identity": "node examples/describe_identity.ts",
-    "example:identity-state": "node examples/describe_identity_state.ts"
+    "example:identity-state": "node examples/describe_identity_state.ts",
+    "example:identity-state-all": "node examples/describe_identity_state_all.ts"
   },
   "keywords": [
     "guiwright",
