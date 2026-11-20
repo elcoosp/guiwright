@@ -1020,18 +1020,22 @@ impl<A: FrameworkAdapter> Session<A> {
     /// resolve path, and the rows' generations are current (freshly
     /// resolved, no stale-guard path). The rows carry the description
     /// fact too (M64) — the wire's M39 `DescribedAll` encoding stays
-    /// byte-pinned; the fact rides the appended identity read.
+    /// byte-pinned; the fact rides the appended identity read. A tree
+    /// that dropped a walk row between resolve and read answers the
+    /// typed `UnknownNode`, never a panic (the resolve-then-lookup
+    /// invariant is the tree's to keep; the error is the caller's to
+    /// see — the m70 read's honesty, carried back to this body).
     pub fn describe_all(&mut self, selector: &Selector) -> Result<Vec<NodeDescription>, CoreError> {
         self.pump();
         let resolved = self.tree.resolve_all(selector)?;
-        Ok(resolved
+        resolved
             .into_iter()
             .map(|row| {
                 let n = self
                     .tree
                     .node(&row.key)
-                    .expect("resolve_all row is in the tree");
-                NodeDescription {
+                    .ok_or(CoreError::UnknownNode { key: row.key })?;
+                Ok(NodeDescription {
                     key: row.key,
                     generation: row.generation,
                     role: format!("{:?}", n.role()),
@@ -1039,9 +1043,48 @@ impl<A: FrameworkAdapter> Session<A> {
                     value: n.value(),
                     bounds: n.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
                     description: n.description(),
-                }
+                })
             })
-            .collect())
+            .collect()
+    }
+
+    /// The describe-all identity-state read (§8.1's state facts at set
+    /// width, M70 — the m68/m69 records' named standing gap: "no state
+    /// facts at *set* width: the `DescribeAllIdentity` rows stay
+    /// identity-row shaped; a state-fact set widening lands when a
+    /// consumer asks — the same append-only move, its own domain"): the
+    /// non-strict enumeration of `selector`'s current match set, each row
+    /// carrying the [`Session::describe_state`] facts — the
+    /// [`Session::describe_all`] walk's rows plus the state three, one
+    /// pass instead of one state read per row. Snapshot semantics (the
+    /// m30 rule): the read never waits, an empty set answers with an
+    /// empty list. Scope discipline: the caller sets the window scope
+    /// before calling (the server's set/read/clear rendezvous, the
+    /// resolve-all arm's exact shape) — the walk narrows like every
+    /// resolve path, and the rows' generations are current (freshly
+    /// resolved, no stale-guard path). The state facts ride beside the
+    /// walk rows, never instead of them: the M64 `describe_all` body
+    /// stays untouched (the m68 compose-don't-widen rule at set width).
+    pub fn describe_all_state(
+        &mut self,
+        selector: &Selector,
+    ) -> Result<Vec<NodeStateDescription>, CoreError> {
+        let rows = self.describe_all(selector)?;
+        rows.into_iter()
+            .map(|row| {
+                let focused = self.tree.focus() == Some(row.key);
+                let n = self
+                    .tree
+                    .node(&row.key)
+                    .ok_or(CoreError::UnknownNode { key: row.key })?;
+                Ok(NodeStateDescription {
+                    row,
+                    focused,
+                    enabled: !n.is_disabled(),
+                    checked: n.toggled().map_or(CheckedStateV1::NotCheckable, Into::into),
+                })
+            })
+            .collect()
     }
 
     // --- Window targets (§16 v0.4 multi-window, M6) -----------------------
