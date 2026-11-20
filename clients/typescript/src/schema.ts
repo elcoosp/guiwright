@@ -56,6 +56,8 @@ export const RequestV1 = {
   DescribeIdentity: 21,
   /** §8.1 identity fact set plus the state facts at handle width (M68): the M36 handle pair in, the M68 identity-state row out — the state three for one node, no scope, no timeout. */
   DescribeIdentityState: 22,
+  /** §8.1 state facts at set width (M70): the M64 walk payload in, the M68 identity-state row per match out — the state three for the whole set, one round trip. */
+  DescribeAllIdentityState: 23,
 } as const;
 
 export const ClockV1 = {
@@ -173,6 +175,8 @@ export const ResponseV1 = {
   DescribedIdentity: 24,
   /** §8.1 identity row's state facts at handle width (M68): the M68 row for the request's handle — the identity four, the description fact plus the state three. */
   DescribedIdentityState: 25,
+  /** §8.1 identity row's state facts at set width (M70): the M68 row per match, document order — the m64 row-widening rule's fourth link. */
+  DescribedAllIdentityState: 26,
 } as const;
 
 export const ErrorCode = {
@@ -424,7 +428,8 @@ export type GwpRequest =
   | { kind: "describe_all"; selector: Selector }
   | { kind: "describe_all_identity"; selector: Selector }
   | { kind: "describe_identity"; node: NodeKey; generation: number }
-  | { kind: "describe_identity_state"; node: NodeKey; generation: number };
+  | { kind: "describe_identity_state"; node: NodeKey; generation: number }
+  | { kind: "describe_all_identity_state"; selector: Selector };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -563,4 +568,5 @@ export type GwpResponse =
   | { kind: "described_all"; rows: DescribedNode[] }
   | { kind: "described_all_identity"; rows: DescribedIdentityNode[] }
   | ({ kind: "described_identity" } & DescribedIdentityNode)
-  | ({ kind: "described_identity_state" } & DescribedIdentityStateNode);
+  | ({ kind: "described_identity_state" } & DescribedIdentityStateNode)
+  | { kind: "described_all_identity_state"; rows: DescribedIdentityStateNode[] };
