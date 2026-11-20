@@ -111,7 +111,9 @@ fn main() {
                     println!("  {line}");
                 }
             }
-            other => panic!("expected the codegen payload, got {other:?}"),
+            other @ InspectReply::Applied => {
+                panic!("expected the codegen payload, got {other:?}")
+            }
         }
 
         // The honesty: a second start, and a stop with nothing recorded,
