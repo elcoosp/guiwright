@@ -419,6 +419,30 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         })?)
     }
 
+    /// The identity-state read (§8.1's state facts at handle width, M68
+    /// — the m68 record's named kit gap, closed): resolve the locator
+    /// (strict mode, the same surface every locator read aims through)
+    /// and read the match's state three beside the identity row —
+    /// focused, enabled, the checked tri-state — the
+    /// [`guiwright_driver::NodeStateDescription`] row the wire's
+    /// `DescribeIdentityState` domain (M68) serves remote clients. The
+    /// facts are total reads, never waits (the m68 rule): the vocabulary
+    /// words answer right now — the waitable face stays the kit's
+    /// `to_be_checked` / `to_be_focused` / `to_be_enabled` assertions,
+    /// unchanged. A read, not an action: like [`Self::describe`],
+    /// nothing is recorded.
+    pub fn describe_state(self) -> Result<guiwright_driver::NodeStateDescription, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), move |session| {
+            let resolved = session.resolve(&selector)?;
+            session.describe_state(&resolved.key, resolved.generation)
+        })?)
+    }
+
     /// `locator.count()` — how many nodes match right now (§16
     /// assertions row, M22): the non-strict read beside
     /// `to_have_count`'s waitable assertion (Playwright parity). A read,
@@ -563,6 +587,32 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
             window,
         } = self;
         Ok(app.run_scoped(window.as_deref(), |session| session.describe_all(&selector))?)
+    }
+
+    /// `locator.describe_all_state()` (§8.1's state facts over the set
+    /// read, M70 — the m68/m70 records' named kit gap, closed): the
+    /// [`Self::describe_all`] walk's rows carrying each match's state
+    /// three beside the identity row — one pass instead of one
+    /// [`Self::describe_state`] round trip per row. The debugging read
+    /// beside the bulk readers: `describe_all()` answers "what IS
+    /// everything in the set", `describe_all_state()` answers "what is
+    /// everything in the set **doing**" — the rows the wire's
+    /// `DescribeAllIdentityState` domain (M70) serves remote clients.
+    /// Snapshot semantics (the `describe_all` family rule): no strict
+    /// mode, no waiting, an empty set answers with an empty list, a
+    /// window-pinned locator reads only inside its subtree, and a read
+    /// records nothing.
+    pub fn describe_all_state(
+        self,
+    ) -> Result<Vec<guiwright_driver::NodeStateDescription>, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), |session| {
+            session.describe_all_state(&selector)
+        })?)
     }
 
     /// `locator.all_values()` (§16 assertions row — the m29 record's
