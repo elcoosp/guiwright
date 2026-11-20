@@ -114,7 +114,7 @@ flowchart LR
 | `guiwright-core`      | selector resolution, actionability, the event-driven wait engine — `accesskit`, `thiserror`, `tracing` only |
 | `guiwright-driver`    | the session loop + GWP server: gestures, events, log tail, overlay routing                                  |
 | `guiwright-proto`     | GWP types and framing; UDS/TCP/WS/duplex clients; the `Transport` bring-up seam                             |
-| `guiwright-adapter-*` | egui · masonry · iced · freya · slint · floem · gpui ([tiers below](#adapters))                             |
+| `guiwright-adapter-*` | egui · masonry · iced · freya · slint · floem · gpui — **7/7 real** ([tiers below](#adapters))                             |
 | `guiwright-shot`      | perceptual diff, element crops, baseline management                                                         |
 | `guiwright-trace`     | `gwtrace/v1` recorder: bounded lock-free ring → writer thread                                               |
 | `guiwright-viewer`    | the scrubber HTML renderer; `LiveFeed` / `LiveTimeline` for running sessions                                |
@@ -440,7 +440,8 @@ shard-aware discovery without touching the wire. Reports: `report.json` (`gwrun/
 | iced                 | `guiwright-adapter-iced`                       | Guiwright-built logical tree + app role registry (Level 2); real `iced_test::Emulator` harness behind the `iced` feature (m76) | runtime-tested in CI                    |
 | Freya                | `guiwright-adapter-freya`                      | real `freya_testing::TestingRunner` + `a11y_id` bridge (Level 1); the committed AccessKit diffs ride `tree_update`, input rides the frame-quantized `send_event` pipeline, snapshots rasterize through software Skia — glue behind the `freya` feature (m79) | runtime-tested in CI (the Skia stack compiles there) |
 | Slint                | `guiwright-adapter-slint` + `glue/slint`       | Guiwright-built logical tree over `ElementHandle` introspection + the testing build helper (Level 2); real `i-slint-backend-testing` `TestingBackend` harness in the slint-only `glue/slint` workspace (m78 — the skia-links record scopes the facade stack there) | runtime-tested in CI (glue job)         |
-| Floem / GPUI         | `guiwright-adapter-floem` / `-gpui`            | framework-free adapter engines (Level 1/2 hybrids — see crate docs); platform glue ships downstream | engine tests in the normal CI matrix    |
+| Floem                | `guiwright-adapter-floem` + `glue/floem`       | Guiwright-built logical tree over the real `ViewId` walk (`debug_name` test ids, `get_visual_rect` bounds — Level 2); real `lapce/floem` `HeadlessHarness` pinned at the recon revision in the floem-only glue workspace (m80); pixels ride the tiny-skia `PaintState` contribution over real geometry; `fill` reports the documented headless-IME blocker | runtime-tested in CI (glue job)         |
+| GPUI                 | `guiwright-adapter-gpui` + `glue/gpui`         | hybrid fallback: synthesized AccessKit diffs over framework-recorded paint geometry + the app's real entity state (Level 2 — the test platform never activates a11y); real gpui `test-support` platform in the gpui-only glue workspace (m80 — git-only feature + system libs keep it out of the main workspace); input rides `Window::dispatch_event`; `fill` reports the documented scheduler blocker | runtime-tested in CI (glue job)         |
 
 **Level 1** piggybacks on a framework's existing accessibility tree; **Level 2** synthesizes one
 ([docs/architecture.md](docs/architecture.md)).
