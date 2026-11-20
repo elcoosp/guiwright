@@ -22,10 +22,14 @@ import { renderSelector, WaitTracker, type WaitState } from "./wait.ts";
 import {
   ExpectTracker,
   expectState,
+  StateTracker,
+  stateWord,
   type ExpectKind,
+  type StateKind,
 } from "./expect.ts";
 import { CountTracker, HAVE_COUNT_STATE, type CountCompare } from "./count.ts";
 import {
+  type CheckedState,
   type ClockCmd,
   type DescribedIdentityNode,
   type DescribedIdentityStateNode,
@@ -735,6 +739,128 @@ export class GwpClient {
           // last evaluation.
           await this.unsubscribe().catch(() => undefined);
           throw new GwpWaitTimeout(expectState(kind), rendered, timeoutMs, answer.reason);
+        }
+      }
+    } catch (err) {
+      // A protocol failure propagates as-is (the m41 fail-fast rule);
+      // the assertion's subscription window drops on the way out.
+      await this.unsubscribe().catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** The state assertion, checked form (m75 — the kit's
+   * `expect(locator).toBeChecked()` over any door, the Rust
+   * `ClientConn::expect_checked` mirrored, M20/M73): the m68 four-way
+   * word demanded exactly — the wire vocabulary, never a boolean (a
+   * mixed checkbox is not an unchecked one, a not-checkable role
+   * staying pending as the total fact). The same composition as
+   * `expectText()`: the m54 wake loop over the m70 state-walk re-reads,
+   * the set's head pinned, the subscription window owned and dropped.
+   * **No wire change**: the assertion rides existing domains
+   * byte-for-byte.
+   *
+   * A spent budget rejects with the typed `GwpWaitTimeout`, naming the
+   * assertion (`be checked`), the locator and the last evaluation — the
+   * word the row carried beside the wanted one. */
+  async expectChecked(
+    selector: Selector,
+    expected: CheckedState,
+    timeoutMs = 5000,
+  ): Promise<DescribedIdentityStateNode> {
+    return this.expectState(selector, "checked", expected, timeoutMs);
+  }
+
+  /** The state assertion, enabled form (m75 — the kit's
+   * `expect(locator).toBeEnabled()` / `toBeDisabled()` pair over any
+   * door, the Rust `ClientConn::expect_enabled` mirrored): the boolean
+   * the row carries (false = the AccessKit `Disabled` flag set),
+   * demanded as the one word the pair speaks. The same composition;
+   * **no wire change**.
+   *
+   * A spent budget rejects with the typed `GwpWaitTimeout`, naming the
+   * assertion (`be enabled`) and the fact the last evaluation found. */
+  async expectEnabled(
+    selector: Selector,
+    expected: boolean,
+    timeoutMs = 5000,
+  ): Promise<DescribedIdentityStateNode> {
+    return this.expectState(selector, "enabled", expected, timeoutMs);
+  }
+
+  /** The state assertion, focused form (m75 — the kit's
+   * `expect(locator).toBeFocused()` over any door, the Rust
+   * `ClientConn::expect_focused` mirrored): the node IS the tree's
+   * focus right now, the focus arriving with the tree update that
+   * carries it. No expectation word — the fact itself is the demand,
+   * the typed timeout the honest negative (the m73 no-negation rule).
+   * The same composition; **no wire change**.
+   *
+   * A spent budget rejects with the typed `GwpWaitTimeout`, naming the
+   * assertion (`be focused`) and the fact the last evaluation found. */
+  async expectFocused(
+    selector: Selector,
+    timeoutMs = 5000,
+  ): Promise<DescribedIdentityStateNode> {
+    return this.expectState(selector, "focused", undefined, timeoutMs);
+  }
+
+  /** The shared state-assertion composition (m75): the
+   * `expectIdentityContent()` loop shape over the m70
+   * `describeAllIdentityState()` re-reads — one entry read,
+   * event-driven re-reads, the subscription window owned and dropped,
+   * the typed timeout built from the m75 state word. Tree and frame
+   * wakes both re-decide (the state facts have no `stable`-like frame
+   * discipline); `log` records are never wakes. An empty set stays
+   * pending (waitable — nodes stream in, the m54 empty-content rule's
+   * shape). */
+  private async expectState(
+    selector: Selector,
+    kind: StateKind,
+    expected: CheckedState | boolean | undefined,
+    timeoutMs: number,
+  ): Promise<DescribedIdentityStateNode> {
+    this.assertHandshaked();
+    await this.subscribe(["tree_changed", "frame_presented"]);
+
+    const rendered = renderSelector(selector);
+    const deadline = Date.now() + timeoutMs;
+    const tracker =
+      kind === "checked"
+        ? new StateTracker("checked", expected as CheckedState)
+        : kind === "enabled"
+          ? new StateTracker("enabled", expected as boolean)
+          : new StateTracker("focused");
+    try {
+      for (;;) {
+        const rows = await this.describeAllIdentityState(selector);
+        const answer = tracker.evaluate(rows);
+        if (answer.done) {
+          await this.unsubscribe();
+          return answer.row;
+        }
+        // The event race, the m54 shape: a tree or frame wake re-decides
+        // the whole read, `log` records are never wakes, and a spent
+        // budget ends the assertion — the expiry path below. The m44
+        // read-half contract makes the cancelled read harmless on the
+        // wire.
+        let woke = false;
+        while (!woke) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+          const event = await this.nextEventWithin(remaining);
+          if (event === null) break;
+          if (event.kind === "tree_changed" || event.kind === "frame_presented") {
+            woke = true;
+          }
+          // `log` records: not a wake — keep waiting.
+        }
+        if (!woke) {
+          // Best-effort cleanup (the Rust `expire_state()` shape), then
+          // the typed timeout naming the assertion, the locator and the
+          // last evaluation.
+          await this.unsubscribe().catch(() => undefined);
+          throw new GwpWaitTimeout(stateWord(kind), rendered, timeoutMs, answer.reason);
         }
       }
     } catch (err) {
