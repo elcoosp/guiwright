@@ -664,10 +664,14 @@ async fn repl_describe_read() {
         .expect("repl attaches");
 
     // The identity facts in one row — the dump row's facts, one node
-    // instead of a walk (the M36 domain's REPL row).
+    // instead of a walk (the M36 domain's REPL row), plus the state
+    // three the m68 ladder answers (state facts are total: an unfocused
+    // node is a fact, not a missing one).
     assert_eq!(
         rendered(&repl.step("describe role Button Save").await),
-        vec![r#"Button "Save" (generation 0) rect=[16,16 → 136,48]"#],
+        vec![
+            r#"Button "Save" (generation 0) rect=[16,16 → 136,48] state unfocused enabled not checkable"#
+        ],
         "{:?}",
         rendered(&repl.step("describe role Button Save").await),
     );
@@ -676,7 +680,9 @@ async fn repl_describe_read() {
     // `value` locator vocabulary matches).
     assert_eq!(
         rendered(&repl.step("describe role TextInput Email").await),
-        vec![r#"TextInput "Email" value "ada@example.dev" (generation 0) rect=[16,128 → 256,156]"#],
+        vec![
+            r#"TextInput "Email" value "ada@example.dev" (generation 0) rect=[16,128 → 256,156] state unfocused enabled not checkable"#
+        ],
     );
 
     // A read, not a resolve-store: `describe` never re-aims the current
