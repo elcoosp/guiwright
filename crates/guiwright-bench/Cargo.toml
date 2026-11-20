@@ -26,6 +26,14 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"
 
 [dev-dependencies]
 criterion.workspace = true
+# The m76 iced harness bench: the adapter rides dev-deps (benches only),
+# framework-free by default — the `iced` feature below pulls the renderer
+# stack. `iced_test` + `iced_widget` (no facade) name the types the bench
+# app is written against; they compile backend-free until the feature
+# turns on.
+guiwright-adapter-iced = { path = "../guiwright-adapter-iced" }
+iced_test = "0.14.0"
+iced_widget = "0.14.0"
 
 [[bench]]
 name = "tree_service"
@@ -34,6 +42,16 @@ harness = false
 [[bench]]
 name = "codec"
 harness = false
+
+[[bench]]
+name = "iced_harness"
+harness = false
+required-features = ["iced"]
+
+[features]
+# The iced harness bench (the §4.6 read-back path): default builds carry
+# no framework stack (§18); `--all-features` pulls it.
+iced = ["guiwright-adapter-iced/iced"]
 
 [lints]
 workspace = true
