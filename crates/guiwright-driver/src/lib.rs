@@ -54,5 +54,6 @@ pub use server::{
     spawn_session_server_with,
 };
 pub use session::{
-    ActionOpts, GestureOutcome, NodeDescription, Session, SnapshotNode, TreeDump, WireShot,
+    ActionOpts, GestureOutcome, NodeDescription, NodeStateDescription, Session, SnapshotNode,
+    TreeDump, WireShot,
 };
