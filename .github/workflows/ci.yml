@@ -119,6 +119,66 @@ jobs:
       - run: cargo clippy --manifest-path glue/slint/Cargo.toml --all-targets --locked -- -D warnings
       - run: cargo test --manifest-path glue/slint/Cargo.toml --locked
 
+  floem-glue:
+    # m80 (§4.7, §17 row 6): the floem glue workspace runtime-tests the
+    # REAL harness — `lapce/floem`'s HeadlessHarness (pinned to the
+    # §4.7 recon revision) driving a real floem counter/form app through
+    # Session (resolve → click, harness-timer clock, tiny-skia
+    # PaintState pixels over real view geometry; `fill` rides the
+    # documented upstream headless-IME blocker). Its own workspace
+    # root: floem 0.2.0 predates the harness and floem's Linux graph
+    # (muda gtk, the winit fork) never enters the main workspace.
+    name: floem glue (runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # floem's Linux deps compile the gtk menu stack (muda) and rfd's
+      # default gtk3 file dialogs — the dev packages are a floem-graph
+      # requirement, never a main-workspace one.
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libgtk-3-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            glue/floem
+      - run: cargo fmt --manifest-path glue/floem/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path glue/floem/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path glue/floem/Cargo.toml --locked
+      - run: cargo run --manifest-path glue/floem/Cargo.toml --example counter_form --locked
+
+  gpui-glue:
+    # m80 (§4.5, §17 row 7): the gpui glue workspace runtime-tests the
+    # REAL platform — gpui's `test-support` TestPlatform/TestDispatcher
+    # driving a real gpui counter/form app through Session (resolve →
+    # click, dispatcher clock rounds, render_to_image when the platform
+    # exposes a HeadlessRenderer; the a11y tree stays the documented
+    # test-platform gap). Its own workspace root: the test-support
+    # feature is git-only (crates.io gpui 0.2.2 ships no such feature)
+    # and gpui's Linux platform stack needs system libraries
+    # (xkbcommon, wayland) the main workspace must never require (§5.3).
+    name: gpui glue (runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # gpui's Linux platform stack links xkbcommon (the xkbcommon
+      # crate) — a gpui-graph requirement, never a main-workspace one.
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            glue/gpui
+      - run: cargo fmt --manifest-path glue/gpui/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path glue/gpui/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path glue/gpui/Cargo.toml --locked
+      - run: cargo run --manifest-path glue/gpui/Cargo.toml --example counter_form --locked
+
   clients:
     # §16 "other-language client" (M3): the TypeScript GWP client —
     # codec golden vectors (captured from Rust), client-over-TCP tests,
