@@ -348,7 +348,14 @@ set at handle width, `describe_identity(node, generation)` (m66),
 answering the M64 identity row for one resolve-all/hit/dump handle: the
 M36 handle pair rides in, one round trip instead of the whole-set walk,
 the Action boundary's generation guard, the REPL `describe` row
-rendering the fact at the prompt. The raw `request()` covers the rest.
+rendering the fact at the prompt — and the state three at handle width,
+`describe_identity_state(node, generation)` (m68), answering the M68
+identity-state row for one resolve-all/hit/dump handle: the identity
+four, the description fact plus the focused/enabled/checked facts (the
+`CheckedStateV1` four-way word — a mixed checkbox is not an unchecked
+one), one round trip instead of one question per assertion, the REPL
+`describe` row rendering the state facts at the prompt. The raw
+`request()` covers the rest.
 
 </details>
 
@@ -484,13 +491,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M65**       | The TypeScript client's description assertions: `expectDescription(selector, expected, timeoutMs)` answering the satisfying row — the m64 Rust rows mirrored on the other-language client (the m45/m60/m63 one-milestone-per-surface pattern), the `"description"` kind riding the same `ExpectTracker` evaluator over the appended `describeAllIdentity()` round trip (the description-only read, the missing fact named), the cross-language e2e leg against the real Rust server (the typed expiry naming `have description` and both sides), the consumer demo (`npm run example:description`), no wire change |
 | **M66**       | The single-node identity describe read: `DescribeIdentity` → `DescribedIdentity` (discriminants 21/24, the m64 record's named standing gap — the description fact rode the identity *set* read only) — the M36 handle pair riding in and the M64 identity row riding out, one handle-addressed round trip instead of the whole-set walk, the Action boundary's generation guard; `ClientConn::describe_identity` answers on every seam impl, the REPL `describe` row renders the description fact at the prompt (the m37/m40 fallback to the byte-pinned M36 read preserved), golden-pinned + e2e, no budget row (the m54/m62/m64 rule) |
 | **M67**       | The TypeScript client's single-node identity describe: `describeIdentity(node, generation)` answering the M64 identity row for one resolve-all/hit/dump handle — the m66 Rust row mirrored on the other-language client (the m45/m60/m63/m65 one-milestone-per-surface pattern), the codec/tables/byte pins the m66 record already moved, the cross-language e2e leg against the real Rust server (the satisfied row, the absent fact riding null, the ghost handle's typed `UnknownNode`), the consumer demo (`npm run example:describe-identity`), no wire change |
+| **M68**       | The identity read's state facts at handle width: `DescribeIdentityState` → `DescribedIdentityState` (discriminants 22/25, the m67 record's named standing gap — the checked/focused/enabled facts rode the dump rows and the kit assertion vocabulary only) — the M36 handle pair riding in and the M68 identity-state row riding out (the m64 row-widening rule's third link, the M64/M66 encodings staying byte-pinned), one handle-addressed round trip instead of one question per assertion; the checked fact riding as the `CheckedStateV1` four-way word (the AccessKit tri-state beside not-checkable, never an `Option<bool>`); `ClientConn::describe_identity_state` answers on every seam impl, the REPL `describe` row renders the state facts (the m37/m40/m66 ladder preserved), the state fixture + golden-pinned + e2e, no budget row (the m54/m62/m64/m66 rule) |
+| **M69**       | The TypeScript client's single-node identity-state describe: `describeIdentityState(node, generation)` answering the M68 identity-state row for one resolve-all/hit/dump handle — the m68 Rust row mirrored on the other-language client (the m45/m60/m63/m65/m67 one-milestone-per-surface pattern), the codec/tables/byte pins the m68 record already moved, the cross-language e2e leg against the real Rust server (the mixed tri-state, the disabled button's `enabled: false` + `not_checkable`, the ghost handle's typed `UnknownNode`), the consumer demo (`npm run example:identity-state`), no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m67-ts-describe-identity.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m69-ts-identity-state.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
