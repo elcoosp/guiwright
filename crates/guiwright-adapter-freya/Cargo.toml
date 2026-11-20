@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Guiwright Level-1 adapter for Freya (architecture §4.3): AccessibilityId bridge, key sequences with modifiers, frame-quantized event ordering; TestingRunner glue behind the `freya` feature"
 
 [dependencies]
