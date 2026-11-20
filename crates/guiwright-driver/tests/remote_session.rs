@@ -21,15 +21,21 @@ fn socket_path(tag: &str) -> std::path::PathBuf {
     dir.path().join(tag)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn full_remote_session() {
-    let path = socket_path("remote-session.sock");
+/// The spike's door: a UDS session server over the buttons fixture with
+/// a connected client — the setup the wire conversations share.
+async fn spawn_connected(tag: &str) -> (GwpServerHandle, Client) {
+    let path = socket_path(tag);
     let handle = spawn_session_server(path.clone(), || {
         MockAdapter::with_fixture(&Fixture::buttons())
     })
     .expect("server binds");
+    let client = Client::connect(&path).await.expect("client connects");
+    (handle, client)
+}
 
-    let mut client = Client::connect(&path).await.expect("client connects");
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_remote_session() {
+    let (handle, mut client) = spawn_connected("remote-session.sock").await;
 
     // Handshake → Welcome with adapter capabilities (§7).
     let adapter = client.handshake("guiwright-tests/0.1").await.unwrap();
@@ -259,14 +265,17 @@ async fn resolve_auto_waits_over_the_wire() {
 /// "remote-mode GPUI spike"): the GPUI adapter is M3, but the *remote*
 /// contract — handshake → resolve → act → clock → mock — is fully
 /// exercised here against the mock adapter.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn clock_and_mock_domains_over_the_wire() {
-    #[derive(Debug, Default)]
-    struct SpikeState {
-        fixture: Option<String>,
-        rows: usize,
-    }
+/// The spike's app-boot seam state (the §14 state-seam half the
+/// conversation exercises): the reset hook counting the seeded rows.
+#[derive(Debug, Default)]
+struct SpikeState {
+    fixture: Option<String>,
+    rows: usize,
+}
 
+/// The spike's seams: `reset_state` zeroes the seeded rows (naming the
+/// scope that reset them), `seed_users` seeds three.
+fn spike_seams() -> guiwright_driver::SeamRegistry {
     let mut seams = guiwright_driver::SeamRegistry::new();
     seams.register("reset_state", |ctx, scope| {
         let state = ctx
@@ -283,6 +292,12 @@ async fn clock_and_mock_domains_over_the_wire() {
         state.rows = 3;
         Ok("3 users seeded".into())
     });
+    seams
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clock_and_mock_domains_over_the_wire() {
+    let seams = spike_seams();
 
     let path = socket_path("remote-clock-mock.sock");
     let handle = GwpServerHandle::spawn_with_seams(
