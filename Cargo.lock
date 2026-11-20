@@ -2098,6 +2098,8 @@ name = "guiwright-cli"
 version = "1.0.0-rc.1"
 dependencies = [
  "accesskit 0.25.2",
+ "egui",
+ "guiwright-adapter-egui",
  "guiwright-core",
  "guiwright-driver",
  "guiwright-proto",
