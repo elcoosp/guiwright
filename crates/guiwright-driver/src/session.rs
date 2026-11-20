@@ -21,6 +21,7 @@ use guiwright_core::wait::{
     WaiterEvent,
 };
 use guiwright_core::{CoreError, NodeKey, Selector};
+use guiwright_proto::schema::CheckedStateV1;
 
 use crate::adapter::{
     ActionOutcome, AdapterError, FrameDeadline, FrameStamp, FrameworkAdapter, InputEvent, SemAction,
@@ -188,6 +189,31 @@ pub struct NodeDescription {
     /// fact (`description()` only, never the name or the value), the m64
     /// identity read's widening.
     pub description: Option<String>,
+}
+
+/// One node's state facts beside its identity row (§8.1, M68): the
+/// [`NodeDescription`] row the [`Session::describe`] read answers plus
+/// the state three — the m67 record's named standing gap, closed as a
+/// composed row (the identity read's body stays untouched, the state
+/// facts ride beside it). The wire reply
+/// ([`guiwright_proto::schema::DescribedIdentityStateV1`]) flattens the
+/// two (the m64 row-widening rule's third link).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NodeStateDescription {
+    /// The identity row the state facts answer (the M36/M64 facts).
+    pub row: NodeDescription,
+    /// The focused fact: the node IS the tree's focus right now (the
+    /// core `Check::Focused` read's shape, [`TreeService::focus`]
+    /// equality).
+    pub focused: bool,
+    /// The enabled fact: false = the AccessKit `Disabled` state flag set
+    /// (the core `Check::Enabled` / `Check::Disabled` read's shape).
+    pub enabled: bool,
+    /// The checked tri-state beside the not-checkable fact — the
+    /// [`guiwright_proto::schema::CheckedStateV1`] vocabulary word,
+    /// never an `Option<bool>` (a mixed checkbox is not an unchecked
+    /// one).
+    pub checked: CheckedStateV1,
 }
 
 /// The full-tree dump (§7 tree-dump domain, M11): the whole logical tree
@@ -945,6 +971,40 @@ impl<A: FrameworkAdapter> Session<A> {
             value: n.value(),
             bounds: n.bounding_box().map(|r| [r.x0, r.y0, r.x1, r.y1]),
             description: n.description(),
+        })
+    }
+
+    /// The identity-state read (§8.1's state facts at handle width, M68 —
+    /// the m67 record's named standing gap: "no state flags on the
+    /// identity row: the checked/focused/enabled facts ride the dump
+    /// rows and the kit assertion vocabulary"): the [`Session::describe`]
+    /// identity facts plus the state three, for a handle the caller
+    /// already holds. The boundary is [`Session::describe`]'s exact
+    /// shape — a pump runs first (consistency), the generation guard
+    /// rejects a recycled id (`CoreError::StaleNode`) and a dead one
+    /// (`CoreError::UnknownNode`). The facts are the core check
+    /// vocabulary's shapes at fact width: `focused` is
+    /// [`TreeService::focus`] equality (the `Check::Focused` read),
+    /// `enabled` is `!node.is_disabled()` (the `Check::Enabled` /
+    /// `Check::Disabled` read) and `checked` is the AccessKit tri-state
+    /// beside `NotCheckable` (the `Check::Checked` read's fail-fast
+    /// shape as a total fact, never an error).
+    pub fn describe_state(
+        &mut self,
+        node: &NodeKey,
+        generation: u32,
+    ) -> Result<NodeStateDescription, CoreError> {
+        let row = self.describe(node, generation)?;
+        let focused = self.tree.focus() == Some(*node);
+        let n = self
+            .tree
+            .node(node)
+            .ok_or(CoreError::UnknownNode { key: *node })?;
+        Ok(NodeStateDescription {
+            row,
+            focused,
+            enabled: !n.is_disabled(),
+            checked: n.toggled().map_or(CheckedStateV1::NotCheckable, Into::into),
         })
     }
 
