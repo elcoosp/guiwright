@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "User-facing Guiwright kit (architecture §5.2/§6.3): App, Locators, #[test], fixtures, traces, screenshot baselines; embedded mode"
 
 [dependencies]
@@ -12,7 +15,7 @@ accesskit_consumer.workspace = true
 guiwright-driver.workspace = true
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
-guiwright-macros = { path = "../guiwright-macros", version = "0.4.0" }
+guiwright-macros = { path = "../guiwright-macros", version = "1.0.0-rc.1" }
 guiwright-inspect.workspace = true
 guiwright-viewer.workspace = true
 accesskit.workspace = true
