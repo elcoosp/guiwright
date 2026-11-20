@@ -17,11 +17,15 @@
 //! * [`policy`] — iced Emulator determinism modes → pump budgets (§4.6
 //!   "`Zen` = settle-to-quiescence, `Patient`, `Immediate`").
 //!
-//! The `iced` feature adds [`harness`]: the thin glue that binds the
-//! engine to `iced_test`'s [`Emulator`]/[`Simulator`]. It is feature-gated
-//! because the framework stack (`iced_renderer` → wgpu) must never leak into
-//! builds that do not ask for it (§18 "adapters are thin & feature-gated";
-//! §5.3 "nothing else leaks into release builds").
+//! The `iced` feature adds the harness glue that binds the engine to
+//! `iced_test`: [`harness`] carries the engine-side [`SimulatorSeam`] and
+//! the [`IcedAdapter`], [`emulator`] binds `iced_test::Emulator` to a real
+//! `Program` (real interactions through `UserInterface::update`, §4.6),
+//! and [`dump`] is the §4.6 `Task::widget` tree read-back. It is
+//! feature-gated because the framework stack (`iced_test` → the
+//! `tiny-skia` backend) must never leak into builds that do not ask for it
+//! (§18 "adapters are thin & feature-gated"; §5.3 "nothing else leaks into
+//! release builds").
 //!
 //! [`FrameworkAdapter`]: guiwright_driver::adapter::FrameworkAdapter
 //! [`LogicalTreeDiff`]: guiwright_driver::adapter::LogicalTreeDiff
@@ -34,6 +38,10 @@ pub mod logical;
 pub mod policy;
 pub mod registry;
 
+#[cfg(feature = "iced")]
+pub mod dump;
+#[cfg(feature = "iced")]
+pub mod emulator;
 #[cfg(feature = "iced")]
 pub mod harness;
 
