@@ -289,3 +289,97 @@ fn last_frame_digest(session: &mut Session<EguiAdapter>) -> u64 {
         .map(|info| info.hash)
         .expect("every egui pump presents one frame")
 }
+
+// --- The §4.1 pixel path (m77) -------------------------------------------
+
+use guiwright_driver::adapter::FrameRef;
+use guiwright_driver::session::WireShot;
+
+/// The pixel path is dual-behaved by host: a GPU host (CI linux rides
+/// lavapipe, macOS/Windows have real GPUs) captures real pixels; a
+/// GPU-less host answers `Unsupported` at the first pixel demand (the
+/// cached probe failure, the masonry precedent). Both branches assert the
+/// §6.2 contract — never a silent empty frame.
+fn capture_window(session: &mut Session<EguiAdapter>) -> Result<WireShot, String> {
+    session.screenshot_window().map_err(|e| e.to_string())
+}
+
+#[test]
+fn caps_advertise_the_pixel_rows() {
+    let (session, _state) = counter_session();
+    let caps = &session.adapter().meta().caps;
+    assert!(caps.render_frame, "m77 flips the render_frame row");
+    assert!(caps.last_frame, "m77 flips the last_frame row");
+}
+
+#[test]
+fn window_screenshot_is_real_pixels_or_gracefully_unsupported() {
+    let (mut session, _state) = counter_session();
+
+    match capture_window(&mut session) {
+        Ok(shot) => {
+            // The physical size of the default window rect (scale 1.0).
+            assert_eq!(shot.width, 800, "physical px width");
+            assert_eq!(shot.height, 600, "physical px height");
+            assert!(!shot.png.is_empty(), "a real PNG body");
+            // PNG magic + non-trivial payload (a blank frame still
+            // compresses to almost nothing).
+            assert_eq!(&shot.png[..8], b"\x89PNG\r\n\x1a\n", "png signature");
+            assert!(shot.png.len() > 1_000, "encoded: {} bytes", shot.png.len());
+        }
+        Err(err) => {
+            assert!(
+                err.contains("render_frame") || err.contains("adapter"),
+                "the honest unsupported row, got: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn pixels_change_after_a_click_on_gpu_hosts() {
+    fn frame_bytes(frame: &FrameRef) -> Vec<u8> {
+        frame.pixels.as_ref().expect("pixels present").to_vec()
+    }
+
+    let (mut session, _state) = counter_session();
+    let before = session.adapter_mut().render_frame(None);
+    session.click(&save()).expect("click Save");
+    let after = session.adapter_mut().render_frame(None);
+
+    match (before, after) {
+        (Ok(before), Ok(after)) => {
+            let b = frame_bytes(&before);
+            let a = frame_bytes(&after);
+            assert_eq!(b.len(), a.len(), "same frame geometry");
+            assert_ne!(b, a, "the click changed the pixels (counter text)");
+        }
+        (Err(e1), Err(e2)) => {
+            // GPU-less host: both demands answer the honest row.
+            assert!(e1.to_string().contains("render_frame"));
+            assert!(e2.to_string().contains("render_frame"));
+        }
+        mixed => panic!("pixel path changed behavior mid-run: {mixed:?}"),
+    }
+}
+
+#[test]
+fn locator_screenshot_crops_the_button_on_gpu_hosts() {
+    let (mut session, _state) = counter_session();
+    let key = session.resolve(&save()).expect("resolve").key;
+    match session.screenshot_element(&key) {
+        Ok(shot) => {
+            // The Save button crop: smaller than the window, real PNG.
+            assert!(
+                shot.width < 800 && shot.height < 600,
+                "cropped: {}x{}",
+                shot.width,
+                shot.height
+            );
+            assert_eq!(&shot.png[..8], b"\x89PNG\r\n\x1a\n");
+        }
+        Err(e) => {
+            assert!(e.to_string().contains("render_frame") || e.to_string().contains("adapter"));
+        }
+    }
+}
