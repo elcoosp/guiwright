@@ -76,12 +76,13 @@ unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 
 [workspace.lints.cargo]
-# §18 "adapters are thin & feature-gated": the iced/freya harness glue
-# features compile-verify their dependency chains (iced_test →
-# iced_renderer/wgpu, freya_testing → software Skia) while the glue
-# implementations land downstream — the harness deps are named by the
-# feature docs, not by a use-site yet, so the unused-dependency lint rides
-# this table (with its rationale) rather than an in-code #[allow].
+# §18 "adapters are thin & feature-gated": the freya harness-glue feature
+# compile-verifies its dependency chain (freya_testing → software Skia)
+# while the glue implementation lands downstream (§17) — the harness deps
+# are named by the feature docs, not by a use-site yet, so the
+# unused-dependency lint rides this table (with its rationale) rather than
+# an in-code #[allow]. The iced glue is bound since m76 (iced_test has a
+# use-site in guiwright-adapter-iced); this carve-out is freya's alone.
 unused_dependencies = "allow"
 
 [workspace.lints.clippy]
