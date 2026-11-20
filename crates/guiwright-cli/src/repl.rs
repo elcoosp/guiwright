@@ -481,6 +481,15 @@ impl Repl {
     /// walk. A read, not a resolve-store: `last` and the actions keep
     /// aiming where `get`/`hit` aimed (the M35 read rule), and a missing
     /// match is the immediate strict-mode error, never a partial row.
+    ///
+    /// The m66 enrichment (the m64 record's named standing gap — the
+    /// description fact rode the identity *set* read only): the handle
+    /// rides the appended `DescribeIdentity` domain first, the M64 row's
+    /// facts rendered with the description fact named when the node
+    /// carries one. A driver that predates m66 degrades silently to the
+    /// M36 read (the m37/m40 fallback rule: a graceful, documented
+    /// fallback, not an error — the identity four are the answer either
+    /// way, the m36 encoding staying byte-pinned).
     async fn describe_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
         let (selector, _describe) = parse_selector(
             tokens
@@ -501,16 +510,33 @@ impl Repl {
         else {
             return Err("`describe` resolves a locator first — unexpected Resolve reply".into());
         };
-        let ResponseV1::Described(row) = self
-            .request(RequestV1::Describe(DescribeV1 {
+        // The identity read first (the m66 enrichment); a driver without
+        // the appended domain falls back to the M36 read (the m37/m40
+        // degrade rule — the facts are the answer either way).
+        match self
+            .request(RequestV1::DescribeIdentity(DescribeV1 {
                 node: node.clone(),
                 generation,
             }))
-            .await?
-        else {
-            return Err("`describe` reads the resolved handle — unexpected Describe reply".into());
-        };
-        Ok(vec![Line::Ok(render_described(&row))])
+            .await
+        {
+            Ok(ResponseV1::DescribedIdentity(row)) => Ok(vec![Line::Ok(render_identity(&row))]),
+            Err(_) => {
+                let ResponseV1::Described(row) = self
+                    .request(RequestV1::Describe(DescribeV1 {
+                        node: node.clone(),
+                        generation,
+                    }))
+                    .await?
+                else {
+                    return Err(
+                        "`describe` reads the resolved handle — unexpected Describe reply".into(),
+                    );
+                };
+                Ok(vec![Line::Ok(render_described(&row))])
+            }
+            Ok(other) => Err(unexpected("DescribedIdentity", &other)),
+        }
     }
 
     // --- set reads (the M30 domain's REPL rows, M35) -----------------------
