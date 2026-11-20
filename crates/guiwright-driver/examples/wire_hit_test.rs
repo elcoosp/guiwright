@@ -24,7 +24,7 @@ use guiwright_proto::{ClientConn, DuplexClient};
 fn describe(node: &NodeKeyV1) -> String {
     match node {
         NodeKeyV1::AccessKit { node, .. } => format!("accesskit#{node}"),
-        other => format!("{other:?}"),
+        other @ NodeKeyV1::Logical { .. } => format!("{other:?}"),
     }
 }
 
