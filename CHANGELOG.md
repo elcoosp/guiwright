@@ -8,6 +8,12 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **adapter-freya:** The real TestingRunner glue binds TestingSeam (m79)
+- **ci:** The freya job runtime-tests the real harness
+- **adapter-slint:** The real TestingBackend harness binds the slint glue workspace (m78)
+- **adapter-slint:** The skia-links record carries the 1.19.0 verification evidence
+- **ci:** The slint glue job runtime-tests the real harness
+- **bench:** The slint_introspection design-target row rides the glue's criterion suite
 - **adapter-egui:** The headless wgpu pixel path answers render_frame and last_frame (m77)
 - **adapter-egui:** The render-once pass cache feeds screenshots and video
 - **adapter-iced:** The real Emulator harness seam binds iced_test (m76)
