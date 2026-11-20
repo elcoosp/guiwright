@@ -116,7 +116,7 @@ try {
 
   // --- tree snapshot ---
   const snapshot = await client.treeSnapshot();
-  assert.equal(snapshot.node_count, 9, "the described fixture");
+  assert.equal(snapshot.node_count, 12, "the state fixture (m68: the checkbox trio rides)");
   console.log("✓ tree snapshot:", snapshot.node_count, "nodes");
 
   // --- resolve (server-side auto-wait, §8.2) ---
@@ -560,6 +560,57 @@ try {
   await client.ping(); // the ghost handle left the door healthy
   console.log("✓ describeIdentity: the identity row at handle width — door healthy (m66/m67)");
 
+  // --- the single-node identity-state describe over the door (m68/m69) ---
+  // The m67 record's named standing gap ("no state flags on the
+  // identity row"), mirrored on the TS client (the m45/m60/m63/m65/m67
+  // one-milestone-per-surface pattern): a resolveAll() row mints the
+  // handle, `describeIdentityState()` answers the M68 row — the M64
+  // row's fields plus the state three — in one handle-addressed round
+  // trip instead of one question per assertion, the mixed state riding
+  // as its own vocabulary word and the ghost handle rejecting with the
+  // Action boundary's typed code.
+  const mixedRows = await client.resolveAll({
+    kind: "role",
+    role: "CheckBox",
+    name: { text: "Partially installed", exact: true, ignore_case: true },
+  });
+  const mixedRow = mixedRows[0];
+  assert.ok(mixedRow, "the mixed checkbox resolves (the demo's state fixture)");
+  const mixedFacts = await client.describeIdentityState(mixedRow.node, mixedRow.generation);
+  assert.equal(mixedFacts.kind, "described_identity_state");
+  assert.equal(
+    mixedFacts.checked,
+    "mixed",
+    "the tri-state rides as its own word, never a boolean",
+  );
+  assert.equal(mixedFacts.enabled, true, "the enabled fact rides beside the row");
+  assert.equal(mixedFacts.focused, false, "the focused fact rides beside the row");
+  const disabledRows = await client.resolveAll({
+    kind: "role",
+    role: "Button",
+    name: { text: "Confirm", exact: true, ignore_case: true },
+  });
+  const disabledRow = disabledRows[0];
+  assert.ok(disabledRow, "the disabled button resolves");
+  const disabledFacts = await client.describeIdentityState(
+    disabledRow.node,
+    disabledRow.generation,
+  );
+  assert.equal(disabledFacts.enabled, false, "the Disabled flag reads as enabled: false");
+  assert.equal(disabledFacts.checked, "not_checkable", "a button exposes no checked state");
+  const stateGhost = await client
+    .describeIdentityState({ kind: "accesskit", tree: "a5".repeat(16), node: 4242 }, 0)
+    .then(
+      () => null,
+      (e: unknown) => e,
+    );
+  assert.ok(stateGhost instanceof GwpRejected, "the typed ghost-handle rejection");
+  assert.equal((stateGhost as GwpRejected).codeName, "UnknownNode");
+  await client.ping(); // the ghost handle left the door healthy
+  console.log(
+    "✓ describeIdentityState: the state three at handle width — door healthy (m68/m69)",
+  );
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
@@ -592,7 +643,7 @@ try {
   console.log("✓ M15 ws: upgraded + handshaked —", wsWelcome.session_id);
 
   const wsSnapshot = await wsClient.treeSnapshot();
-  assert.equal(wsSnapshot.node_count, 9, "the same fixture bytes over ws");
+  assert.equal(wsSnapshot.node_count, 12, "the same fixture bytes over ws");
   const wsResolved = await wsClient.resolve({
     kind: "role",
     role: "Button",
