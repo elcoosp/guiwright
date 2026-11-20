@@ -1,0 +1,112 @@
+# The slint glue workspace (architecture §4.4, §17 row 5, m78).
+#
+# This is its own workspace root, **excluded from the main workspace** by
+# the recorded skia-links constraint (re-verified against 1.19.0 at m78 —
+# see the guiwright-adapter-slint crate docs). The slint *facade* pulls
+# `i-slint-backend-selector` unconditionally, whose graph resolves
+# `i-slint-backend-winit` → (optional, but lockfile-resolved)
+# `i-slint-renderer-skia` → `skia-bindings` (`links = "skia"`); freya's
+# optional-but-lock-resolved `freya-skia-bindings` claims the same links
+# key, and cargo's uniqueness check applies at resolution time whether or
+# not either renderer is ever compiled. So: this workspace carries slint's
+# skia entry, the main workspace carries freya's, and neither carries both.
+# The glue path-depends on the main workspace's framework-free engine
+# (`guiwright-adapter-slint`), `guiwright-driver` and `guiwright-core`.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "guiwright-adapter-slint-glue"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elcoosp/guiwright"
+description = "Guiwright Slint harness glue (architecture §4.4, m78): FrameworkAdapter over the real i-slint-backend-testing TestingBackend — set_platform, Window::dispatch_event input, take_snapshot pixels, mock_elapsed_time clock — driving a real .slint app through Session"
+
+[dependencies]
+guiwright-adapter-slint = { path = "../../crates/guiwright-adapter-slint" }
+guiwright-driver = { path = "../../crates/guiwright-driver" }
+accesskit = "0.25.2"
+thiserror = "2.0.21"
+# The frame digest (§10 "hash = xxh3 of a scene/pixel digest") — the same
+# pinned hashing stack the main workspace rides.
+twox-hash = { version = "2.1.5", default-features = false, features = [
+    "std",
+    "xxhash3_64",
+] }
+
+# The framework stack this workspace exists to carry (see the header
+# comment for the skia-links scoping): the facade rides the m2 glue
+# contract — `std` + the mandatory `compat-1-2`, plus `renderer-software`
+# — no backend-default, no femtovg, no accessibility (the winit stack
+# stays feature-off; only its lockfile entry rides along).
+slint = { version = "=1.19.0", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "renderer-software",
+] }
+# The testing backend replaces the whole Platform (§4.4 door A); its own
+# `renderer-software` feature embeds the real rasterizer so headless
+# `Window::take_snapshot` produces pixels. Semver-exempt internals →
+# pinned per release train (§4.4 caveats).
+i-slint-backend-testing = { version = "=1.19.0", default-features = false, features = [
+    "renderer-software",
+] }
+
+[build-dependencies]
+# The m78 example app compiles the real `.slint` file with element debug
+# info (`CompilerConfiguration::debug_info` — the programmatic spelling of
+# the §11 `SLINT_EMIT_DEBUG_INFO=1` flag; the runtime equivalent of the
+# `guiwright-adapter-slint::build` helper consumer apps wire in build.rs).
+# Defaults (`compat-1-18` + the compiler's software-renderer support)
+# mirror the facade's feature set; the crate is compiler-only, so no
+# backend stack rides along.
+slint-build = { version = "=1.19.0" }
+
+[dev-dependencies]
+guiwright-core = { path = "../../crates/guiwright-core" }
+criterion = { version = "0.8.2", default-features = false, features = [
+    "cargo_bench_support",
+] }
+
+[[bench]]
+name = "harness"
+harness = false
+
+[lints]
+# Mirrors the main workspace lints table (§17 policy) — this crate is its
+# own workspace root and cannot inherit, so the policy rides here with the
+# same documented carve-outs.
+#
+# unsafe_code rides `deny`, not the main table's `forbid`: the slint
+# `include_modules!` expansion (the compiled `counter_form.slint`, built
+# by build.rs into OUT_DIR) carries its own `#[allow(unsafe_code)]` for
+# the generated vtable macros — under `forbid` those attributes are hard
+# errors (E0453). `deny` keeps the same practical guarantee for the
+# hand-written glue (the zero-`#[allow]` gate in the repo's hand-off
+# checklist forbids relaxing it per-item), while the generated framework
+# module compiles unchanged — the same boundary the main workspace draws
+# around framework-internal unsafe.
+rust.unsafe_code = "deny"
+# The `include_modules!` expansion (the compiled `counter_form.slint`)
+# declares generated structs with no Debug impls; the lint rides `allow`
+# so the generated module compiles — the hand-written glue keeps its own
+# manual `Debug` impls (the same boundary the unsafe row draws above).
+rust.missing_debug_implementations = "allow"
+clippy.all = { level = "warn", priority = -1 }
+clippy.pedantic = { level = "warn", priority = -1 }
+# The adapter/glue surface repeats module names by design (§4.4 vocabulary
+# mirrors `PlatformEvent`/`WindowEvent` names).
+clippy.module_name_repetitions = "allow"
+# Quantization paths convert rounded-and-clamped floats to their integer
+# domain by design (the §10 pixel ramp); Rust has no TryFrom float→int.
+clippy.cast_possible_truncation = "allow"
+clippy.cast_precision_loss = "allow"
+clippy.missing_errors_doc = "allow"
+clippy.missing_panics_doc = "allow"
+
+[profile.bench]
+debug = true
