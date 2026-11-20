@@ -301,7 +301,10 @@ fn input_and_gestures_validate_the_window_target() {
         matches!(err, guiwright_core::CoreError::UnknownWindow { .. }),
         "{err}"
     );
-    assert!(session.adapter().window_events().is_empty());
+    assert_eq!(
+        session.adapter().window_events(),
+        &[] as &[(String, InputEvent)]
+    );
 
     // An explicit target routes there; the default (None) is the session's
     // first window target.
@@ -334,7 +337,10 @@ fn zero_count_click_is_rejected_before_any_injection() {
         err.to_string().contains("count"),
         "the error names the problem: {err}"
     );
-    assert!(session.adapter().window_events().is_empty());
+    assert_eq!(
+        session.adapter().window_events(),
+        &[] as &[(String, InputEvent)]
+    );
 }
 
 // ---------------------------------------------------------------------------
