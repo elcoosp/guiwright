@@ -564,3 +564,11 @@ p50_us = 2000
 p95_us = 9000
 notes = "one Emulator update + Task::widget walk + report fold on the §4.6 read-back (m76); renderer-bound, not CPU-bound — the Emulator owns the tiny-skia device, so the number measures the harness path, not the renderer; design target until the iced runtime matrix lands, then enforced like the other framework rows"
 m0_measurable = false
+
+[[budget]]
+id = "slint_introspection"
+name = "Slint introspection pass (one full §4.4 ElementHandle walk + fold)"
+p50_us = 120
+p95_us = 700
+notes = "one ElementHandle visit_descendants walk + bounds-containment nesting + SlintTreeBuilder::rebuild fold on the §4.4 glue path (m78); measured by the glue workspace's criterion suite (glue/slint/benches — release, 480×320, the m78 counter/form app at 27 semantic nodes); design target until the slint matrix enforcement pass lands, then enforced like the other framework rows"
+m0_measurable = false
