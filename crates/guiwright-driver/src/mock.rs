@@ -283,10 +283,6 @@ impl MockAdapter {
         self.overlay.as_ref()
     }
 
-    pub fn pump_count(&self) -> u64 {
-        self.seq
-    }
-
     pub fn virtual_time(&self) -> Option<Duration> {
         self.clock.virtual_time
     }
