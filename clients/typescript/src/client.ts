@@ -394,6 +394,28 @@ export class GwpClient {
     return resp;
   }
 
+  /** The set-width identity-state describe read over the wire (m70/m71
+   * — the m68/m69 records' named standing gap, the Rust `ClientConn::
+   * describe_all_identity_state` mirrored): every current match of
+   * `selector` with its facts — the identity four, the accessible
+   * description plus the state three (focused / enabled / checked) —
+   * one round trip instead of one `describeIdentityState()` per row.
+   * The M64 `describeAll()` walk payload rides in and the M68
+   * identity-state row rides out per match (the m64 row-widening rule's
+   * fourth link). Snapshot semantics unchanged: no strict mode, never
+   * waiting, an empty set answers an empty list; the connection's
+   * window scope narrows the walk exactly like `describeAll()`. A
+   * driver older than m70 cannot decode the appended request at all
+   * (the append-only cost every appended domain has carried since M3),
+   * so there is no fallback derivation (the m41 fail-fast rule). */
+  async describeAllIdentityState(selector: Selector): Promise<DescribedIdentityStateNode[]> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "describe_all_identity_state", selector });
+    if (resp.kind !== "described_all_identity_state")
+      throw new Error(`expected DescribedAllIdentityState, got ${resp.kind}`);
+    return resp.rows;
+  }
+
   /** The m29 bulk text read at set width (M41 — the m29 record's remote
    * note: "a remote bulk read would extend the `Resolve` reply exactly
    * as the m26/m22 records name … and stays open until a remote suite
