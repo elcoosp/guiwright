@@ -6,8 +6,8 @@
 //! backend — introspection (Level-2 logical tree) + `mock_elapsed_time`
 //! clock. This crate ships the **framework-free half** — the engine the
 //! glue feeds — plus the testing build helper (§11); the framework-facing
-//! glue lives downstream because upstream slint cannot coexist with
-//! freya in one workspace (see *Glue contract* below).
+//! glue lives in the repo's slint-only workspace `glue/slint`, bound to
+//! the real `i-slint-backend-testing` `TestingBackend` since m78.
 //!
 //! * [`ids`] — the `(component, item)` identity bridge (§6.1).
 //! * [`logical`] — the Level-2 engine: introspection pass → synthesized
@@ -16,21 +16,32 @@
 //! * [`build`] — the testing build helper (§11: headless backend + debug
 //!   info).
 //!
-//! # Glue contract (downstream workspaces)
+//! # Glue contract (the `glue/slint` workspace)
 //!
-//! A slint-only downstream workspace wires the glue in one small module
-//! (slint's testing backend is semver-exempt, §17 row 5 — this is the
-//! only per-release surface):
+//! The glue binds the engine in one small module (slint's testing
+//! backend is semver-exempt, §17 row 5 — this is the only per-release
+//! surface):
 //!
 //! ```ignore
-//! // downstream Cargo.toml:
-//! //   slint = { version = "…", default-features = false,
+//! // glue/slint Cargo.toml (its own workspace root — see the header
+//! // comment there and the constraint below):
+//! //   slint = { version = "=1.19.0", default-features = false,
 //! //             features = ["std", "compat-1-2", "renderer-software"] }
-//! //   i-slint-backend-testing = { version = "…", default-features = false }
+//! //   i-slint-backend-testing = { version = "=1.19.0",
+//! //             default-features = false, features = ["renderer-software"] }
 //!
-//! /// Introspection pass → the engine (walk the testing backend's item
-//! /// tree into [`IntrospectionItem`]s, then rebuild the diff).
-//! fn rebuild_diff(builder: &mut SlintTreeBuilder, root: IntrospectionItem) { … }
+//! /// Boot (§11 slint row): the testing backend as the thread's platform —
+//! /// mock time + the software rasterizer for headless `take_snapshot`.
+//! slint::platform::set_platform(Box::new(TestingBackend::new(
+//!     TestingBackendOptions { mock_time: true, threading: false,
+//!                             renderer_name: Some("software".into()) })));
+//!
+//! /// Introspection pass → the engine (walk the testing backend's
+//! /// `ElementHandle` tree into [`IntrospectionItem`]s, then rebuild the
+//! /// diff).
+//! fn rebuild_diff(builder: &mut SlintTreeBuilder, root: &IntrospectionItem) {
+//!     builder.rebuild(root);
+//! }
 //!
 //! /// Clock: execute the plan against the testing backend (§14 slint row).
 //! fn run_clock_plan(steps: &[SlintClockStep]) {
@@ -40,23 +51,36 @@
 //!         }
 //!     }
 //! }
-//!
-//! /// Boot (§11 slint row): headless software backend + debug info.
-//! i_slint_backend_testing::init_integration_test_with_mock_time();
 //! ```
 //!
-//! # Upstream constraint (recorded at M2)
+//! # Upstream constraint (recorded at M2, re-verified at m78)
 //!
 //! Cargo resolves *optional* dependencies into the lockfile, and the
 //! `links = "skia"` uniqueness check applies at resolution time. freya's
-//! testing stack (freya-skia-bindings) and slint's renderer-skia chain
-//! (i-slint-backend-winit → i-slint-renderer-skia → skia-bindings) both
+//! testing stack (freya-skia-bindings) and slint's facade graph both
 //! claim `links = "skia"`, so **no single workspace can depend on both
-//! freya-testing and slint** for any slint release with a skia renderer
-//! in its graph (checked 1.14.1 and 1.18.1, 2026-11). The glue therefore
-//! compiles in slint-only downstream workspaces; this workspace keeps
-//! the engine framework-free and CI verifies exactly that. Revisit when
-//! freya moves off pinned skia or the adapters ship per-framework.
+//! freya-testing and the slint facade**. Verified against slint 1.19.0
+//! (2026-11): the facade depends on `i-slint-backend-selector`
+//! unconditionally; the selector's desktop graph carries
+//! `i-slint-backend-winit` (optional) whose own optional
+//! `i-slint-renderer-skia` → `skia-safe` → `skia-bindings` chain lands in
+//! the lockfile **with every feature combination** (`default-features =
+//! false` included) — `cargo tree -i i-slint-renderer-skia` prints
+//! "nothing to print" (nothing activated it) while `Cargo.lock` still
+//! carries `skia-bindings 0.157.0`, and the resolver rejects the graph
+//! the moment freya's `freya-skia-bindings` joins it. The testing backend
+//! crate itself (with `renderer-software`) is skia-free — the facade's
+//! unconditional selector edge is what drags skia in — and apps that
+//! compile real `.slint` code (the `slint!` macro / `slint-build` both
+//! generate facade-bound code) cannot escape it.
+//!
+//! The glue therefore compiles in the slint-only `glue/slint` workspace
+//! (its own root, `resolver = "2"`), which path-depends on this engine,
+//! `guiwright-driver` and `guiwright-core`; the main workspace keeps
+//! carrying freya's skia entry and never slint's. CI runtime-tests the
+//! glue (`cargo test --manifest-path glue/slint/Cargo.toml`). Revisit
+//! only if slint makes the winit/skia chain truly optional in the
+//! lockfile or freya moves off pinned skia.
 
 #![forbid(unsafe_code)]
 
