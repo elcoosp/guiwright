@@ -26,6 +26,31 @@
   ],
   "description": "Binary-first CDP-style protocol: sessions -> targets (windows) -> domains; request/response + server-push events. This document is the contract for non-Rust clients (§16).",
   "domains": {
+    "checked_state": {
+      "name": "CheckedStateV1",
+      "variants": [
+        {
+          "index": 0,
+          "name": "NotCheckable",
+          "payload": "the node exposes no checked state (not a checkable role) — a total fact on the M68 identity-state row, never an Error"
+        },
+        {
+          "index": 1,
+          "name": "Unchecked",
+          "payload": "the AccessKit Toggled::False state (the M20 to_be_unchecked vocabulary)"
+        },
+        {
+          "index": 2,
+          "name": "Checked",
+          "payload": "the AccessKit Toggled::True state (the M20 to_be_checked vocabulary)"
+        },
+        {
+          "index": 3,
+          "name": "Mixed",
+          "payload": "the AccessKit Toggled::Mixed tri-state — its own word, never squeezed into an Option<bool> (a mixed checkbox is not an unchecked one)"
+        }
+      ]
+    },
     "clock": {
       "name": "ClockV1",
       "variants": [
@@ -396,6 +421,11 @@
       "index": 21,
       "name": "DescribeIdentity",
       "payload": "{ node: NodeKeyV1, generation: u32 varint } — the identity fact set at handle width (M66, the m64 record's named standing gap): the M36 Describe handle pair in, the M64 identity row out — the identity four plus the description fact, one round trip instead of the whole-set walk → DescribedIdentity; handle-addressed, the Action boundary's generation guard (StaleGeneration / UnknownNode)"
+    },
+    {
+      "index": 22,
+      "name": "DescribeIdentityState",
+      "payload": "{ node: NodeKeyV1, generation: u32 varint } — the identity fact set plus the state facts at handle width (M68, the m67 record's named standing gap): the M36 Describe handle pair in, the M68 identity-state row out — the identity four, the description fact plus the state three (focused / enabled / checked, see domains.checked_state), one round trip instead of one question per assertion → DescribedIdentityState; handle-addressed, the Action boundary's generation guard (StaleGeneration / UnknownNode)"
     }
   ],
   "responses": [
@@ -523,6 +553,11 @@
       "index": 24,
       "name": "DescribedIdentity",
       "payload": "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string> } — the M64 identity row at handle width (M66): the request's handle echoed, the identity four plus the description fact; stale and unknown handles ride the typed Error codes"
+    },
+    {
+      "index": 25,
+      "name": "DescribedIdentityState",
+      "payload": "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) } — the identity row's state facts at handle width (M68, the m67 record's named standing gap): the request's handle echoed, the M64 identity row's fields plus the state three (the core Check::Focused / Check::Enabled / Check::Checked reads' shapes at fact width); stale and unknown handles ride the typed Error codes"
     }
   ],
   "schema": "gwp-schema/v1",
