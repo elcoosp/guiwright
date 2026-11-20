@@ -2,18 +2,21 @@
 //! (architecture §4.6, §18 "adapters are thin & feature-gated").
 //!
 //! Build with `--features iced` — that pulls the iced stack
-//! (`iced_test` → `iced_renderer`, wgpu included) and is exactly what the
-//! CI matrix job `adapter-iced (features: iced)` compile-verifies. The
-//! default build carries none of it, per §5.3 ("nothing else leaks into
-//! release builds").
+//! (`iced_test` + the `tiny-skia` CPU backend) and is exactly what the CI
+//! matrix job `adapter-iced (features: iced)` runtime-tests. The default
+//! build carries none of it, per §5.3 ("nothing else leaks into release
+//! builds").
 //!
-//! Verified against `iced_test` 0.14.0's public surface
-//! (`Simulator::{find, click, into_messages, tap_key, typewrite}`,
-//! `Emulator`, `iced_test::screenshot`). Rows of the §6.2 capability
-//! matrix that need deeper internals than the public surface exposes
-//! (`render_frame` through `ICED_TEST_BACKEND`, live `Mode` pumping) are
-//! explicit [`AdapterError::Unsupported`] rows so the gap is visible, not
-//! silent — they land with the CI matrix pass.
+//! The real seam lives in [`crate::emulator`]: `EmulatorHarness` binds
+//! `iced_test::Emulator` to a real `Program` and implements
+//! [`SimulatorSeam`] over the instruction vocabulary (`Mouse::Click` /
+//! `Move` / `Press` / `Release`, `Keyboard::Typewrite` / `Type`) plus the
+//! §4.6 `Task::widget` tree read-back. Rows of the §6.2 capability matrix
+//! the instruction surface can't express (`render_frame`, wheel, blur)
+//! stay explicit [`AdapterError::Unsupported`] rows so the gap is visible,
+//! not silent.
+//!
+//! [`AdapterError`]: guiwright_driver::adapter::AdapterError
 
 use std::hash::Hasher;
 
@@ -25,7 +28,7 @@ use guiwright_driver::adapter::{
 use twox_hash::xxhash3_64::Hasher as Xxh3;
 
 use crate::actions::{WidgetOp, route};
-use crate::input::{InputOp, translate};
+use crate::input::{InputOp, PointerOp, translate};
 use crate::logical::{LogicalTree, WidgetReport};
 use crate::policy::{Mode, may_run_pass};
 
@@ -73,12 +76,16 @@ pub enum SimInteraction {
     TapKey(String),
 }
 
-/// The simulator-facing seam the CI matrix pass binds to `iced_test`:
-/// pump the program one pass, execute one widget op, run one interaction.
+/// The simulator-facing seam: pump the program one pass, execute one
+/// widget op, run one interaction or pointer op.
 pub trait SimulatorSeam {
     fn run_one_pass(&mut self);
     fn apply_op(&mut self, op: &WidgetOp) -> Result<String, AdapterError>;
     fn interact(&mut self, interaction: &SimInteraction) -> Result<String, AdapterError>;
+    /// Pointer ops through the real event pipeline (the Emulator
+    /// translates them to `Mouse::Move` / `Press` / `Release`
+    /// instructions, §9).
+    fn pointer(&mut self, op: &PointerOp) -> Result<String, AdapterError>;
     fn screen_size(&self) -> (f64, f64);
 }
 
@@ -188,10 +195,14 @@ impl<S: SimulatorSeam + 'static> FrameworkAdapter for IcedAdapter<S> {
 
     fn input(&mut self, ev: InputEvent) -> Result<(), AdapterError> {
         match translate(&ev)? {
-            InputOp::Pointer(_) => Err(AdapterError::Unsupported(
-                "pointer input targets coordinates — route via semantic actions \
-                 (iced has no public coordinate hit-test on the Simulator seam)",
-            )),
+            // Pointer ops ride the real event pipeline (§9): the seam
+            // translates them to `Mouse::Move` / `Press` / `Release`
+            // instructions resolved against the laid-out UI.
+            InputOp::Pointer(op) => {
+                self.sim.pointer(&op)?;
+                self.sim.run_one_pass();
+                Ok(())
+            }
             InputOp::Key(key) => {
                 let interaction = match key {
                     crate::input::KeyOp::Text { text } => SimInteraction::Typewrite(text),
@@ -262,6 +273,10 @@ mod tests {
         fn interact(&mut self, i: &SimInteraction) -> Result<String, AdapterError> {
             self.log.push(format!("{i:?}"));
             Ok("interacted".into())
+        }
+        fn pointer(&mut self, op: &PointerOp) -> Result<String, AdapterError> {
+            self.log.push(format!("{op:?}"));
+            Ok("pointered".into())
         }
         fn screen_size(&self) -> (f64, f64) {
             self.screen
