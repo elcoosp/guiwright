@@ -839,6 +839,9 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::DescribeAllIdentity(DescribeAllV1 { selector }) => {
             describe_all_identity_response(session, selector, window)
         }
+        RequestV1::DescribeIdentity(DescribeV1 { node, generation }) => {
+            describe_identity_response(session, node, generation)
+        }
         RequestV1::Action {
             node,
             generation,
@@ -1020,6 +1023,23 @@ fn described_row(row: crate::session::NodeDescription) -> DescribedV1 {
     }
 }
 
+/// The session row's m64 wire shape — the identity four plus the
+/// description fact, the one mapping the m64 set arm and the m66
+/// single-node arm speak. One copy instead of the two the identity
+/// arms would carry by hand (the m64 `described_row` factoring's rule:
+/// every future field change stays a one-line edit).
+fn described_identity_row(row: crate::session::NodeDescription) -> DescribedIdentityV1 {
+    DescribedIdentityV1 {
+        node: NodeKeyV1::from(row.key),
+        generation: row.generation,
+        role: row.role,
+        name: row.name,
+        value: row.value,
+        bounds: row.bounds,
+        description: row.description,
+    }
+}
+
 /// The describe-all read over the wire (M39 — the m37 record's standing
 /// gap: "enumerating a set's facts would open one Describe round trip per
 /// row"): the resolve-all walk's rows carrying the Described identity
@@ -1063,19 +1083,31 @@ fn describe_all_identity_response<A: FrameworkAdapter>(
     session.clear_resolve_scope();
     match result {
         Ok(rows) => ResponseV1::DescribedAllIdentity {
-            rows: rows
-                .into_iter()
-                .map(|row| DescribedIdentityV1 {
-                    node: NodeKeyV1::from(row.key),
-                    generation: row.generation,
-                    role: row.role,
-                    name: row.name,
-                    value: row.value,
-                    bounds: row.bounds,
-                    description: row.description,
-                })
-                .collect(),
+            rows: rows.into_iter().map(described_identity_row).collect(),
         },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The single-node identity describe read over the wire (m66 — the m64
+/// record's named standing gap: the M36 `Describe` read keeps its
+/// identity-four encoding and the description fact rides the identity
+/// *set* read only): one node's facts — the identity four plus the
+/// accessible description — for a handle the client already holds, one
+/// round trip instead of the whole-set walk. The M36 `Describe` arm's
+/// boundary verbatim: handle-addressed, so no window scope applies (a
+/// point is ambiguous, a selector the tree answers; the handle IS the
+/// node); the generation guard rejects a recycled id
+/// (`StaleGeneration`) and a dead one (`UnknownNode`) as the typed
+/// errors; a pump runs first (consistency, like `Describe`).
+fn describe_identity_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    node: NodeKeyV1,
+    generation: u32,
+) -> ResponseV1 {
+    let key: NodeKey = node.into();
+    match session.describe(&key, generation) {
+        Ok(row) => ResponseV1::DescribedIdentity(described_identity_row(row)),
         Err(err) => error_response(&err),
     }
 }
