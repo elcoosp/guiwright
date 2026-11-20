@@ -81,6 +81,9 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["requests"][15]["name"], "Subscribe");
     assert_eq!(doc["requests"][16]["name"], "ResolveAll");
     assert_eq!(doc["requests"][22]["name"], "DescribeIdentityState");
+    // The m70 frontier: the state facts' set-width read appends after the
+    // m68 handle-width row, reusing the DescribeAll payload.
+    assert_eq!(doc["requests"][23]["name"], "DescribeAllIdentityState");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
     assert_eq!(doc["responses"][12]["name"], "Windows");
@@ -92,6 +95,8 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["responses"][18]["name"], "Subscribed");
     assert_eq!(doc["responses"][19]["name"], "ResolvedAll");
     assert_eq!(doc["responses"][25]["name"], "DescribedIdentityState");
+    // The m70 frontier reply: the M68 row per match, document order.
+    assert_eq!(doc["responses"][26]["name"], "DescribedAllIdentityState");
 
     // The M68 checked vocabulary is its own published domain table (the
     // m67 record's named gap closed as a four-way word).
@@ -146,13 +151,14 @@ fn response_variants() -> usize {
         | ResponseV1::DescribedAll { .. }
         | ResponseV1::DescribedAllIdentity { .. }
         | ResponseV1::DescribedIdentity(_)
-        | ResponseV1::DescribedIdentityState(_) => 26usize,
+        | ResponseV1::DescribedIdentityState(_)
+        | ResponseV1::DescribedAllIdentityState { .. } => 27usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    23 + match RequestV1::Ping {
+    24 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -175,7 +181,8 @@ fn request_variants() -> usize {
         | RequestV1::DescribeAll(_)
         | RequestV1::DescribeAllIdentity(_)
         | RequestV1::DescribeIdentity(_)
-        | RequestV1::DescribeIdentityState(_) => 0,
+        | RequestV1::DescribeIdentityState(_)
+        | RequestV1::DescribeAllIdentityState(_) => 0,
     }
 }
 
