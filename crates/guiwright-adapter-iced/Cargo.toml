@@ -19,9 +19,34 @@ twox-hash = { workspace = true, optional = true }
 # Framework-facing glue (§18: adapters are thin & feature-gated). The
 # default build carries none of it; `--features iced` pulls the harness.
 iced_test = { version = "0.14.0", optional = true }
+# iced_test names no renderer backend of its own (with only its default
+# features `iced_renderer::Renderer` is the `()` null renderer — zero-bounds
+# text, release builds fail to compile): the CPU backend gives the harness
+# real layout/text deterministically, with no GPU dependency (§11). The
+# pure-Rust x11/wayland presentation backends ride along — without one,
+# softbuffer compiles no backend at all and fails to build.
+iced_renderer = { version = "0.14.0", optional = true, features = [
+    "tiny-skia",
+    "wayland",
+    "x11",
+] }
 
 [features]
-iced = ["dep:iced_test", "dep:twox-hash"]
+iced = ["dep:iced_test", "dep:iced_renderer", "dep:twox-hash"]
+
+[dev-dependencies]
+iced = { version = "0.14.0", default-features = false, features = [
+    "tiny-skia",
+    "wayland",
+    "x11",
+    "thread-pool",
+] }
+
+# The m76 consumer example builds only with the harness (it drives the
+# real `Emulator` path); the default build skips it.
+[[example]]
+name = "counter_form"
+required-features = ["iced"]
 
 [lints]
 workspace = true
