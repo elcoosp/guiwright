@@ -15,11 +15,11 @@
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1,
-    ErrorCode, EventKindV1, EventV1, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1,
-    PROTO_VERSION, PointerButtonV1, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1,
-    SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1,
-    VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1,
+    DescribedIdentityStateV1, DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
+    GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
+    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
+    SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -353,6 +353,24 @@ fn describe_identity_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M68 (the identity read's state facts at handle width): the m67
+/// record's named standing gap — the state three riding beside the
+/// identity row. The request reuses the M36 handle pair verbatim (the
+/// m66 payload-reuse rule, one more domain), so its frame differs from
+/// `describe_identity_save_handle` only in the variant byte.
+fn describe_identity_state_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "describe_identity_state_save_handle",
+        RequestV1::DescribeIdentityState(DescribeV1 {
+            node: NodeKeyV1::AccessKit {
+                tree: [0x01; 16],
+                node: 2,
+            },
+            generation: 0,
+        }),
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -365,7 +383,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(describe_requests())
         .chain(describe_all_requests())
         .chain(describe_all_identity_requests())
-        .chain(describe_identity_requests());
+        .chain(describe_identity_requests())
+        .chain(describe_identity_state_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -662,6 +681,79 @@ fn describe_identity_responses() -> Vec<(&'static str, ResponseV1, serde_json::V
     )]
 }
 
+/// M68 (the identity read's state facts at handle width): the M64
+/// identity row's fields plus the state three — one enabled,
+/// not-checkable button row (the m66 row keeps its byte-exact encoding;
+/// the widening rides its own appended reply variant) and one focused,
+/// mixed-checked checkbox row (the mixed state is its own vocabulary
+/// word, never an Option<bool>).
+fn describe_identity_state_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![
+        (
+            "described_identity_state_install_button",
+            ResponseV1::DescribedIdentityState(DescribedIdentityStateV1 {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0x01; 16],
+                    node: 4,
+                },
+                generation: 0,
+                role: "Button".into(),
+                name: Some("Install".into()),
+                value: None,
+                bounds: Some([16.0, 204.0, 136.0, 236.0]),
+                description: Some("Installs the latest build".into()),
+                focused: false,
+                enabled: true,
+                checked: CheckedStateV1::NotCheckable,
+            }),
+            serde_json::json!({
+                "kind": "described_identity_state",
+                "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 4},
+                "generation": 0,
+                "role": "Button",
+                "name": "Install",
+                "value": null,
+                "bounds": [16.0, 204.0, 136.0, 236.0],
+                "description": "Installs the latest build",
+                "focused": false,
+                "enabled": true,
+                "checked": "not_checkable",
+            }),
+        ),
+        (
+            "described_identity_state_mixed_checkbox",
+            ResponseV1::DescribedIdentityState(DescribedIdentityStateV1 {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0x01; 16],
+                    node: 9,
+                },
+                generation: 0,
+                role: "CheckBox".into(),
+                name: Some("Partially installed".into()),
+                value: None,
+                bounds: Some([16.0, 284.0, 136.0, 316.0]),
+                description: None,
+                focused: true,
+                enabled: true,
+                checked: CheckedStateV1::Mixed,
+            }),
+            serde_json::json!({
+                "kind": "described_identity_state",
+                "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 9},
+                "generation": 0,
+                "role": "CheckBox",
+                "name": "Partially installed",
+                "value": null,
+                "bounds": [16.0, 284.0, 136.0, 316.0],
+                "description": null,
+                "focused": true,
+                "enabled": true,
+                "checked": "mixed",
+            }),
+        ),
+    ]
+}
+
 /// Clock / mock / codegen / error service responses.
 fn service_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
     vec![
@@ -871,6 +963,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .chain(describe_responses())
         .chain(describe_all_responses())
         .chain(describe_identity_responses())
+        .chain(describe_identity_state_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
