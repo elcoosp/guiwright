@@ -34,7 +34,13 @@
  *   `crates/guiwright-proto/tests/expect_tracker.rs`.)
  */
 
-import type { DescribedIdentityNode, DescribedNode, TextMatchV1 } from "./schema.ts";
+import type {
+  CheckedState,
+  DescribedIdentityNode,
+  DescribedIdentityStateNode,
+  DescribedNode,
+  TextMatchV1,
+} from "./schema.ts";
 
 /** The content- and identity-assertion vocabulary (the kit's
  * `to_have_text` / `to_have_value` rows, plus the M38 identity pair the
@@ -202,6 +208,97 @@ export class ExpectTracker {
     return {
       done: false,
       reason: `${this.kind} is ${JSON.stringify(found)}, expected ${renderMatch(wanted)}`,
+    };
+  }
+}
+
+/** The state-assertion vocabulary (m75 — the kit's `to_be_checked` /
+ * `to_be_enabled` / `to_be_focused` rows over any door, the Rust seam's
+ * `StateKind` mirrored, the m73 record's named standing gap closed on
+ * the other-language client): a client-side vocabulary, never
+ * serialized — the assertion composes the m54 wake loop with the m70
+ * set-width state read (`describeAllIdentityState()` re-reads)
+ * byte-for-byte, the `ExpectKind` rule. */
+export type StateKind = "checked" | "enabled" | "focused";
+
+/** The static state word the typed timeout names (the Rust
+ * `StateKind::state()` wording — the kit's `to_be_*` shape carried over
+ * the wire). */
+export function stateWord(kind: StateKind): string {
+  if (kind === "checked") return "be checked";
+  if (kind === "enabled") return "be enabled";
+  return "be focused";
+}
+
+/** One evaluation step's answer for the state kinds: either the fact
+ * holds — carrying the m68 row that satisfied it (a directly usable
+ * `action()` node, the dump-row rule) — or the reason it is still
+ * pending, which becomes the timeout error's last-evaluation line. */
+export type StateEval =
+  | { done: true; row: DescribedIdentityStateNode }
+  | { done: false; reason: string };
+
+/** The row-set evaluator behind `GwpClient.expectChecked()` /
+ * `expectEnabled()` / `expectFocused()` (the Rust `StateTracker`
+ * mirrored row-for-row, the m63 evaluator shape at state width). Feed
+ * it fresh describe-all-identity-state rows after every wake and it
+ * answers the assertion; the evaluator carries no cross-wake state
+ * (the state facts have no `stable`-like frame discipline — every wake
+ * re-decides the whole read). */
+export class StateTracker {
+  private readonly kind: StateKind;
+  private readonly wanted: CheckedState | boolean | undefined;
+
+  /** A tracker for one assertion, in the kind and expected fact it
+   * asserts: the checked kind carries the m68 four-way word (never a
+   * boolean — a mixed checkbox is not an unchecked one), the enabled
+   * kind the boolean the row carries, the focused kind nothing (the
+   * fact itself is the demand). */
+  constructor(kind: "checked", wanted: CheckedState);
+  constructor(kind: "enabled", wanted: boolean);
+  constructor(kind: "focused");
+  constructor(kind: StateKind, wanted?: CheckedState | boolean) {
+    this.kind = kind;
+    this.wanted = wanted;
+  }
+
+  /** Evaluate one row set: the set's head answers by the kind's read
+   * (the m54 rule — document order, first row); an empty set stays
+   * pending (waitable — nodes stream in, Playwright parity). The
+   * checked word is demanded exactly (the m73 tri-state rule), the
+   * enabled boolean answers both ways, and the focused fact waits for
+   * the focus to arrive. */
+  evaluate(rows: DescribedIdentityStateNode[]): StateEval {
+    const head = rows[0];
+    if (head === undefined) {
+      return { done: false, reason: "no match yet (the set is empty)" };
+    }
+    if (this.kind === "checked") {
+      const wanted = this.wanted as CheckedState;
+      if (head.checked === wanted) {
+        return { done: true, row: head };
+      }
+      return {
+        done: false,
+        reason: `checked is ${JSON.stringify(head.checked)}, expected ${JSON.stringify(wanted)}`,
+      };
+    }
+    if (this.kind === "enabled") {
+      const wanted = this.wanted as boolean;
+      if (head.enabled === wanted) {
+        return { done: true, row: head };
+      }
+      return {
+        done: false,
+        reason: `enabled is ${head.enabled}, expected ${wanted}`,
+      };
+    }
+    if (head.focused) {
+      return { done: true, row: head };
+    }
+    return {
+      done: false,
+      reason: `focused is ${head.focused}, expected true`,
     };
   }
 }
