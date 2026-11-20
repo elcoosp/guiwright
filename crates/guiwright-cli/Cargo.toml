@@ -30,6 +30,8 @@ guiwright-core.workspace = true
 guiwright-driver.workspace = true
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
+guiwright-adapter-egui = { path = "../guiwright-adapter-egui" }
+egui.workspace = true
 accesskit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 tempfile.workspace = true
