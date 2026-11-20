@@ -8,6 +8,12 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **proto:** The client seam's expect_checked, expect_enabled and expect_focused rows
+- **proto:** The state tracker evaluates the state three over the state walk
+- **kit:** The locator surface carries the identity-state reads
+- **kit:** The state walks and facts answer at both widths
+- **kit:** The identity-state reads' consumer demos
+- **driver:** The NodeStateDescription row rides the crate root
 - **clients:** The schema tables and codec carry the set-width identity-state read's variants
 - **clients:** The describeAllIdentityState method mirrors the m70 row
 - **proto:** The identity read's state facts ride the walk at set width
@@ -35,6 +41,8 @@ Commits](https://www.conventionalcommits.org).
 - **clients:** The schema tables and codec carry the identity read's variants
 
 ### Documentation
+- The m73 seam-state-assertions milestone record
+- The m72 kit-state-reads milestone record
 - The m71 ts identity-state-set-width milestone record
 - The m70 identity-state-set-width milestone record
 - **clients:** The describeIdentity method mirrors the m66 row
