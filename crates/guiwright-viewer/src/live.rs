@@ -360,11 +360,6 @@ impl<C: ClientConn> LiveFeed<C> {
     pub fn live_timeline(&self) -> &LiveTimeline {
         &self.timeline
     }
-
-    /// Give the client back (the feed owns it exclusively).
-    pub fn into_client(self) -> C {
-        self.client
-    }
 }
 
 /// The wire node id vocabulary ([`NodeKeyV1`] → the trace schema's
@@ -442,6 +437,7 @@ fn response_kind(response: &ResponseV1) -> &'static str {
         ResponseV1::DescribedAll { .. } => "DescribedAll",
         ResponseV1::DescribedAllIdentity { .. } => "DescribedAllIdentity",
         ResponseV1::DescribedIdentity(_) => "DescribedIdentity",
+        ResponseV1::DescribedIdentityState(_) => "DescribedIdentityState",
     }
 }
 
@@ -547,6 +543,28 @@ mod tests {
                 nodes: Vec::new(),
             }),
             "TreeDump"
+        );
+        // The m68 row (the append-only vocabulary's frontier): the
+        // identity-state reply names itself the way every reply does.
+        assert_eq!(
+            response_kind(&ResponseV1::DescribedIdentityState(
+                guiwright_proto::schema::DescribedIdentityStateV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0u8; 16],
+                        node: 2,
+                    },
+                    generation: 0,
+                    role: String::new(),
+                    name: None,
+                    value: None,
+                    bounds: None,
+                    description: None,
+                    focused: false,
+                    enabled: true,
+                    checked: guiwright_proto::schema::CheckedStateV1::NotCheckable,
+                }
+            )),
+            "DescribedIdentityState"
         );
     }
 }
