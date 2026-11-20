@@ -2010,9 +2010,11 @@ name = "guiwright-adapter-freya"
 version = "0.4.0"
 dependencies = [
  "accesskit 0.25.2",
+ "freya-components",
  "freya-testing",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-shot",
  "thiserror 2.0.21",
 ]
 
