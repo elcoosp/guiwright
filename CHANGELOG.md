@@ -8,6 +8,11 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **adapter-egui:** The headless wgpu pixel path answers render_frame and last_frame (m77)
+- **adapter-egui:** The render-once pass cache feeds screenshots and video
+- **adapter-iced:** The real Emulator harness seam binds iced_test (m76)
+- **adapter-iced:** The §4.6 tree read-back ships the laid-out widget walk
+- **bench:** The iced harness read-back bench and the iced_tree_readback design row
 - **clients:** The expectChecked, expectEnabled and expectFocused rows mirror the m73 seam
 - **clients:** The state assertions' consumer demo
 - **cli:** The REPL's assert state rows
