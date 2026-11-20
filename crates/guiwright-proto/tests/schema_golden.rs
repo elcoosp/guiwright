@@ -80,6 +80,7 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["requests"][14]["name"], "Snapshot");
     assert_eq!(doc["requests"][15]["name"], "Subscribe");
     assert_eq!(doc["requests"][16]["name"], "ResolveAll");
+    assert_eq!(doc["requests"][22]["name"], "DescribeIdentityState");
     assert_eq!(doc["responses"][10]["name"], "Bye");
     assert_eq!(doc["responses"][11]["name"], "VideoFile");
     assert_eq!(doc["responses"][12]["name"], "Windows");
@@ -90,6 +91,17 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["responses"][17]["name"], "Event");
     assert_eq!(doc["responses"][18]["name"], "Subscribed");
     assert_eq!(doc["responses"][19]["name"], "ResolvedAll");
+    assert_eq!(doc["responses"][25]["name"], "DescribedIdentityState");
+
+    // The M68 checked vocabulary is its own published domain table (the
+    // m67 record's named gap closed as a four-way word).
+    assert_eq!(
+        domains["checked_state"]["variants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        checked_state_variants()
+    );
 
     // The error-code table is flat on the wire: appending UnknownWindow
     // keeps the pre-M6 codes byte-identical.
@@ -133,13 +145,14 @@ fn response_variants() -> usize {
         | ResponseV1::Described(_)
         | ResponseV1::DescribedAll { .. }
         | ResponseV1::DescribedAllIdentity { .. }
-        | ResponseV1::DescribedIdentity(_) => 25usize,
+        | ResponseV1::DescribedIdentity(_)
+        | ResponseV1::DescribedIdentityState(_) => 26usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    22 + match RequestV1::Ping {
+    23 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -161,7 +174,8 @@ fn request_variants() -> usize {
         | RequestV1::Describe(_)
         | RequestV1::DescribeAll(_)
         | RequestV1::DescribeAllIdentity(_)
-        | RequestV1::DescribeIdentity(_) => 0,
+        | RequestV1::DescribeIdentity(_)
+        | RequestV1::DescribeIdentityState(_) => 0,
     }
 }
 
@@ -188,6 +202,17 @@ fn event_kind_variants() -> usize {
         EventKindV1::TreeChanged | EventKindV1::FramePresented | EventKindV1::Log => 3usize,
     };
     probe(EventKindV1::Log)
+}
+
+fn checked_state_variants() -> usize {
+    use guiwright_proto::schema::CheckedStateV1;
+    let probe = |c: CheckedStateV1| match c {
+        CheckedStateV1::NotCheckable
+        | CheckedStateV1::Unchecked
+        | CheckedStateV1::Checked
+        | CheckedStateV1::Mixed => 4usize,
+    };
+    probe(CheckedStateV1::Mixed)
 }
 
 fn screenshot_variants() -> usize {
