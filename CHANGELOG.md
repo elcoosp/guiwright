@@ -8,6 +8,11 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **clients:** The schema tables and codec carry the set-width identity-state read's variants
+- **clients:** The describeAllIdentityState method mirrors the m70 row
+- **proto:** The identity read's state facts ride the walk at set width
+- **proto:** The client seam's describe_all_identity_state row
+- **driver:** The set-width identity-state arm at the boundary
 - **proto:** The identity read's state facts ride the identity row at handle width
 - **proto:** The client seam's describe_identity_state row
 - **driver:** The single-node identity-state arm at the boundary
@@ -30,6 +35,8 @@ Commits](https://www.conventionalcommits.org).
 - **clients:** The schema tables and codec carry the identity read's variants
 
 ### Documentation
+- The m71 ts identity-state-set-width milestone record
+- The m70 identity-state-set-width milestone record
 - **clients:** The describeIdentity method mirrors the m66 row
 - The m67 ts describe-identity milestone record
 - The m66 describe-identity-read milestone record
