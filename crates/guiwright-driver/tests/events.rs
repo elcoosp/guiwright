@@ -91,7 +91,7 @@ async fn subscribed_client_receives_tree_and_frame_events() {
                 saw_frame_presented = true;
                 assert!(seq >= 1);
             }
-            other => panic!("unexpected event {other:?}"),
+            other @ GwpEvent::V1(_) => panic!("unexpected event {other:?}"),
         }
     }
     let tree_seq = saw_tree_changed.expect("TreeChanged arrived");
@@ -318,7 +318,7 @@ async fn a_log_subscription_streams_the_session_tap_over_the_wire() {
         .expect("event frame");
     let record = match event {
         GwpEvent::V1(EventV1::Log { record }) => record,
-        other => panic!("expected a log event, got {other:?}"),
+        other @ GwpEvent::V1(_) => panic!("expected a log event, got {other:?}"),
     };
     let parsed: serde_json::Value =
         serde_json::from_str(&record).expect("each record is one JSON line");
@@ -391,7 +391,7 @@ async fn the_log_filter_coexists_with_tree_events() {
                 serde_json::from_str::<serde_json::Value>(&record)
                     .expect("log records stay one JSON line each");
             }
-            other => panic!("the filter let a frame through: {other:?}"),
+            other @ GwpEvent::V1(_) => panic!("the filter let a frame through: {other:?}"),
         }
     }
     assert!(saw_tree, "the tree event arrived");
