@@ -257,6 +257,116 @@ fn render(m: &TextMatchV1) -> String {
     }
 }
 
+/// The state-assertion vocabulary (m73 — the kit's `to_be_checked` /
+/// `to_be_enabled` / `to_be_focused` rows over any door): a client-side
+/// vocabulary, never serialized — the assertion composes the m54 wake
+/// loop with the m70 set-width state read
+/// (`RequestV1::DescribeAllIdentityState`) byte-for-byte, the
+/// `WaitState` rule the content kinds state.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StateKind {
+    /// The checked tri-state, exact — the m68 four-way word, never an
+    /// `Option<bool>`: a mixed checkbox never satisfies a `Checked`
+    /// demand, a not-checkable role stays pending (the total fact, not
+    /// an error).
+    Checked(crate::schema::CheckedStateV1),
+    /// The enabled fact as the boolean the row carries (false = the
+    /// AccessKit `Disabled` flag set) — the `to_be_enabled` /
+    /// `to_be_disabled` pair in one word.
+    Enabled(bool),
+    /// The focused fact: the node IS the tree's focus right now (the
+    /// core `Check::Focused` read's shape — `tree.focus()` equality).
+    Focused,
+}
+
+impl StateKind {
+    /// The static state word the typed timeout names (the kit's
+    /// `to_be_*` shape carried over the wire).
+    pub fn state(&self) -> &'static str {
+        match self {
+            StateKind::Checked(_) => "be checked",
+            StateKind::Enabled(_) => "be enabled",
+            StateKind::Focused => "be focused",
+        }
+    }
+}
+
+/// One evaluation step's answer for the state kinds: either the fact
+/// holds — carrying the
+/// [`crate::schema::DescribedIdentityStateV1`] row that satisfied it (a
+/// directly usable `RequestV1::Action` handle, the dump-row rule) — or
+/// the reason it is still pending, which becomes the timeout error's
+/// "last evaluation" line.
+#[derive(Clone, Debug)]
+pub enum StateEval {
+    /// The state matched. The row is the set's head at the generation
+    /// the walk answered.
+    Satisfied(crate::schema::DescribedIdentityStateV1),
+    /// The world may still change so the assertion can pass; the reason
+    /// names what the last evaluation found.
+    Pending { reason: String },
+}
+
+/// The row-set evaluator behind
+/// [`crate::client::ClientConn::expect_checked`] /
+/// [`crate::client::ClientConn::expect_enabled`] /
+/// [`crate::client::ClientConn::expect_focused`]. Feed it fresh
+/// describe-all-identity-state rows after every wake and it answers the
+/// assertion; the evaluator carries no cross-wake state (the state facts
+/// have no `Stable`-like frame discipline — every wake re-decides the
+/// whole read).
+#[derive(Clone, Debug)]
+pub struct StateTracker {
+    kind: StateKind,
+}
+
+impl StateTracker {
+    /// A tracker for one assertion, in the kind it asserts.
+    pub fn new(kind: StateKind) -> Self {
+        Self { kind }
+    }
+
+    /// Evaluate one row set: the set's head answers by the kind's read
+    /// (the m54 rule — document order, first row); an empty set stays
+    /// pending (waitable — nodes stream in, Playwright parity).
+    pub fn evaluate(&self, rows: &[crate::schema::DescribedIdentityStateV1]) -> StateEval {
+        let Some(row) = rows.first() else {
+            return StateEval::Pending {
+                reason: "no match yet (the set is empty)".into(),
+            };
+        };
+        match &self.kind {
+            StateKind::Checked(wanted) => {
+                if row.checked == *wanted {
+                    StateEval::Satisfied(row.clone())
+                } else {
+                    StateEval::Pending {
+                        reason: format!("checked is {:?}, expected {:?}", row.checked, wanted),
+                    }
+                }
+            }
+            StateKind::Enabled(wanted) => {
+                if row.enabled == *wanted {
+                    StateEval::Satisfied(row.clone())
+                } else {
+                    StateEval::Pending {
+                        reason: format!("enabled is {}, expected {}", row.enabled, wanted),
+                    }
+                }
+            }
+            StateKind::Focused => {
+                if row.focused {
+                    StateEval::Satisfied(row.clone())
+                } else {
+                    StateEval::Pending {
+                        reason: format!("focused is {}, expected true", row.focused),
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
