@@ -1,0 +1,69 @@
+// The m78 consumer app (§17 row 5): a real `.slint` counter + form —
+// stock `Button`, `LineEdit` and `Text` elements, no guiwright code in
+// the UI. Driven end-to-end through `Session` by the glue's runtime
+// tests and the `counter_form` example.
+//
+// Element *names* (`increment-btn := …`) are the stable selectors: they
+// land in the testing backend's introspection when the app is compiled
+// with element debug info (glue/slint/build.rs — `debug_info: true`, the
+// programmatic spelling of `SLINT_EMIT_DEBUG_INFO=1`).
+//
+// Non-widget text carries its semantics app-side (the §4.4 contribution
+// contract, same shape as the iced adapter's role registry): the counter
+// and greeting `Text` elements declare `accessible-role` +
+// `accessible-label`, so `Selector::text("Count: 1")` resolves the same
+// way it does on the other adapters.
+
+import { Button, LineEdit } from "std-widgets.slint";
+
+export component CounterForm inherits Window {
+    width: 480px;
+    height: 320px;
+    title: "Guiwright counter/form (slint)";
+
+    in-out property <int> count: 0;
+    in-out property <string> name: "";
+
+    callback increment();
+    callback decrement();
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        counter-label := Text {
+            text: "Count: " + root.count;
+            accessible-role: text;
+            accessible-label: "Count: " + root.count;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            increment-btn := Button {
+                text: "Increment";
+                clicked => {
+                    root.count += 1;
+                }
+            }
+
+            decrement-btn := Button {
+                text: "Decrement";
+                clicked => {
+                    root.count -= 1;
+                }
+            }
+        }
+
+        name-field := LineEdit {
+            placeholder-text: "Type a name";
+            text <=> root.name;
+        }
+
+        greeting := Text {
+            text: root.name == "" ? "Welcome, nobody" : "Welcome, " + root.name;
+            accessible-role: text;
+            accessible-label: root.name == "" ? "Welcome, nobody" : "Welcome, " + root.name;
+        }
+    }
+}
