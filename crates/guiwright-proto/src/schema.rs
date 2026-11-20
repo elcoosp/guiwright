@@ -230,6 +230,30 @@ pub enum RequestV1 {
     /// discipline: appended after `DescribeIdentity` (discriminant 22);
     /// see [`RequestV1::Video`].
     DescribeIdentityState(DescribeV1),
+    /// Describe-all identity-state read (§8.1's state facts over the
+    /// §8.2 walk, M70 — the m68/m69 records' named standing gap: "no
+    /// state facts at *set* width: the `DescribeAllIdentity` rows stay
+    /// identity-row shaped; a state-fact set widening lands when a
+    /// consumer asks — the same append-only move, its own domain"): the
+    /// same non-strict walk as [`RequestV1::DescribeAll`] answering rows
+    /// that carry the state three beside the identity four and the
+    /// description fact — the facts the kit's `to_be_checked` /
+    /// `to_be_focused` / `to_be_enabled` vocabulary answers one question
+    /// at a time, one round trip instead of one
+    /// [`RequestV1::DescribeIdentityState`] per row. Snapshot
+    /// semantics: the read never waits (hence no `timeout_ms` — an empty
+    /// set answers with an empty list; a client that wants arrivals
+    /// waits and re-reads, the way the kit's snapshot reads compose with
+    /// `wait_for` and the assertions). The connection's window scope
+    /// narrows the walk exactly like [`RequestV1::DescribeAll`]. The
+    /// encodings are byte-pinned (older clients keep their exact
+    /// encodings), so the widening lands as its own appended domain
+    /// reusing the [`DescribeAllV1`] payload — the read costs what
+    /// [`RequestV1::DescribeAll`] costs. The reply is
+    /// [`ResponseV1::DescribedAllIdentityState`]. Wire discipline:
+    /// appended after `DescribeIdentityState` (discriminant 23); see
+    /// [`RequestV1::Video`].
+    DescribeAllIdentityState(DescribeAllV1),
 }
 
 /// The describe-all read's request payload (§8.1/§8.2, M39): the
@@ -712,6 +736,20 @@ pub enum ResponseV1 {
     /// ride the typed `Error` codes, never a partial row. Append-only
     /// wire discipline — see [`RequestV1::Video`].
     DescribedIdentityState(DescribedIdentityStateV1),
+    /// Describe-all identity-state reply (§8.1's state facts over the
+    /// walk, M70): one [`DescribedIdentityStateV1`] row per match,
+    /// document order — the [`ResponseV1::DescribedAllIdentity`] rows
+    /// plus the state three (the m68/m69 records' named standing gap,
+    /// the m64 row-widening rule's fourth link: the narrower set rows
+    /// keep their byte-exact M64/M68 encodings, the widening lands as
+    /// its own row per match). An empty set answers with an empty list —
+    /// the set read is total, never an error. Append-only wire
+    /// discipline — see [`RequestV1::Video`].
+    DescribedAllIdentityState {
+        /// One row per match, document order (the `all()`/`count()`
+        /// ordering).
+        rows: Vec<DescribedIdentityStateV1>,
+    },
 }
 
 /// One node's identity facts ([`ResponseV1::Described`], M36) — the
@@ -2127,6 +2165,82 @@ mod tests {
             let bytes = postcard::to_allocvec(&resp).expect("encode");
             let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
             assert_eq!(resp, back);
+        }
+    }
+
+    /// M70 (the identity read's state facts at set width): the domain
+    /// appends after `DescribeIdentityState`, reusing the M39/m64
+    /// `DescribeAllV1` walk payload — the m64 payload-reuse rule at set
+    /// width; the reply carries the M68 row per match, never a reshape of
+    /// the narrower set rows (the m68/m69 records' named standing gap).
+    #[test]
+    fn m70_describe_all_identity_state_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        assert_eq!(
+            discriminant(&RequestV1::DescribeAllIdentityState(DescribeAllV1 {
+                selector: SelectorV1::TestId(String::new()),
+            })),
+            23
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::DescribedAllIdentityState { rows: Vec::new() }),
+            26
+        );
+    }
+
+    /// §7 set-width identity-state describe round-trip (M70): the M39
+    /// walk request and the M70 identity-plus-state rows (the M68 row
+    /// riding per match) survive postcard both ways, and the M64
+    /// projection keeps the narrower row readable off the wider one.
+    #[test]
+    fn describe_all_identity_state_domain_roundtrip() {
+        let requests = [GwpRequest::V1(RequestV1::DescribeAllIdentityState(
+            DescribeAllV1 {
+                selector: SelectorV1::TestId("subscribe-all".into()),
+            },
+        ))];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [GwpResponse::V1(ResponseV1::DescribedAllIdentityState {
+            rows: vec![DescribedIdentityStateV1 {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 9,
+                },
+                generation: 0,
+                role: "CheckBox".into(),
+                name: Some("Subscribe".into()),
+                value: None,
+                bounds: Some([16.0, 276.0, 136.0, 308.0]),
+                description: None,
+                focused: false,
+                enabled: true,
+                checked: CheckedStateV1::Mixed,
+            }],
+        })];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+            let GwpResponse::V1(ResponseV1::DescribedAllIdentityState { rows }) = back else {
+                continue;
+            };
+            let projected = DescribedIdentityV1::from(&rows[0]);
+            assert_eq!(
+                projected.name.as_deref(),
+                Some("Subscribe"),
+                "the identity row projects off the state row"
+            );
+            assert_eq!(
+                projected.description, None,
+                "the absent fact rides the projection too"
+            );
         }
     }
 
