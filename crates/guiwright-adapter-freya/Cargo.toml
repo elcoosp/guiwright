@@ -12,11 +12,30 @@ guiwright-driver.workspace = true
 accesskit.workspace = true
 thiserror.workspace = true
 
-# Framework-facing glue (§18: adapters are thin & feature-gated).
+# Framework-facing glue (§18: adapters are thin & feature-gated). The
+# default build carries none of it; `--features freya` pulls the testing
+# runner (freya-engine → software Skia — the CI leg compiles it, no local
+# clang needed for the rest of the workspace).
 freya-testing = { version = "0.5.0", optional = true }
+# The m79 render seam decodes the runner's PNG snapshots into §10 RGBA
+# frames (guiwright-shot is the framework-free codec stack).
+guiwright-shot = { workspace = true, optional = true }
 
 [features]
-freya = ["dep:freya-testing"]
+freya = ["dep:freya-testing", "dep:guiwright-shot"]
+
+[[example]]
+name = "counter_form"
+required-features = ["freya"]
+
+[dev-dependencies]
+# The m79 runtime tests and example compose the real app from freya's own
+# component stack (the runner re-exports freya-core's prelude; Input is a
+# freya-components component). freya-components rides the freya-testing
+# graph already; as a dev-dep it compiles only when tests/examples build —
+# and those require the `freya` feature (see the [[example]] gate), so the
+# default build still carries no framework stack.
+freya-components = "0.5.0"
 
 [lints]
 workspace = true
