@@ -135,6 +135,12 @@ implementation.
   `--shard` split determinism, workers > 1, spec-level and CLI-level
   target override, strict spec errors (duplicate scenario, empty steps,
   unknown key, `bye` in steps, missing target).
+- `crates/guiwright-cli/tests/cli_runner_e2e.rs` — the same runner over a
+  **real** adapter (m81): the egui counter+form app behind a
+  `GwpServerHandle` (the §5.3 launch contract), one fresh connection per
+  attempt, real app state carried across connections, the same suite
+  green against a freshly booted app, and the `guiwright` binary itself
+  (exit codes + the `gwrun/v1` JSON).
 - `src/spec.rs` unit tests — parsing, strictness, override resolution.
 - `src/report.rs` unit tests — `gwrun/v1` shape, JUnit structure and XML
   escaping, HTML content and escaping, list rendering.
