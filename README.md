@@ -354,7 +354,13 @@ identity-state row for one resolve-all/hit/dump handle: the identity
 four, the description fact plus the focused/enabled/checked facts (the
 `CheckedStateV1` four-way word — a mixed checkbox is not an unchecked
 one), one round trip instead of one question per assertion, the REPL
-`describe` row rendering the state facts at the prompt. The raw
+`describe` row rendering the state facts at the prompt — and the state
+three at set width, `describe_all_identity_state(selector)` (m70),
+answering the m68 row per match of the resolve-all walk: one round trip
+instead of one `describe_identity_state` per row, the m30 snapshot
+semantics (an empty set answers an empty list), the connection's window
+scope narrowing the walk — mirrored on the TypeScript client as
+`describeAllIdentityState(selector)` (m71). The raw
 `request()` covers the rest.
 
 </details>
@@ -493,6 +499,8 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M67**       | The TypeScript client's single-node identity describe: `describeIdentity(node, generation)` answering the M64 identity row for one resolve-all/hit/dump handle — the m66 Rust row mirrored on the other-language client (the m45/m60/m63/m65 one-milestone-per-surface pattern), the codec/tables/byte pins the m66 record already moved, the cross-language e2e leg against the real Rust server (the satisfied row, the absent fact riding null, the ghost handle's typed `UnknownNode`), the consumer demo (`npm run example:describe-identity`), no wire change |
 | **M68**       | The identity read's state facts at handle width: `DescribeIdentityState` → `DescribedIdentityState` (discriminants 22/25, the m67 record's named standing gap — the checked/focused/enabled facts rode the dump rows and the kit assertion vocabulary only) — the M36 handle pair riding in and the M68 identity-state row riding out (the m64 row-widening rule's third link, the M64/M66 encodings staying byte-pinned), one handle-addressed round trip instead of one question per assertion; the checked fact riding as the `CheckedStateV1` four-way word (the AccessKit tri-state beside not-checkable, never an `Option<bool>`); `ClientConn::describe_identity_state` answers on every seam impl, the REPL `describe` row renders the state facts (the m37/m40/m66 ladder preserved), the state fixture + golden-pinned + e2e, no budget row (the m54/m62/m64/m66 rule) |
 | **M69**       | The TypeScript client's single-node identity-state describe: `describeIdentityState(node, generation)` answering the M68 identity-state row for one resolve-all/hit/dump handle — the m68 Rust row mirrored on the other-language client (the m45/m60/m63/m65/m67 one-milestone-per-surface pattern), the codec/tables/byte pins the m68 record already moved, the cross-language e2e leg against the real Rust server (the mixed tri-state, the disabled button's `enabled: false` + `not_checkable`, the ghost handle's typed `UnknownNode`), the consumer demo (`npm run example:identity-state`), no wire change |
+| **M70**       | The identity read's state facts at set width: `DescribeAllIdentityState` → `DescribedAllIdentityState` (discriminants 23/26, the m68 record's named standing gap — "no state facts at *set* width: the `DescribeAllIdentity` rows stay identity-row shaped; a state-fact set widening lands when a consumer asks") — the M39/m64 `DescribeAllV1` walk payload riding in and the M68 identity-state row riding out per match (the m64 row-widening rule's fourth link, the M39/M64/M66/M68 encodings staying byte-pinned), one round trip instead of one `describe_identity_state` per row; `ClientConn::describe_all_identity_state` answers on every seam impl, the m30 snapshot semantics carried unchanged (an empty set answers an empty list), the session read composing the untouched `describe_all` walk (the m68 compose-don't-widen rule at set width), the state fixture + golden-pinned, no budget row (the m54/m62/m64/m66/m68 rule) |
+| **M71**       | The TypeScript client's set-width identity-state describe: `describeAllIdentityState(selector)` answering the M70 identity-state row per match of the resolve-all walk — the m70 Rust row mirrored on the other-language client (the m45/m60/m63/m65/m67/m69 one-milestone-per-surface pattern), the codec/tables/byte pins the m70 record already moved, the cross-language e2e leg against the real Rust server (the tri-state per row in document order from one round trip, the disabled walk's `enabled: false` + `not_checkable`, the honest empty list), the consumer demo (`npm run example:identity-state-all`), no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop with a named budget row — no milestone re-opened the protocol.
