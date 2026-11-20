@@ -160,6 +160,38 @@ impl Fixture {
         }
     }
 
+    /// The state-fact fixture (§8 state-fact reads, M68): the `buttons()`
+    /// base plus the checkbox trio (the M20 tri-state rows) and the
+    /// described `Install` button (the M38 extension band) — every state
+    /// fact the m68 identity-state read answers has a node that carries
+    /// it:
+    ///
+    /// ```text
+    /// group (1)
+    /// ├── … the six buttons()/label/input nodes …
+    /// ├── checkbox "Notifications"      (9,  checked)    @ 16,204 120×32
+    /// ├── checkbox "Dark mode"          (10, unchecked)  @ 16,244 120×32
+    /// ├── checkbox "Partially installed" (11, mixed)     @ 16,284 120×32
+    /// └── button "Install" (14, description="Installs the latest build")
+    /// ```
+    ///
+    /// `NodeId(8)` stays reserved for [`Fixture::add_button_update`],
+    /// `NodeId(9..=11)` and `NodeId(14)` ride the slots their
+    /// constructors named; this fixture composes the same slots so the
+    /// state read can answer the whole tri-state plus
+    /// `enabled: false` (the base's disabled `Confirm`) and the focused
+    /// fact (the window root stays the seeded focus) in one fixture.
+    pub fn with_state() -> Self {
+        Self {
+            expected_nodes: 12,
+            checked_checkbox: Some(NodeId(9)),
+            unchecked_checkbox: Some(NodeId(10)),
+            mixed_checkbox: Some(NodeId(11)),
+            described_button: Some(NodeId(14)),
+            ..Self::buttons()
+        }
+    }
+
     fn node(role: Role, name: Option<&str>) -> Node {
         let mut n = Node::new(role);
         if let Some(name) = name {
