@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "gwtrace/v1 zip trace recorder for Guiwright (architecture §12): bounded SPSC channel -> writer thread, postcard+LZ4 trees, hash-deduped frames"
 
 [dependencies]
