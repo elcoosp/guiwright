@@ -105,6 +105,14 @@ test("golden manifest is the expected shape", () => {
     golden.responses.some((v: any) => v.name === "described_identity_state_install_button"),
     "the M68 identity-state describe reply is pinned",
   );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "describe_all_identity_state_checkboxes"),
+    "the M70 set-width identity-state request is pinned",
+  );
+  assert.ok(
+    golden.responses.some((v: any) => v.name === "described_all_identity_state_checkboxes"),
+    "the M70 set-width identity-state reply is pinned",
+  );
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -263,6 +271,10 @@ test("requests encode byte-identical to the Rust wire", () => {
       node: { kind: "accesskit", tree: "01".repeat(16), node: 2 },
       generation: 0,
     }),
+    describe_all_identity_state_checkboxes: () => ({
+      kind: "describe_all_identity_state",
+      selector: { kind: "role", role: "CheckBox", name: null },
+    }),
     bye: () => ({ kind: "bye" }),
   };
 
@@ -339,7 +351,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-13), [
+  assert.deepEqual(byName(requests).slice(-14), [
     "Video",
     "Window",
     "Gesture",
@@ -353,6 +365,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "DescribeAllIdentity",
     "DescribeIdentity",
     "DescribeIdentityState",
+    "DescribeAllIdentityState",
   ]);
   assert.deepEqual(
     Object.values(RequestV1),
@@ -360,7 +373,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-14), [
+  assert.deepEqual(byName(responses).slice(-15), [
     "Windows",
     "WindowUsed",
     "GestureDone",
@@ -375,6 +388,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "DescribedAllIdentity",
     "DescribedIdentity",
     "DescribedIdentityState",
+    "DescribedAllIdentityState",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
