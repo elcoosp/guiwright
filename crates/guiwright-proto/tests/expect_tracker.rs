@@ -335,3 +335,152 @@ fn the_content_kinds_project_over_identity_rows() {
         ExpectIdentityEval::Satisfied(_)
     ));
 }
+
+// --- The state assertions (m73 — the kit's `to_be_checked` /
+// `to_be_enabled` / `to_be_focused` vocabulary over any door): the pure
+// [`StateTracker`] pinned without a wire, the same cases the content and
+// identity trackers pin — satisfied-on-entry, pending-on-empty, the
+// m68 tri-state word (a mixed checkbox is not an unchecked one), and the
+// mismatch reason naming what the last evaluation found.
+
+use guiwright_proto::expect::{StateEval, StateKind, StateTracker};
+use guiwright_proto::schema::CheckedStateV1;
+
+/// One m68 identity-state row: the identity four beside the state three
+/// (focused / enabled / the checked word).
+fn state_row(
+    name: &str,
+    focused: bool,
+    enabled: bool,
+    checked: CheckedStateV1,
+) -> guiwright_proto::schema::DescribedIdentityStateV1 {
+    guiwright_proto::schema::DescribedIdentityStateV1 {
+        node: NodeKeyV1::Logical {
+            adapter: "test".into(),
+            id: 9,
+        },
+        generation: 0,
+        role: "CheckBox".into(),
+        name: Some(name.into()),
+        value: None,
+        bounds: Some([16.0, 204.0, 136.0, 236.0]),
+        description: None,
+        focused,
+        enabled,
+        checked,
+    }
+}
+
+#[test]
+fn the_checked_word_answers_exactly() {
+    let checked = StateTracker::new(StateKind::Checked(CheckedStateV1::Checked));
+    assert!(matches!(
+        checked.evaluate(&[state_row(
+            "Notifications",
+            false,
+            true,
+            CheckedStateV1::Checked
+        )]),
+        StateEval::Satisfied(_)
+    ));
+    // The tri-state is exact: Unchecked and Mixed never satisfy a
+    // Checked demand (a mixed checkbox is not an unchecked one — the
+    // m68 rule at waitable width).
+    for word in [CheckedStateV1::Unchecked, CheckedStateV1::Mixed] {
+        assert!(matches!(
+            checked.evaluate(&[state_row("Dark mode", false, true, word)]),
+            StateEval::Pending { .. }
+        ));
+    }
+    // NotCheckable is the total fact, never an error — a button row
+    // stays pending on a checked demand.
+    assert!(matches!(
+        checked.evaluate(&[state_row("Save", false, true, CheckedStateV1::NotCheckable)]),
+        StateEval::Pending { .. }
+    ));
+}
+
+#[test]
+fn the_enabled_fact_answers_the_boolean() {
+    let enabled = StateTracker::new(StateKind::Enabled(true));
+    assert!(matches!(
+        enabled.evaluate(&[state_row(
+            "Notifications",
+            false,
+            true,
+            CheckedStateV1::Checked
+        )]),
+        StateEval::Satisfied(_)
+    ));
+    assert!(matches!(
+        enabled.evaluate(&[state_row(
+            "Dark mode",
+            false,
+            false,
+            CheckedStateV1::Unchecked
+        )]),
+        StateEval::Pending { .. }
+    ));
+    let disabled = StateTracker::new(StateKind::Enabled(false));
+    assert!(matches!(
+        disabled.evaluate(&[state_row(
+            "Dark mode",
+            false,
+            false,
+            CheckedStateV1::Unchecked
+        )]),
+        StateEval::Satisfied(_)
+    ));
+}
+
+#[test]
+fn the_focused_fact_waits_for_the_focus() {
+    let focused = StateTracker::new(StateKind::Focused);
+    assert!(matches!(
+        focused.evaluate(&[state_row(
+            "Notifications",
+            true,
+            true,
+            CheckedStateV1::Checked
+        )]),
+        StateEval::Satisfied(_)
+    ));
+    assert!(matches!(
+        focused.evaluate(&[state_row(
+            "Notifications",
+            false,
+            true,
+            CheckedStateV1::Checked
+        )]),
+        StateEval::Pending { .. }
+    ));
+}
+
+#[test]
+fn an_empty_set_stays_pending_on_every_state_kind() {
+    let kinds = [
+        StateKind::Checked(CheckedStateV1::Checked),
+        StateKind::Enabled(true),
+        StateKind::Focused,
+    ];
+    for kind in kinds {
+        let tracker = StateTracker::new(kind);
+        assert!(matches!(tracker.evaluate(&[]), StateEval::Pending { .. }));
+    }
+}
+
+#[test]
+fn the_pending_reason_names_expected_and_found() {
+    let checked = StateTracker::new(StateKind::Checked(CheckedStateV1::Checked));
+    let StateEval::Pending { reason } = checked.evaluate(&[state_row(
+        "Dark mode",
+        false,
+        true,
+        CheckedStateV1::Unchecked,
+    )]) else {
+        panic!("unchecked cannot satisfy a checked demand");
+    };
+    assert!(reason.contains("checked"), "{reason}");
+    assert!(reason.contains("Unchecked"), "{reason}");
+    assert!(reason.contains("Checked"), "{reason}");
+}
