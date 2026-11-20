@@ -519,6 +519,47 @@ try {
   );
   console.log("✓ expectDescription: the description row + the typed expiry — door healthy (m64/m65)");
 
+  // --- the single-node identity describe over the door (m66/m67) ---
+  // The m64 record's named standing gap at handle width, mirrored on
+  // the TS client (the m45/m60/m63/m65 one-milestone-per-surface
+  // pattern): a resolveAll() row mints the handle, `describeIdentity()`
+  // answers the M64 row — the identity four plus the description fact —
+  // in one handle-addressed round trip instead of the whole-set walk,
+  // the absent fact riding null and the ghost handle rejecting with the
+  // Action boundary's typed code.
+  const identityRows = await client.resolveAll({
+    kind: "role",
+    role: "Button",
+    name: { text: "Install", exact: true, ignore_case: true },
+  });
+  const identityRow = identityRows[0];
+  assert.ok(identityRow, "the Install button resolves");
+  const identityFacts = await client.describeIdentity(identityRow.node, identityRow.generation);
+  assert.equal(identityFacts.kind, "described_identity");
+  assert.equal(identityFacts.name, "Install", "the identity four ride beside the fact");
+  assert.equal(
+    identityFacts.description,
+    "Installs the latest build",
+    "the fact the M36 encoding left out, at handle width",
+  );
+  const undescribedHead = (await client.resolveAll({ kind: "role", role: "Button", name: null }))[0];
+  assert.ok(undescribedHead, "the button set resolves");
+  const absentFacts = await client.describeIdentity(
+    undescribedHead.node,
+    undescribedHead.generation,
+  );
+  assert.equal(absentFacts.description, null, "the absent fact rides null (a total read)");
+  const ghostFacts = await client
+    .describeIdentity({ kind: "accesskit", tree: "a5".repeat(16), node: 4242 }, 0)
+    .then(
+      () => null,
+      (e: unknown) => e,
+    );
+  assert.ok(ghostFacts instanceof GwpRejected, "the typed ghost-handle rejection");
+  assert.equal((ghostFacts as GwpRejected).codeName, "UnknownNode");
+  await client.ping(); // the ghost handle left the door healthy
+  console.log("✓ describeIdentity: the identity row at handle width — door healthy (m66/m67)");
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
