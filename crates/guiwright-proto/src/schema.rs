@@ -185,6 +185,28 @@ pub enum RequestV1 {
     /// [`ResponseV1::DescribedAllIdentity`]. Wire discipline: appended
     /// after `DescribeAll` (discriminant 20); see [`RequestV1::Video`].
     DescribeAllIdentity(DescribeAllV1),
+    /// Single-node identity describe (§8.1's identity fact set at handle
+    /// width, M66 — the m64 record's named standing gap: "no single-node
+    /// describe widening: the `Described` read keeps its M36 encoding;
+    /// the description fact rides the identity *set* read only"): one
+    /// node's facts — the identity four **plus the accessible
+    /// description** — for a handle the client already holds, one round
+    /// trip instead of the whole-set walk the
+    /// [`RequestV1::DescribeAllIdentity`] read runs. The payloads reuse
+    /// the shapes every client already speaks: the request is the M36
+    /// [`DescribeV1`] handle pair (the [`RequestV1::Action`] guard's
+    /// exact shape), the reply is the M64 [`DescribedIdentityV1`] row —
+    /// so a client that can act on a row can describe it at identity
+    /// width. Handle-addressed, not scoped, the [`RequestV1::Describe`]
+    /// boundary: the generation guard rejects a recycled id
+    /// (`ErrorCode::StaleGeneration`) and a dead one
+    /// (`ErrorCode::UnknownNode`) as the typed `Error`. A driver older
+    /// than M66 cannot decode the appended request at all (the
+    /// append-only cost every appended domain has carried since M3).
+    /// The reply is [`ResponseV1::DescribedIdentity`]. Wire discipline:
+    /// appended after `DescribeAllIdentity` (discriminant 21); see
+    /// [`RequestV1::Video`].
+    DescribeIdentity(DescribeV1),
 }
 
 /// The describe-all read's request payload (§8.1/§8.2, M39): the
@@ -645,6 +667,17 @@ pub enum ResponseV1 {
         /// ordering).
         rows: Vec<DescribedIdentityV1>,
     },
+    /// Single-node identity describe reply (§8.1's identity fact set at
+    /// handle width, M66): the M64 [`DescribedIdentityV1`] row — the
+    /// identity four plus the description fact — for the request's
+    /// handle, echoed (a row is directly usable as the
+    /// [`RequestV1::Action`] node, the dump-row rule). The M36
+    /// [`ResponseV1::Described`] encoding stays byte-pinned (the
+    /// widening is its own appended domain reusing the M64 row — the
+    /// m64 record's payload-reuse rule at handle width). Stale and
+    /// unknown handles ride the typed `Error` codes, never a partial
+    /// row. Append-only wire discipline — see [`RequestV1::Video`].
+    DescribedIdentity(DescribedIdentityV1),
 }
 
 /// One node's identity facts ([`ResponseV1::Described`], M36) — the
@@ -1795,6 +1828,84 @@ mod tests {
         let projected = DescribedV1::from(&row);
         assert_eq!(projected.name.as_deref(), Some("Install"));
         assert_eq!(projected.value, None);
+    }
+
+    /// The M66 single-node identity describe pins — the m64 record's
+    /// named standing gap, appended after the M64 domain (one statement
+    /// per milestone keeps the append-only sequence a readable table,
+    /// the m36 pin split's rule).
+    #[test]
+    fn m66_describe_identity_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        // M66 (the identity read at handle width): the domain appends
+        // after DescribeAllIdentity, reusing the M36 request payload and
+        // the M64 row — the m64 payload-reuse rule at handle width.
+        assert_eq!(
+            discriminant(&RequestV1::DescribeIdentity(DescribeV1 {
+                node: NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                },
+                generation: 0,
+            })),
+            21
+        );
+        assert_eq!(
+            discriminant(&ResponseV1::DescribedIdentity(DescribedIdentityV1 {
+                node: NodeKeyV1::Logical {
+                    adapter: String::new(),
+                    id: 0
+                },
+                generation: 0,
+                role: String::new(),
+                name: None,
+                value: None,
+                bounds: None,
+                description: None,
+            })),
+            24
+        );
+    }
+
+    /// §7 single-node identity describe round-trip (M66): the M36 handle
+    /// request and the M64 identity-fact reply (the description fact
+    /// riding beside the identity four) survive postcard both ways.
+    #[test]
+    fn describe_identity_domain_roundtrip() {
+        let requests = [GwpRequest::V1(RequestV1::DescribeIdentity(DescribeV1 {
+            node: NodeKeyV1::AccessKit {
+                tree: [0u8; 16],
+                node: 2,
+            },
+            generation: 0,
+        }))];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let responses = [GwpResponse::V1(ResponseV1::DescribedIdentity(
+            DescribedIdentityV1 {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 2,
+                },
+                generation: 0,
+                role: "Button".into(),
+                name: Some("Install".into()),
+                value: None,
+                bounds: Some([16.0, 204.0, 136.0, 236.0]),
+                description: Some("Installs the latest build".into()),
+            },
+        ))];
+        for resp in responses {
+            let bytes = postcard::to_allocvec(&resp).expect("encode");
+            let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(resp, back);
+        }
     }
 
     /// The M36 describe pin's payload — a `DescribedV1` shell whose fields
