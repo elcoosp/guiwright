@@ -1904,6 +1904,7 @@ dependencies = [
  "guiwright-driver",
  "guiwright-inspect",
  "guiwright-macros",
+ "guiwright-proto",
  "guiwright-shot",
  "guiwright-trace",
  "guiwright-viewer",
