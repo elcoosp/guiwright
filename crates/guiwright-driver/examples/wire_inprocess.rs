@@ -87,7 +87,7 @@ fn main() {
             GwpEvent::V1(EventV1::TreeChanged { seq }) => {
                 println!("pushed over the pipe: TreeChanged seq={seq}");
             }
-            other => panic!("expected TreeChanged, got {other:?}"),
+            other @ GwpEvent::V1(_) => panic!("expected TreeChanged, got {other:?}"),
         }
 
         // The renamed node resolves through the same pipe.
