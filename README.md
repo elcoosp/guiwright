@@ -133,7 +133,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | `click` / `fill` / `hover` / `press` / `check` / `uncheck` / `focus` / `blur` | same names (+ `set_checked`, **`drag_to`**)                                                           | actionability-gated, codegen-recorded (M19); `drag_to` resolves both ends in one window context and rides the M7 pacing synthesis (M33)                                   |
 | `expect().toBeVisible` / `toHaveText` / `toHaveValue`                         | `to_be_visible` / `to_have_text` / `to_have_value`                                   | complete exactly when the condition turns true; the content pair rides any door too — the client seam's rows (m54) and the REPL `assert` rows (m61)                     |
 | `expect().toHaveRole` / `toHaveAccessibleName` / `toHaveAccessibleDescription` | `to_have_role` / `to_have_accessible_name` / `to_have_accessible_description`       | the identity reads: role / label-only / description-only — a value never satisfies a name (M38); role + name ride any door as the client seam's identity rows (m62) and the TS client's `expectRole()` / `expectName()` (m63), and the description rides the appended identity read over any door as the client seam's `expect_description` row (m64) — the M39 encodings staying byte-pinned |
-| `expect().toBeChecked`                                                        | `to_be_checked` / `to_be_unchecked` / **`to_be_checked_mixed`**                      | AccessKit's tri-state; mixed is a Guiwright extension (M20)                                             |
+| `expect().toBeChecked`                                                        | `to_be_checked` / `to_be_unchecked` / **`to_be_checked_mixed`**                      | AccessKit's tri-state; mixed is a Guiwright extension (M20); the fact rides any door too — the client seam's state rows (m73), the REPL `assert checked` row (m74) and the TS `expectChecked()` (m75), the four-way word demanded exactly |
 | `expect().toHaveCount` / `count()`                                            | `to_have_count(n)` / `count()`                                                       | the strict-mode escape hatch — waitable in both directions, `count()` a snapshot read (M22); over any door as the client seam's count rows (m59) and the REPL `assert count` row (m61) |
 | —                                                                             | `to_have_count_greater_than` / `to_have_count_less_than`                             | one-sided count comparators, compose with `.not()` (M25 extension)                                      |
 | `expect().not()`                                                              | `.not().to_*()`                                                                      | one `NotWaiter` decorator inverts the whole vocabulary; strict-mode violations still fail (M24)         |
@@ -268,6 +268,10 @@ the m42 seam's interactive half, M43),
 `assert text|value|role|name|description|count <get-args…> is <expected>` (the
 waitable assertion rows at the prompt — the m61/m62/m64 seam halves: content, identity,
 count, the typed timeout printed verbatim),
+`assert checked <get-args…> is checked|unchecked|mixed|not-checkable` /
+`assert enabled <get-args…> is enabled|disabled` / `assert focused <get-args…>` (the
+m73 state assertions' interactive half, m74 — the m68 four-way word demanded exactly,
+the focus row taking no expectation: the fact itself is the demand),
 `events on | off` (pushed tree diffs, frames and an opt-in `tracing` log tail — seq numbers
 expose any gap a slow consumer misses), and video.
 
@@ -360,7 +364,16 @@ answering the m68 row per match of the resolve-all walk: one round trip
 instead of one `describe_identity_state` per row, the m30 snapshot
 semantics (an empty set answers an empty list), the connection's window
 scope narrowing the walk — mirrored on the TypeScript client as
-`describeAllIdentityState(selector)` (m71). The raw
+`describeAllIdentityState(selector)` (m71) — and the state three made
+waitable, `expect_checked(selector, expected, timeout)` /
+`expect_enabled(selector, expected, timeout)` /
+`expect_focused(selector, timeout)` (m73), answering the satisfying m68
+row as the dump-row handle (the kit's `to_be_checked` /
+`to_be_enabled` / `to_be_focused` vocabulary over any door, the tri-state
+demanded exactly), the REPL `assert checked|enabled|focused` rows
+riding the same grammar (m74) and the TypeScript
+`expectChecked()` / `expectEnabled()` / `expectFocused()` mirroring the
+rows on the same evaluator shape (m75). The raw
 `request()` covers the rest.
 
 </details>
@@ -503,13 +516,15 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M71**       | The TypeScript client's set-width identity-state describe: `describeAllIdentityState(selector)` answering the M70 identity-state row per match of the resolve-all walk — the m70 Rust row mirrored on the other-language client (the m45/m60/m63/m65/m67/m69 one-milestone-per-surface pattern), the codec/tables/byte pins the m70 record already moved, the cross-language e2e leg against the real Rust server (the tri-state per row in document order from one round trip, the disabled walk's `enabled: false` + `not_checkable`, the honest empty list), the consumer demo (`npm run example:identity-state-all`), no wire change |
 | **M72**       | The kit's identity-state reads: `Locator::describe_state()` + `describe_all_state()` (the m68/m70/m71 records' named standing gap — "a kit-side `describe_state` read lands when a consumer asks", cashed) — the state three (focused, enabled, the `CheckedStateV1` tri-state word) riding the locator surface beside the identity row at both widths, strict mode + narrowing + the window pin carried, the m68 total-read rule intact (never a wait; the `to_be_*` vocabulary stays the waitable face), the driver's `NodeStateDescription` re-exported beside `NodeDescription`, no wire change (the m68/m70 encodings byte-pinned), no budget row (the m54/m62/m64/m66/m68/m70 rule) |
 | **M73**       | The seam's waitable state assertions: `ClientConn::expect_checked` / `expect_enabled` / `expect_focused` — the kit's `to_be_checked` / `to_be_enabled` / `to_be_focused` vocabulary over any door (the m54/m59/m62 content/count/identity families' pattern carried to the state three), the m54 wake loop composed over the m70 set-width state read (`describe_all_identity_state` re-reads, event-driven, no polling), the satisfying m68 row handed back as the dump-row handle, the tri-state demanded exactly (a mixed checkbox is not an unchecked one), the typed timeout naming `be checked` / `be enabled` / `be focused` and the fact the last evaluation found, no wire change (the m68/m70 encodings byte-pinned), no budget row (the m54-family rule) |
+| **M74**       | The REPL's state-assert rows: `assert checked <get-args…> is checked\|unchecked\|mixed\|not-checkable` / `assert enabled <get-args…> is enabled\|disabled` / `assert focused <get-args…>` (the m73 seam assertions' interactive half, the m43/m61/m62 pattern) — the m68 four-way word demanded exactly at the prompt (the not-checkable total fact answering, never an error), the focus row taking no expectation (the fact itself is the demand), the satisfying row rendered as the m68 facts with the state three named, the typed timeout printed verbatim, the `events on` filter restored, no wire change, no budget row |
+| **M75**       | The TypeScript client's state assertions: `expectChecked(selector, expected, timeoutMs)` / `expectEnabled(selector, expected, timeoutMs)` / `expectFocused(selector, timeoutMs)` answering the satisfying m68 row — the m73 Rust rows mirrored on the other-language client (the m45/m60/m63/m65/m67/m69/m71 one-milestone-per-surface pattern), the pure `StateTracker` evaluator row-for-row (`src/expect.ts`), the wake loop over the m70 `describeAllIdentityState()` re-reads, the cross-language e2e leg against the real Rust server (the tri-state demanded exactly, the typed expiry naming `be checked` and both sides), the consumer demo (`npm run example:state-assertions`), no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
-zero-polling session loop with a named budget row — no milestone re-opened the protocol.
+zero-polling session loop — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m73-seam-state-assertions.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m75-ts-state-assertions.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
