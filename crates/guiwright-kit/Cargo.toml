@@ -24,6 +24,10 @@ tempfile.workspace = true
 zip = { version = "9.4.1", default-features = false, features = ["time"] }
 serde_json = "1.0.154"
 postcard.workspace = true
+# The state-read tests name the wire's `CheckedStateV1` vocabulary word
+# the facts ride (the m68 four-way word) — schema types, not runtime
+# plumbing, so the dependency stays test-only.
+guiwright-proto.workspace = true
 
 [lints]
 workspace = true
