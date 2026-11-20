@@ -28,10 +28,10 @@ use crate::GwpError;
 use crate::count::{CountEval, CountTracker};
 use crate::expect::{ExpectEval, ExpectIdentityEval, ExpectKind, ExpectTracker};
 use crate::schema::{
-    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1,
-    EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1,
-    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
-    SnapshotV1, TextMatchV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
+    DescribedIdentityV1, DescribedV1, EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1,
+    InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1,
+    SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 use guiwright_core::wait::CountMatch;
@@ -485,6 +485,52 @@ pub trait ClientConn: Send + 'static {
                 ResponseV1::DescribedIdentity(described) => Ok(described),
                 other => Err(GwpError::Protocol(format!(
                     "DescribeIdentity answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// The single-node identity-state describe read over the wire (m68 —
+    /// the m67 record's named standing gap: "no state flags on the
+    /// identity row: the checked/focused/enabled facts ride the dump
+    /// rows and the kit assertion vocabulary"): one node's facts — the
+    /// identity four, the accessible description plus the state three
+    /// (focused / enabled / checked) — for a handle the client already
+    /// holds (a [`Self::resolve_all`] row, a hit row, a dump row: the
+    /// dump-row rule, M11), one round trip instead of one question per
+    /// assertion (the kit's `to_be_checked` / `to_be_focused`
+    /// vocabulary answers one fact at a time).
+    ///
+    /// The payloads reuse the shapes every client already speaks: the
+    /// request is the M36 `Describe` handle pair — the
+    /// [`RequestV1::Action`] guard's exact shape — and the reply is the
+    /// M68 [`DescribedIdentityStateV1`] row, the m64 row-widening rule's
+    /// third link. Handle-addressed, so no window scope applies (the
+    /// [`RequestV1::Action`] boundary); the generation guard rejects a
+    /// recycled id (`ErrorCode::StaleGeneration`) and a dead one
+    /// (`ErrorCode::UnknownNode`) as the typed `Error` — the same
+    /// honesty an [`RequestV1::Action`] on the row would meet. A driver
+    /// older than m68 cannot decode the appended request at all (the
+    /// append-only cost every appended domain has carried since M3), so
+    /// there is no fallback derivation (the m41 fail-fast rule); the
+    /// REPL's per-row fallback is the interactive surface's concession,
+    /// never this one's.
+    fn describe_identity_state(
+        &mut self,
+        node: NodeKeyV1,
+        generation: u32,
+    ) -> impl Future<Output = Result<DescribedIdentityStateV1, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::DescribeIdentityState(DescribeV1 {
+                    node,
+                    generation,
+                }))
+                .await?
+            {
+                ResponseV1::DescribedIdentityState(described) => Ok(described),
+                other => Err(GwpError::Protocol(format!(
+                    "DescribeIdentityState answered by {other:?}"
                 ))),
             }
         }
