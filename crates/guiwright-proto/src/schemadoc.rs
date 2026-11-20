@@ -40,9 +40,10 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// (M39, the describe-all read), `DescribeAllIdentity` follows
 /// `DescribeAll` (M64, the description fact's widening),
 /// `DescribeIdentity` follows `DescribeAllIdentity` (M66, the same
-/// fact set at handle width) and `DescribeIdentityState` follows
-/// `DescribeIdentity` (M68, the state facts' widening); the pinning
-/// tests enforce the order.
+/// fact set at handle width), `DescribeIdentityState` follows
+/// `DescribeIdentity` (M68, the state facts' widening) and
+/// `DescribeAllIdentityState` follows `DescribeIdentityState` (M70,
+/// the state facts at set width); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -107,6 +108,11 @@ const REQUESTS: &[Variant] = &[
         "DescribeIdentityState",
         "{ node: NodeKeyV1, generation: u32 varint } — the identity fact set plus the state facts at handle width (M68, the m67 record's named standing gap): the M36 Describe handle pair in, the M68 identity-state row out — the identity four, the description fact plus the state three (focused / enabled / checked, see domains.checked_state), one round trip instead of one question per assertion → DescribedIdentityState; handle-addressed, the Action boundary's generation guard (StaleGeneration / UnknownNode)",
     ),
+    v(
+        23,
+        "DescribeAllIdentityState",
+        "{ selector: SelectorV1 } — the same walk carrying the state three beside the identity four and the description fact (M70, the m68/m69 records' named standing gap: the state facts at set width) → DescribedAllIdentityState; the M64/M68 encodings stay byte-pinned, the widening is its own domain reusing the DescribeAll payload — one round trip instead of one DescribeIdentityState per row",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
@@ -116,8 +122,9 @@ const REQUESTS: &[Variant] = &[
 /// `Subscribed`) at 17–18, the M30 `ResolvedAll` reply at 19, the
 /// M32 `HitTest` reply at 20, the M36 `Described` reply at 21, the
 /// M39 `DescribedAll` reply at 22, the M64 `DescribedAllIdentity`
-/// reply at 23, the M66 `DescribedIdentity` reply at 24 and the M68
-/// `DescribedIdentityState` reply at 25.
+/// reply at 23, the M66 `DescribedIdentity` reply at 24, the M68
+/// `DescribedIdentityState` reply at 25 and the M70
+/// `DescribedAllIdentityState` reply at 26.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -212,6 +219,11 @@ const RESPONSES: &[Variant] = &[
         25,
         "DescribedIdentityState",
         "{ node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) } — the identity row's state facts at handle width (M68, the m67 record's named standing gap): the request's handle echoed, the M64 identity row's fields plus the state three (the core Check::Focused / Check::Enabled / Check::Checked reads' shapes at fact width); stale and unknown handles ride the typed Error codes",
+    ),
+    v(
+        26,
+        "DescribedAllIdentityState",
+        "{ rows: seq<DescribedIdentityStateV1 { node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) }> } — the same walk's rows carrying the state three beside the identity four and the description fact (M70, the m68/m69 records' named standing gap); document order, an empty set answers with an empty list",
     ),
 ];
 
