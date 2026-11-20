@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Guiwright Slint adapter engine (architecture §4.4): testing-backend introspection model, (component,item) id bridge, element-kind role registry, mock_elapsed_time clock plan and the testing build helper"
+description = "Guiwright Slint adapter engine (architecture §4.4): testing-backend introspection model, (component,item) id bridge, element-kind role registry, mock_elapsed_time clock plan and the testing build helper; the harness glue lives in the slint-only workspace `glue/slint`"
 
 [dependencies]
 guiwright-core.workspace = true
