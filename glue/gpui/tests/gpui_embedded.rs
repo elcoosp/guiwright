@@ -149,7 +149,9 @@ fn fill_reports_the_upstream_scheduler_blocker() {
     // `SetValue` gate is the surface that carries the evidence.
     let node = match &resolved.key {
         guiwright_core::NodeKey::AccessKit { node, .. } => *node,
-        other => panic!("unexpected node key: {other:?}"),
+        other @ guiwright_core::NodeKey::Logical { .. } => {
+            panic!("unexpected node key: {other:?}")
+        }
     };
     let err = session
         .adapter_mut()
