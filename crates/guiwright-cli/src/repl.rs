@@ -17,10 +17,11 @@ use crate::session::{ConnectTarget, Connection};
 use guiwright_proto::GwpError;
 use guiwright_proto::client::ClientConn;
 use guiwright_proto::schema::{
-    AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1, ErrorCode,
-    EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1, InspectV1, MockV1, NodeKeyV1,
-    PointerButtonV1, RequestV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1,
-    SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowV1,
+    AdapterInfoV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
+    DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1, GestureV1, GwpEvent,
+    InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1, RequestV1, ResponseV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1,
+    VideoV1, WindowV1,
 };
 use guiwright_proto::wait::WaitState;
 
@@ -510,32 +511,47 @@ impl Repl {
         else {
             return Err("`describe` resolves a locator first — unexpected Resolve reply".into());
         };
-        // The identity read first (the m66 enrichment); a driver without
-        // the appended domain falls back to the M36 read (the m37/m40
-        // degrade rule — the facts are the answer either way).
+        // The identity-state read first (the m68 enrichment); a driver
+        // without the appended domains falls back to the m66 identity
+        // read and then to the M36 read (the m37/m40 degrade rule — the
+        // facts are the answer either way, the ladder gaining one hop
+        // per appended widening).
         match self
-            .request(RequestV1::DescribeIdentity(DescribeV1 {
+            .request(RequestV1::DescribeIdentityState(DescribeV1 {
                 node: node.clone(),
                 generation,
             }))
             .await
         {
-            Ok(ResponseV1::DescribedIdentity(row)) => Ok(vec![Line::Ok(render_identity(&row))]),
-            Err(_) => {
-                let ResponseV1::Described(row) = self
-                    .request(RequestV1::Describe(DescribeV1 {
-                        node: node.clone(),
-                        generation,
-                    }))
-                    .await?
-                else {
-                    return Err(
-                        "`describe` reads the resolved handle — unexpected Describe reply".into(),
-                    );
-                };
-                Ok(vec![Line::Ok(render_described(&row))])
+            Ok(ResponseV1::DescribedIdentityState(row)) => {
+                Ok(vec![Line::Ok(render_identity_state(&row))])
             }
-            Ok(other) => Err(unexpected("DescribedIdentity", &other)),
+            Err(_) => match self
+                .request(RequestV1::DescribeIdentity(DescribeV1 {
+                    node: node.clone(),
+                    generation,
+                }))
+                .await
+            {
+                Ok(ResponseV1::DescribedIdentity(row)) => Ok(vec![Line::Ok(render_identity(&row))]),
+                Err(_) => {
+                    let ResponseV1::Described(row) = self
+                        .request(RequestV1::Describe(DescribeV1 {
+                            node: node.clone(),
+                            generation,
+                        }))
+                        .await?
+                    else {
+                        return Err(
+                            "`describe` reads the resolved handle — unexpected Describe reply"
+                                .into(),
+                        );
+                    };
+                    Ok(vec![Line::Ok(render_described(&row))])
+                }
+                Ok(other) => Err(unexpected("DescribedIdentity", &other)),
+            },
+            Ok(other) => Err(unexpected("DescribedIdentityState", &other)),
         }
     }
 
@@ -1641,6 +1657,25 @@ fn render_identity(row: &DescribedIdentityV1) -> String {
     if let Some(description) = row.description.as_deref() {
         let _ = write!(out, " description {description:?}");
     }
+    out
+}
+
+/// The m68 identity-state row, rendered for the REPL: the m64 identity
+/// facts plus the state three, always named (state facts are total —
+/// unlike an absent description, an unfocused node is a fact, not a
+/// missing one; the checked word speaks the [`CheckedStateV1`]
+/// vocabulary, "not checkable" rendering the `NotCheckable` fact).
+fn render_identity_state(row: &DescribedIdentityStateV1) -> String {
+    let mut out = render_identity(&DescribedIdentityV1::from(row));
+    let checked = match row.checked {
+        CheckedStateV1::NotCheckable => "not checkable",
+        CheckedStateV1::Unchecked => "unchecked",
+        CheckedStateV1::Checked => "checked",
+        CheckedStateV1::Mixed => "mixed-checked",
+    };
+    let focus_word = if row.focused { "focused" } else { "unfocused" };
+    let enabled_word = if row.enabled { "enabled" } else { "disabled" };
+    let _ = write!(out, " state {focus_word} {enabled_word} {checked}");
     out
 }
 
