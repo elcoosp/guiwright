@@ -371,6 +371,23 @@ fn describe_identity_state_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M70 (the identity read's state facts at set width): the m68/m69
+/// records' named standing gap — the state three riding the whole match
+/// set. The request reuses the M39/m64 `DescribeAllV1` walk payload (the
+/// m64 payload-reuse rule at set width), so its frame differs from
+/// `describe_all_identity_buttons` only in the variant byte.
+fn describe_all_identity_state_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "describe_all_identity_state_checkboxes",
+        RequestV1::DescribeAllIdentityState(DescribeAllV1 {
+            selector: SelectorV1::Role {
+                role: "CheckBox".into(),
+                name: None,
+            },
+        }),
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -384,7 +401,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(describe_all_requests())
         .chain(describe_all_identity_requests())
         .chain(describe_identity_requests())
-        .chain(describe_identity_state_requests());
+        .chain(describe_identity_state_requests())
+        .chain(describe_all_identity_state_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -754,6 +772,81 @@ fn describe_identity_state_responses() -> Vec<(&'static str, ResponseV1, serde_j
     ]
 }
 
+/// M70 (the identity read's state facts at set width): the M68 row per
+/// match — the m68/m69 records' named standing gap cashed at set width
+/// (the M64/M68 set-row encodings keep their byte-exact shapes; the
+/// widening rides its own appended reply variant). One checked checkbox
+/// row and one mixed one: the tri-state and the document order ride
+/// together.
+fn describe_all_identity_state_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "described_all_identity_state_checkboxes",
+        ResponseV1::DescribedAllIdentityState {
+            rows: vec![
+                DescribedIdentityStateV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 9,
+                    },
+                    generation: 0,
+                    role: "CheckBox".into(),
+                    name: Some("Notifications".into()),
+                    value: None,
+                    bounds: Some([16.0, 236.0, 136.0, 268.0]),
+                    description: None,
+                    focused: false,
+                    enabled: true,
+                    checked: CheckedStateV1::Checked,
+                },
+                DescribedIdentityStateV1 {
+                    node: NodeKeyV1::AccessKit {
+                        tree: [0x01; 16],
+                        node: 11,
+                    },
+                    generation: 0,
+                    role: "CheckBox".into(),
+                    name: Some("Partially installed".into()),
+                    value: None,
+                    bounds: Some([16.0, 284.0, 136.0, 316.0]),
+                    description: None,
+                    focused: false,
+                    enabled: true,
+                    checked: CheckedStateV1::Mixed,
+                },
+            ],
+        },
+        serde_json::json!({
+            "kind": "described_all_identity_state",
+            "rows": [
+                {
+                    "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 9},
+                    "generation": 0,
+                    "role": "CheckBox",
+                    "name": "Notifications",
+                    "value": null,
+                    "bounds": [16.0, 236.0, 136.0, 268.0],
+                    "description": null,
+                    "focused": false,
+                    "enabled": true,
+                    "checked": "checked",
+                },
+                {
+                    "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 11},
+                    "generation": 0,
+                    "role": "CheckBox",
+                    "name": "Partially installed",
+                    "value": null,
+                    "bounds": [16.0, 284.0, 136.0, 316.0],
+                    "description": null,
+                    "focused": false,
+                    "enabled": true,
+                    "checked": "mixed",
+                },
+            ],
+        }),
+    )]
+}
+
 /// Clock / mock / codegen / error service responses.
 fn service_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
     vec![
@@ -964,6 +1057,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .chain(describe_all_responses())
         .chain(describe_identity_responses())
         .chain(describe_identity_state_responses())
+        .chain(describe_all_identity_state_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
