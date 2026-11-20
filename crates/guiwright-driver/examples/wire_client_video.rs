@@ -113,7 +113,7 @@ fn main() {
                 );
                 println!("exists  → {}", std::path::Path::new(&file.path).exists());
             }
-            other => panic!("expected the File arm, got {other:?}"),
+            VideoReply::Started => panic!("a stop never answers the start ack"),
         }
 
         // The honesty, second half: a stop with nothing running answers
