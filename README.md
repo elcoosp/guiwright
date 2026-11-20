@@ -438,8 +438,9 @@ shard-aware discovery without touching the wire. Reports: `report.json` (`gwrun/
 | egui                 | `guiwright-adapter-egui`                       | egui's own AccessKit tree (Level 1); headless wgpu pixel path (m77)                                  | embedded tests on Linux, macOS, Windows |
 | Masonry / Xilem      | `guiwright-adapter-masonry`                    | `RenderRoot` via `masonry_testing::TestHarness` (Level 1)                                           | embedded tests on Linux, macOS, Windows |
 | iced                 | `guiwright-adapter-iced`                       | Guiwright-built logical tree + app role registry (Level 2); real `iced_test::Emulator` harness behind the `iced` feature (m76) | runtime-tested in CI                    |
-| Freya                | `guiwright-adapter-freya`                      | `freya_testing` harness + `a11y_id` bridge (Level 1); glue behind the `freya` feature               | compile-verified in CI                  |
-| Slint / Floem / GPUI | `guiwright-adapter-slint` / `-floem` / `-gpui` | framework-free adapter engines (Level 1/2 hybrids — see crate docs); platform glue ships downstream | engine tests in the normal CI matrix    |
+| Freya                | `guiwright-adapter-freya`                      | real `freya_testing::TestingRunner` + `a11y_id` bridge (Level 1); the committed AccessKit diffs ride `tree_update`, input rides the frame-quantized `send_event` pipeline, snapshots rasterize through software Skia — glue behind the `freya` feature (m79) | runtime-tested in CI (the Skia stack compiles there) |
+| Slint                | `guiwright-adapter-slint` + `glue/slint`       | Guiwright-built logical tree over `ElementHandle` introspection + the testing build helper (Level 2); real `i-slint-backend-testing` `TestingBackend` harness in the slint-only `glue/slint` workspace (m78 — the skia-links record scopes the facade stack there) | runtime-tested in CI (glue job)         |
+| Floem / GPUI         | `guiwright-adapter-floem` / `-gpui`            | framework-free adapter engines (Level 1/2 hybrids — see crate docs); platform glue ships downstream | engine tests in the normal CI matrix    |
 
 **Level 1** piggybacks on a framework's existing accessibility tree; **Level 2** synthesizes one
 ([docs/architecture.md](docs/architecture.md)).
@@ -450,12 +451,15 @@ shard-aware discovery without touching the wire. Reports: `report.json` (`gwrun/
 > **Pre-release at 0.4.0.** MSRV **1.85**, edition 2024, `unsafe` forbidden workspace-wide.
 > Crates are packaged into GitHub releases by the release workflow; crates.io publication is
 > not yet automated. The floem/gpui platform glue ships downstream (constraints recorded in the
-> crate docs and `docs/m3-floem-contributions.md`).
+> crate docs and `docs/m3-floem-contributions.md`); the slint glue lives in the slint-only
+> `glue/slint` workspace (m78, the skia-links record).
 
 **CI on every push:** the full test suite on Linux, macOS and Windows (Linux renders through
 software Vulkan / lavapipe) · the TypeScript client suite + cross-language e2e · the
-feature-gated iced glue runtime-tested through a real `iced_test::Emulator` (m76) · freya
-compile-verified until its glue binds · the perf-budget guard.
+feature-gated iced glue runtime-tested through a real `iced_test::Emulator` (m76) · the slint
+glue workspace runtime-tested through the real `i-slint-backend-testing` harness (m78) · the
+freya glue runtime-tested through the real `freya_testing::TestingRunner` (m79) · the
+perf-budget guard.
 
 The milestone stream ([architecture doc](docs/architecture.md), records in `docs/m*.md`):
 
@@ -521,6 +525,7 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M75**       | The TypeScript client's state assertions: `expectChecked(selector, expected, timeoutMs)` / `expectEnabled(selector, expected, timeoutMs)` / `expectFocused(selector, timeoutMs)` answering the satisfying m68 row — the m73 Rust rows mirrored on the other-language client (the m45/m60/m63/m65/m67/m69/m71 one-milestone-per-surface pattern), the pure `StateTracker` evaluator row-for-row (`src/expect.ts`), the wake loop over the m70 `describeAllIdentityState()` re-reads, the cross-language e2e leg against the real Rust server (the tri-state demanded exactly, the typed expiry naming `be checked` and both sides), the consumer demo (`npm run example:state-assertions`), no wire change |
 | **M76**       | The real iced harness: `SimulatorSeam` bound to `iced_test::Emulator` over a real `Program` (the §17 MVP trio's last leg — the m41–m75 stream's retired "one-milestone-per-surface" cadence did not move this debt, this record pays it) — interactions inject real `core::Event`s through `UserInterface::update` (§4.6), the semantic tree comes from the §4.6 `Task::widget` read-back (the laid-out widget walk over an mpsc channel, `HarnessApp::hook` + the default `run_hook`), kinds are the app's contribution (`kind_of` over `Id`-carrying containers — iced 0.14 passes a button's `Id` to no operation hook), the `tiny-skia` backend explicit (`iced_test` names none; the default is the `()` null renderer), the CI `adapter-iced` job runs `cargo test --features iced` (freya stays check-only), the read-back bench + the `iced_tree_readback` design-target row, no wire change |
 | **M77**       | The egui headless pixel path: `render_frame` / `last_frame` real through `egui_wgpu` (the §4.1 wgpu offscreen render + buffer readback, the `egui_kittest` shape, no surface) — render-once keyed by `Context::cumulative_pass_nr` (the pump renders its own pass; video capture and screenshots share the cache through the existing §15.5 substrates), the backend probe cached both ways (GPU-less hosts answer `Unsupported` — the masonry precedent), the frame hash staying the §10 scene digest so traces/video-dedup keep their meaning, wgpu 30 beside masonry's 26, dual-behaved pixel tests (real on the CI lavapipe/metal/dx12 legs, the honest row on GPU-less hosts), no wire change |
+| **M78**       | The real slint harness: the framework half of the slint adapter binds the real `i-slint-backend-testing` `TestingBackend` in the repo's **slint-only `glue/slint` workspace** (§17 row 5 — the skia-links constraint re-verified against slint 1.19.0: the facade's unconditional `i-slint-backend-selector` edge carries a lockfile-resolved skia chain no feature combination drops, so facade and freya-testing still cannot share one lockfile; the glue workspace path-depends on the framework-free engine and carries slint's skia entry while the main workspace keeps freya's) — `set_platform` installs the backend with mock time + the software rasterizer, `Window::dispatch_event` injects real `WindowEvent`s (pointer/keys/wheel, explicit modifier presses+releases), the tree folds real `ElementHandle` introspection by bounds containment with the widget-internal-editor collapse (a `LineEdit`'s nested `TextInput` folds into the widget so strict mode resolves one node), pixels come from `Window::take_snapshot`, the §14 clock plan executes on `mock_elapsed_time`, text semantics are the app's contribution (`accessible-role`/`accessible-label` on non-widget text, element names as test ids via the debug-info build), the CI `slint-glue` job runtime-tests it, the `slint_introspection` design-target bench row, no wire change |
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop — no milestone re-opened the protocol.
