@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Proc macros for Guiwright: #[test] attribute that launches the embedded harness (architecture §5.2 guiwright-kit)"
 
 [lib]
