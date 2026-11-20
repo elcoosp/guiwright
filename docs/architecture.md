@@ -205,8 +205,10 @@ guiwright/
 │                         #   frame service, trace recorder, clock service
 ├── guiwright-adapter-*   # standalone per-framework adapter crates (egui, masonry,
 │                         #   iced, freya, slint, floem, gpui) — not driver features;
-│                         #   iced/freya carry feature-gated harness glue, the rest ship
-│                         #   framework-free engines + recorded downstream contracts
+│                         #   iced/freya carry feature-gated harness glue, slint's glue
+│                         #   binds in the slint-only glue/slint workspace (the skia-links
+│                         #   record), the rest ship framework-free engines + recorded
+│                         #   downstream contracts
 ├── guiwright-kit         # user-facing: App, Locators, #[guiwright_kit::test], fixtures,
 │                         #   expect!, embedded Harness (mirrors Playwright's fixture system)
 ├── guiwright-shot        # framework-free screenshot stack: PNG codec, YIQ diff,
@@ -605,8 +607,8 @@ Ranked by (a) harness completeness today, (b) a11y substrate, (c) integration ri
 1. **egui** — full a11y, existing harness + existing driver protocol; adapter ≈ glue.
 2. **Masonry/Xilem** — `WidgetId↔NodeId` identity, headless deterministic harness, wgpu-free screenshots; gaps: kittest TODO (we fill), EnableAccessTree laziness (known).
 3. **Iced** — `Emulator`+`iced_selector`+headless screenshots are 80 % of a Level-2 adapter; gap: no a11y (logical tree), role registry contribution. **Shipped (m76):** the logical-tree engine + role registry + the real `Emulator` harness — `SimulatorSeam` bound to `iced_test::Emulator`, the §4.6 `Task::widget` read-back, runtime CI; the pixel rows stay explicit until the §10 baseline pass binds `Emulator::screenshot`.
-4. **Freya** — `TestingRunner` + software Skia + a11y ids; gap: key-event fidelity, multi-window headless.
-5. **Slint** — testing backend is complete but semver-exempt (per-release maintenance) and needs debug-info builds; a11y door exists for live apps.
+4. **Freya** — `TestingRunner` + software Skia + a11y ids; gap: key-event fidelity, multi-window headless. **Shipped (m79):** the real `TestingRunner` glue — `TestingSeam` bound to `freya_testing` (committed AccessKit diffs through `sync_and_update`, frame-quantized `send_event` input with modifiers+KeyUp, native `Focus`/`Blur` via `send_accessibility_action`, `poll_n` ticker clock, PNG-snapshot `render_frame`), runtime CI (the Skia stack compiles there).
+5. **Slint** — testing backend is complete but semver-exempt (per-release maintenance) and needs debug-info builds; a11y door exists for live apps. **Shipped (m78):** the real `TestingBackend` harness in the repo's slint-only `glue/slint` workspace — `set_platform` (mock time + software rasterizer), real `WindowEvent` input through `Window::dispatch_event`, the `ElementHandle` walk folded by bounds containment with the widget-internal-editor collapse, `take_snapshot` pixels, the `mock_elapsed_time` clock plan, runtime CI; the skia-links constraint re-verified against 1.19.0 (the facade's selector edge carries a lockfile-resolved skia chain), so the glue carries slint's skia entry where freya's cannot follow.
 6. **Floem** — great headless event harness; needs test-id + role metadata + headless pixels (two scoped contributions).
 7. **GPUI** — powerful but: platform-crate churn, main-thread-only, test-support-gated capture; highest ceiling (Zed-scale apps), scheduled after the core stabilizes on the six above.
 
