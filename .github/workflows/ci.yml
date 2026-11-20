@@ -63,16 +63,19 @@ jobs:
 
   adapter-features:
     # §18 "adapters are thin & feature-gated": the default build carries no
-    # framework stack; these jobs compile-verify the feature-gated harness
-    # glue (M1: iced via iced_test/wgpu, freya via software Skia).
+    # framework stack; these jobs verify the feature-gated harness glue.
+    # m76: the iced job runs the REAL harness — `iced_test::Emulator`
+    # driving a counter/form Program through Session (resolve → click →
+    # fill; §4.6, §17 MVP trio) — the compile-verify-only era is over.
+    # freya stays compile-verify until its glue binds (§17).
     name: features (${{ matrix.adapter }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         adapter:
-          - { crate: guiwright-adapter-iced, feature: iced }
-          - { crate: guiwright-adapter-freya, feature: freya }
+          - { crate: guiwright-adapter-iced, feature: iced, cmd: test }
+          - { crate: guiwright-adapter-freya, feature: freya, cmd: check }
           # Slint has no compile-verify job: its renderer-skia lock chain
           # claims `links = "skia"` like freya's, so no workspace can carry
           # both (recorded in guiwright-adapter-slint's crate docs, §17
@@ -89,7 +92,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --locked
+      - run: cargo ${{ matrix.adapter.cmd }} -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --locked
 
   clients:
     # §16 "other-language client" (M3): the TypeScript GWP client —
