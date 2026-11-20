@@ -523,3 +523,107 @@ steps = [
 
     server.shutdown();
 }
+
+/// M5 §3's "retries → flaky classification" as a wire fact: a stateful
+/// seam gate rejects its first call and accepts afterwards (the gate
+/// counter lives in the registry closure, so it survives the fresh
+/// adapter each attempt spawns). Attempt 1 fails, the spec's retry
+/// passes, and the record lands `Flaky` with `attempts == 2` — the
+/// "retries eventually pass a flaky test" half of the §1 runner row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retries_eventually_pass_a_flaky_scenario() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let gate = std::sync::Arc::new(AtomicUsize::new(0));
+    let gate_for_seam = std::sync::Arc::clone(&gate);
+    let mut seams = guiwright_driver::SeamRegistry::new();
+    seams.register("flaky_gate", move |_ctx, _scope| {
+        if gate_for_seam.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err("gate shut on the first call".into())
+        } else {
+            Ok("gate open".into())
+        }
+    });
+
+    let dir = leak_dir("runner-flaky-pass");
+    write_spec(
+        &dir,
+        "flaky.spec.toml",
+        r#"
+retries = 1
+
+[[scenario]]
+name = "opens on the retry"
+steps = ["mock call flaky_gate"]
+"#,
+    );
+    let (path, server) = (
+        dir.join("flaky.sock"),
+        GwpServerHandle::spawn_with_seams(
+            dir.join("flaky.sock"),
+            // The gate ignores the runner context; the mock only needs
+            // state attached for `run_in` to execute the seam task.
+            || MockAdapter::with_fixture(&Fixture::buttons()).with_state(()),
+            seams,
+        )
+        .expect("server binds"),
+    );
+
+    let specs = runner::discover(&[dir]).expect("discovery");
+    let outcome = runner::run(specs, &uds_opts(&path), None)
+        .await
+        .expect("run completes");
+    // Flaky does not fail the run (exit 0 — the M5 exit-code contract).
+    assert!(!outcome.failed, "{:?}", outcome.report.scenarios);
+    let record = &outcome.report.scenarios[0];
+    assert_eq!(record.status, ScenarioStatus::Flaky, "{record:?}");
+    assert_eq!(record.attempts, 2, "{record:?}");
+    assert_eq!(record.error, None, "{record:?}");
+    assert_eq!(
+        gate.load(Ordering::SeqCst),
+        2,
+        "the gate saw exactly the two attempts"
+    );
+
+    server.shutdown();
+}
+
+/// The run-path half of the sharding promise (§11 "multiple apps per
+/// host"): two `1/2` + `2/2` runs over the same app partition the
+/// discovered suite exactly — every scenario green, the union complete,
+/// no overlap, and the shard record riding each report.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shard_runs_partition_the_suite_exactly() {
+    let dir = leak_dir("runner-shard-run");
+    write_spec(&dir, "login.spec.toml", LOGIN_SPEC);
+    write_spec(&dir, "smoke.spec.toml", SMOKE_SPEC);
+    let (path, _server) = spawn_server("runner-shard-run");
+
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for shard in [(1u32, 2u32), (2, 2)] {
+        let specs = runner::discover(std::slice::from_ref(&dir)).expect("discovery");
+        let opts = TestOptions {
+            shard: Some(shard),
+            ..uds_opts(&path)
+        };
+        let outcome = runner::run(specs, &opts, None)
+            .await
+            .expect("shard run completes");
+        assert!(
+            !outcome.failed,
+            "shard {shard:?}: {:?}",
+            outcome.report.scenarios
+        );
+        assert_eq!(outcome.report.shard, Some(shard), "{shard:?}");
+        for record in &outcome.report.scenarios {
+            assert_eq!(record.status, ScenarioStatus::Passed, "{record:?}");
+            seen.push((record.file.clone(), record.name.clone()));
+        }
+    }
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    let unique: std::collections::BTreeSet<String> = seen
+        .iter()
+        .map(|(file, name)| format!("{file}::{name}"))
+        .collect();
+    assert_eq!(unique.len(), 4, "no overlap across shards: {seen:?}");
+}
