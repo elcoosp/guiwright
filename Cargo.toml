@@ -22,7 +22,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -61,15 +61,15 @@ tempfile = "3.27.0"
 proptest = "1.12.0"
 
 # Internal crates (members not inherited anywhere use their own path deps)
-guiwright-shot = { path = "crates/guiwright-shot", version = "0.4.0" }
-guiwright-trace = { path = "crates/guiwright-trace", version = "0.4.0" }
-guiwright-kit = { path = "crates/guiwright-kit", version = "0.4.0" }
-guiwright-inspect = { path = "crates/guiwright-inspect", version = "0.4.0" }
-guiwright-viewer = { path = "crates/guiwright-viewer", version = "0.4.0" }
+guiwright-shot = { path = "crates/guiwright-shot", version = "1.0.0-rc.1" }
+guiwright-trace = { path = "crates/guiwright-trace", version = "1.0.0-rc.1" }
+guiwright-kit = { path = "crates/guiwright-kit", version = "1.0.0-rc.1" }
+guiwright-inspect = { path = "crates/guiwright-inspect", version = "1.0.0-rc.1" }
+guiwright-viewer = { path = "crates/guiwright-viewer", version = "1.0.0-rc.1" }
 serde_json = "1.0.154"
-guiwright-core = { path = "crates/guiwright-core", version = "0.4.0" }
-guiwright-proto = { path = "crates/guiwright-proto", version = "0.4.0" }
-guiwright-driver = { path = "crates/guiwright-driver", version = "0.4.0" }
+guiwright-core = { path = "crates/guiwright-core", version = "1.0.0-rc.1" }
+guiwright-proto = { path = "crates/guiwright-proto", version = "1.0.0-rc.1" }
+guiwright-driver = { path = "crates/guiwright-driver", version = "1.0.0-rc.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
