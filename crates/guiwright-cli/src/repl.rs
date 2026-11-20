@@ -835,13 +835,16 @@ impl Repl {
     }
 
     /// `assert text|value|role|name|description|count <get-args…> is
-    /// <expected>` (m61/m62/m64 — the m54/m59 client-seam assertions'
+    /// <expected>` and `assert checked|enabled|focused <get-args…>`
+    /// (m61/m62/m64/m74 — the m54/m59/m62/m73 client-seam assertions'
     /// interactive half, the m43 one-milestone-per-surface pattern): the
     /// kit's waitable
     /// `expect(locator).to_*` vocabulary at the prompt, riding the
     /// [`ClientConn::expect_text`] / [`ClientConn::expect_value`] /
     /// [`ClientConn::expect_role`] / [`ClientConn::expect_name`] /
     /// [`ClientConn::expect_description`] / [`ClientConn::expect_count`]
+    /// / [`ClientConn::expect_checked`] / [`ClientConn::expect_enabled`]
+    /// / [`ClientConn::expect_focused`]
     /// seam rows — event-driven re-reads on
     /// the §7 channel, no polling, the `timeout <ms>` budget.
     ///
@@ -852,13 +855,16 @@ impl Repl {
     /// (the m43 append-only rule). The first standalone `is` token
     /// separates the locator from the expectation: the locator vocabulary
     /// is greedy (multi-word names join), so a word is the honest
-    /// delimiter.
+    /// delimiter. The state rows (m74) keep the delimiter on the
+    /// checked/enabled pair and drop it on `focused` — the fact itself is
+    /// the demand there, the seam's typed timeout the honest negative.
     ///
     /// A satisfied assertion answers one ok line naming the satisfying
     /// fact — the m37 row render for the content pair, the found count
-    /// for `count` (the m59 answer shape, absence answering found 0). A
-    /// spent budget prints the seam's typed timeout verbatim (`have
-    /// text` / `have value` / `have count`, the locator, the last
+    /// for `count` (the m59 answer shape, absence answering found 0), the
+    /// m68 facts with the state three named for the state rows (the m74
+    /// render). A spent budget prints the seam's typed timeout verbatim
+    /// (`have text` / `have count` / `be checked`, the locator, the last
     /// evaluation — the failures-name-names discipline). A read, not a
     /// resolve-store: `last` keeps the node `get` aimed at, and the
     /// assertion's subscription window restores the `events on` filter
@@ -872,6 +878,9 @@ impl Repl {
             Some("name") => self.assert_name_command(tokens).await,
             Some("description") => self.assert_description_command(tokens).await,
             Some("count") => self.assert_count_command(tokens).await,
+            Some("checked") => self.assert_checked_command(tokens).await,
+            Some("enabled") => self.assert_enabled_command(tokens).await,
+            Some("focused") => self.assert_focused_command(tokens).await,
             Some(other) => Err(format!("unknown kind `{other}` — {ASSERT_KINDS_USAGE}")),
         }
     }
@@ -1018,6 +1027,78 @@ impl Repl {
             ))]),
             Err(err) => Err(render_gwp_error(&err)),
         }
+    }
+
+    /// The checked-assertion row (m74 — the m73 [`ClientConn::expect_checked`]
+    /// row's interactive half, the m43/m61/m62 pattern): the m68 four-way
+    /// word demanded exactly at the prompt — a mixed checkbox is not an
+    /// unchecked one, and a not-checkable role answers the total fact,
+    /// never an error (the m73 rule's shape at the prompt). The locator
+    /// resolves through the get vocabulary, the `is` delimiter splits it
+    /// from the word (the m61 grammar), the satisfying m68 row renders as
+    /// the m68 facts with the state three named, and a spent budget
+    /// prints the seam's typed timeout verbatim (`be checked`, the word
+    /// the last evaluation found). A read, not a resolve-store.
+    async fn assert_checked_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let tail = tokens
+            .get(2..)
+            .ok_or_else(|| ASSERT_CHECKED_USAGE.to_string())?;
+        let (locator_tokens, expected_tokens) =
+            split_at_is(tail).map_err(|_| ASSERT_CHECKED_USAGE.to_string())?;
+        let (selector, _describe) = parse_selector(locator_tokens)?;
+        let expected = parse_checked_word(expected_tokens)?;
+        let outcome = self
+            .conn
+            .expect_checked(selector, expected, Duration::from_millis(self.timeout_ms))
+            .await;
+        self.restore_events().await;
+        state_line(outcome, "checked")
+    }
+
+    /// The enabled-assertion row (m74 — the m73 [`ClientConn::expect_enabled`]
+    /// row's interactive half, the `to_be_enabled` / `to_be_disabled`
+    /// pair in one word): the boolean the row carries, spoken as
+    /// `enabled` / `disabled` at the prompt (the words the m68 render
+    /// prints). The satisfying row renders as the m68 facts; a spent
+    /// budget prints the seam's typed timeout verbatim (`be enabled`,
+    /// the fact the last evaluation found). A read, not a resolve-store.
+    async fn assert_enabled_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let tail = tokens
+            .get(2..)
+            .ok_or_else(|| ASSERT_ENABLED_USAGE.to_string())?;
+        let (locator_tokens, expected_tokens) =
+            split_at_is(tail).map_err(|_| ASSERT_ENABLED_USAGE.to_string())?;
+        let (selector, _describe) = parse_selector(locator_tokens)?;
+        let expected = parse_enabled_word(expected_tokens)?;
+        let outcome = self
+            .conn
+            .expect_enabled(selector, expected, Duration::from_millis(self.timeout_ms))
+            .await;
+        self.restore_events().await;
+        state_line(outcome, "enabled")
+    }
+
+    /// The focused-assertion row (m74 — the m73 [`ClientConn::expect_focused`]
+    /// row's interactive half): no expectation word — the fact itself is
+    /// the demand, the seam's typed timeout the honest negative (the
+    /// m73/m62 no-negation rule carried to the prompt). The satisfying
+    /// row renders as the m68 facts with the arrived focus named; a spent
+    /// budget prints the seam's typed timeout verbatim (`be focused`,
+    /// `focused is false`). A read, not a resolve-store.
+    async fn assert_focused_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
+        let tail = tokens
+            .get(2..)
+            .ok_or_else(|| ASSERT_FOCUSED_USAGE.to_string())?;
+        if tail.iter().any(|token| token == "is") {
+            return Err(ASSERT_FOCUSED_USAGE.to_string());
+        }
+        let (selector, _describe) = parse_selector(tail)?;
+        let outcome = self
+            .conn
+            .expect_focused(selector, Duration::from_millis(self.timeout_ms))
+            .await;
+        self.restore_events().await;
+        state_line(outcome, "focused")
     }
 
     // --- actions (§8.4) -------------------------------------------------------
@@ -1563,6 +1644,9 @@ impl Repl {
             "  assert text|value <get-args…> is <text>   waitable content assertion (m61)",
             "  assert role|name|description <get-args…> is <Role|text>  waitable identity assertion (m62/m64)",
             "  assert count <get-args…> is <N>|> <N>|< <N>  waitable count assertion (m61)",
+            "  assert checked <get-args…> is checked|unchecked|mixed|not-checkable  waitable checked assertion (m74)",
+            "  assert enabled <get-args…> is enabled|disabled  waitable enabled assertion (m74)",
+            "  assert focused <get-args…>  waitable focus assertion (m74)",
             "  expect <get-args…>          resolve + assert (the runner wording)",
             "  click | dblclick | hover | focus | blur | check | uncheck",
             "  fill <text> | setvalue <text>",
@@ -1831,14 +1915,36 @@ fn parse_ms(value: Option<&String>) -> Result<u64, String> {
         .map_err(|_| format!("not a millisecond value: {value}"))
 }
 
-/// The `assert` row's vocabulary words (m61/m62/m64): the kind list
+/// The `assert` row's vocabulary words (m61/m62/m64/m74): the kind list
 /// every validation error names, so one error line teaches the whole
 /// grammar (the survival rule's hint shape).
-const ASSERT_KINDS_USAGE: &str =
-    "text | value | count | role | name | description (e.g. `assert count role Button is 4`)";
+const ASSERT_KINDS_USAGE: &str = "text | value | count | role | name | description | checked | enabled | focused (e.g. `assert count role Button is 4`)";
 
 /// The `assert count` expectation's forms (the m59 comparator shapes).
 const ASSERT_COUNT_USAGE: &str = "`is <N>` | `is > <N>` | `is < <N>`";
+
+/// The `assert checked` row's grammar (m74): the `is` separator plus the
+/// m68 four-way word the tri-state demand speaks — the kebab-cased
+/// `not-checkable` fact riding one token.
+const ASSERT_CHECKED_USAGE: &str = "`assert checked` needs `is` — assert checked <get-args…> is checked | unchecked | mixed | not-checkable";
+
+/// The four-way word list the unknown-word error names (m74).
+const ASSERT_CHECKED_WORDS: &str = "checked | unchecked | mixed | not-checkable";
+
+/// The `assert enabled` row's grammar (m74): the `is` separator plus the
+/// boolean pair the enabled fact speaks (the words the m68 render
+/// prints).
+const ASSERT_ENABLED_USAGE: &str =
+    "`assert enabled` needs `is` — assert enabled <get-args…> is enabled | disabled";
+
+/// The boolean pair the unknown-word error names (m74).
+const ASSERT_ENABLED_WORDS: &str = "enabled | disabled";
+
+/// The `assert focused` row's grammar (m74): no expectation — the fact
+/// itself is the demand, the seam's typed timeout the honest negative
+/// (the m73 no-negation rule carried to the prompt).
+const ASSERT_FOCUSED_USAGE: &str =
+    "`assert focused` takes no expectation — assert focused <get-args…>";
 
 /// The separator error every `assert` parse names (the whole grammar, so
 /// one error line teaches the row — the survival rule's hint shape).
@@ -1901,6 +2007,59 @@ fn identity_line_description(
             render_identity(&row)
         ))]),
         Err(err) => Err(render_gwp_error(&err)),
+    }
+}
+
+/// The state-assertion answer line (m74): the satisfying m68 row
+/// rendered with the state three named (the m68 describe render — the
+/// facts the assertion speaks); a spent budget renders the seam's typed
+/// timeout verbatim.
+fn state_line(
+    outcome: Result<DescribedIdentityStateV1, GwpError>,
+    kind_word: &str,
+) -> Result<Vec<Line>, String> {
+    match outcome {
+        Ok(row) => Ok(vec![Line::Ok(format!(
+            "assert {kind_word} — {}",
+            render_identity_state(&row)
+        ))]),
+        Err(err) => Err(render_gwp_error(&err)),
+    }
+}
+
+/// Parse the `assert checked` expectation (m74): the m68 four-way word,
+/// one token, exactly the vocabulary the m68 render speaks (the kebab
+/// word keeping `not-checkable` one token). Anything else is one error
+/// line naming the four-way vocabulary (the survival rule).
+fn parse_checked_word(spec: &[String]) -> Result<CheckedStateV1, String> {
+    match spec {
+        [word] => match word.as_str() {
+            "checked" => Ok(CheckedStateV1::Checked),
+            "unchecked" => Ok(CheckedStateV1::Unchecked),
+            "mixed" => Ok(CheckedStateV1::Mixed),
+            "not-checkable" => Ok(CheckedStateV1::NotCheckable),
+            other => Err(format!(
+                "unknown checked word `{other}` — assert checked … is {ASSERT_CHECKED_WORDS}"
+            )),
+        },
+        _ => Err(ASSERT_CHECKED_USAGE.to_string()),
+    }
+}
+
+/// Parse the `assert enabled` expectation (m74): the boolean pair the
+/// enabled fact speaks — `enabled` / `disabled`, the words the m68
+/// render prints. Anything else is one error line naming the pair (the
+/// survival rule).
+fn parse_enabled_word(spec: &[String]) -> Result<bool, String> {
+    match spec {
+        [word] => match word.as_str() {
+            "enabled" => Ok(true),
+            "disabled" => Ok(false),
+            other => Err(format!(
+                "unknown enabled word `{other}` — assert enabled … is {ASSERT_ENABLED_WORDS}"
+            )),
+        },
+        _ => Err(ASSERT_ENABLED_USAGE.to_string()),
     }
 }
 
