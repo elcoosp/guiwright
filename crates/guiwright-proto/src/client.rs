@@ -26,7 +26,9 @@ use guiwright_core::Selector;
 
 use crate::GwpError;
 use crate::count::{CountEval, CountTracker};
-use crate::expect::{ExpectEval, ExpectIdentityEval, ExpectKind, ExpectTracker};
+use crate::expect::{
+    ExpectEval, ExpectIdentityEval, ExpectKind, ExpectTracker, StateEval, StateKind, StateTracker,
+};
 use crate::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
     DescribedIdentityV1, DescribedV1, EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1,
@@ -1465,6 +1467,121 @@ pub trait ClientConn: Send + 'static {
         }
     }
 
+    /// The state assertion, checked form (m73 — the kit's
+    /// `expect(locator).to_be_checked(...)` over any door, M20): the m68
+    /// tri-state word demanded exactly — the vocabulary word, never an
+    /// `Option<bool>` (a mixed checkbox is not an unchecked one), a
+    /// not-checkable role staying pending (the total fact, not an
+    /// error). The same composition as [`Self::expect_text`] over the
+    /// m70 state read: the m54 wake loop, the set's head pinned, the
+    /// subscription window owned and dropped. **No wire change**; every
+    /// [`ClientConn`] impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is (a driver older than m70 cannot decode the
+    /// appended request — the append-only cost); a spent budget answers
+    /// [`GwpError::WaitTimeout`] naming `be checked` and the word the
+    /// last evaluation saw.
+    fn expect_checked(
+        &mut self,
+        selector: SelectorV1,
+        expected: crate::schema::CheckedStateV1,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedIdentityStateV1, GwpError>> + Send {
+        self.expect_state(selector, StateKind::Checked(expected), timeout)
+    }
+
+    /// The state assertion, enabled form (m73 — the kit's
+    /// `expect(locator).to_be_enabled(...)` / `to_be_disabled(...)` pair
+    /// over any door, the core check vocabulary): the boolean the row
+    /// carries (false = the AccessKit `Disabled` flag set), demanded as
+    /// the one word the pair speaks. The same composition; **no wire
+    /// change**; every [`ClientConn`] impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `be enabled` and the fact the last evaluation saw.
+    fn expect_enabled(
+        &mut self,
+        selector: SelectorV1,
+        expected: bool,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedIdentityStateV1, GwpError>> + Send {
+        self.expect_state(selector, StateKind::Enabled(expected), timeout)
+    }
+
+    /// The state assertion, focused form (m73 — the kit's
+    /// `expect(locator).to_be_focused(...)` over any door, the core
+    /// check vocabulary): the node IS the tree's focus right now (the
+    /// core `Check::Focused` read's shape — `tree.focus()` equality),
+    /// the focus arriving with the tree update that carries it. The
+    /// same composition; **no wire change**; every [`ClientConn`] impl
+    /// inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_text`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `be focused` and the fact the last evaluation saw.
+    fn expect_focused(
+        &mut self,
+        selector: SelectorV1,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedIdentityStateV1, GwpError>> + Send {
+        self.expect_state(selector, StateKind::Focused, timeout)
+    }
+
+    /// The shared state-assertion composition (m73): the
+    /// [`Self::expect_content`] loop shape over the m70 set-width state
+    /// read — one entry read, event-driven re-reads, the subscription
+    /// window owned and dropped, the typed timeout built by
+    /// [`expire_state`]. Tree and frame wakes both re-decide (the state
+    /// facts have no `Stable`-like frame discipline); `Log` records are
+    /// never wakes. An empty set stays pending (waitable — nodes stream
+    /// in, the m54 empty-content rule's shape).
+    fn expect_state(
+        &mut self,
+        selector: SelectorV1,
+        kind: StateKind,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<DescribedIdentityStateV1, GwpError>> + Send {
+        async move {
+            // The locator string for the timeout line (the kit's render
+            // vocabulary — one conversion, not one per re-read).
+            let rendered = Selector::from(selector.clone()).render();
+
+            // The assertion owns the event filter for its duration, the
+            // wait's rule (a driver that rejects Log-less subscriptions
+            // answers the same `Subscribed` ack every door speaks).
+            self.subscribe(&[EventKindV1::TreeChanged, EventKindV1::FramePresented])
+                .await?;
+
+            let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);
+            let tracker = StateTracker::new(kind.clone());
+            loop {
+                let rows = self.describe_all_identity_state(selector.clone()).await?;
+                match tracker.evaluate(&rows) {
+                    StateEval::Satisfied(row) => {
+                        self.unsubscribe().await?;
+                        return Ok(row);
+                    }
+                    StateEval::Pending { reason } => {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Err(expire_state(self, kind, rendered, timeout, reason).await);
+                        }
+                        if next_wake(self, deadline).await?.is_none() {
+                            return Err(expire_state(self, kind, rendered, timeout, reason).await);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The shared content-assertion composition (m54): the m42 wait's
     /// loop shape with the [`ExpectTracker`] evaluation — one entry read,
     /// event-driven re-reads, the subscription window owned and dropped,
@@ -1703,6 +1820,27 @@ async fn expire<C: ClientConn + ?Sized>(
 async fn expire_expect<C: ClientConn + ?Sized>(
     client: &mut C,
     kind: ExpectKind,
+    selector: String,
+    timeout: Duration,
+    last: String,
+) -> GwpError {
+    let outcome = GwpError::WaitTimeout {
+        state: kind.state(),
+        selector,
+        timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        last,
+    };
+    let _ = client.unsubscribe().await;
+    outcome
+}
+
+/// Build the state assertion's typed timeout (m73) and drop its
+/// subscription (the wait's cleanup rule) — the assertion names the
+/// state word (`be checked` / `be enabled` / `be focused`), the locator
+/// and the last evaluation (the fact the last evaluation found).
+async fn expire_state<C: ClientConn + ?Sized>(
+    client: &mut C,
+    kind: StateKind,
     selector: String,
     timeout: Duration,
     last: String,
