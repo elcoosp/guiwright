@@ -15,10 +15,11 @@
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedV1, ErrorCode, EventKindV1,
-    EventV1, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
-    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
-    SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityV1, DescribedV1,
+    ErrorCode, EventKindV1, EventV1, GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1,
+    PROTO_VERSION, PointerButtonV1, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1,
+    SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1,
+    VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -335,6 +336,23 @@ fn describe_all_identity_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// M66 (the single-node identity describe): the M36 handle pair in —
+/// the same payload [`RequestV1::Describe`] carries — the description
+/// fact's widening at handle width (the m64 record's named standing
+/// gap), one round trip instead of the whole-set walk.
+fn describe_identity_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "describe_identity_save_handle",
+        RequestV1::DescribeIdentity(DescribeV1 {
+            node: NodeKeyV1::AccessKit {
+                tree: [0x01; 16],
+                node: 2,
+            },
+            generation: 0,
+        }),
+    )]
+}
+
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
@@ -346,7 +364,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(hit_test_requests())
         .chain(describe_requests())
         .chain(describe_all_requests())
-        .chain(describe_all_identity_requests());
+        .chain(describe_all_identity_requests())
+        .chain(describe_identity_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -610,6 +629,39 @@ fn describe_all_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)
     )]
 }
 
+/// M66 (the single-node identity describe): the M64 identity row at
+/// handle width — the identity four plus the description fact, the
+/// request's handle echoed (the dump-row rule). The M36
+/// `described_save_button` reply keeps its byte-exact encoding; the
+/// widening rides its own appended reply variant.
+fn describe_identity_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "described_identity_install_button",
+        ResponseV1::DescribedIdentity(DescribedIdentityV1 {
+            node: NodeKeyV1::AccessKit {
+                tree: [0x01; 16],
+                node: 4,
+            },
+            generation: 0,
+            role: "Button".into(),
+            name: Some("Install".into()),
+            value: None,
+            bounds: Some([16.0, 204.0, 136.0, 236.0]),
+            description: Some("Installs the latest build".into()),
+        }),
+        serde_json::json!({
+            "kind": "described_identity",
+            "node": {"kind": "accesskit", "tree": "01".repeat(16), "node": 4},
+            "generation": 0,
+            "role": "Button",
+            "name": "Install",
+            "value": null,
+            "bounds": [16.0, 204.0, 136.0, 236.0],
+            "description": "Installs the latest build",
+        }),
+    )]
+}
+
 /// Clock / mock / codegen / error service responses.
 fn service_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
     vec![
@@ -818,6 +870,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .chain(hit_test_responses())
         .chain(describe_responses())
         .chain(describe_all_responses())
+        .chain(describe_identity_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
