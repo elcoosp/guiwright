@@ -365,11 +365,11 @@ test("the bulk reads derive the kit source orders from the describe-all rows (M4
   }
 });
 
-/** The m67/m69 single-node identity describe server: handshake, then the
- * named request variant (21 = DescribeIdentity, m66; 22 =
- * DescribeIdentityState, m68) is answered with the blessed frame — the
- * real Rust server's reply, replayed byte-for-byte (the m41 harness
- * shape). */
+/** The m67/m69/m71 single-node/set identity describe server: handshake,
+ * then the named request variant (21 = DescribeIdentity, m66; 22 =
+ * DescribeIdentityState, m68; 23 = DescribeAllIdentityState, m70) is
+ * answered with the blessed frame — the real Rust server's reply,
+ * replayed byte-for-byte (the m41 harness shape). */
 function startDescribeIdentityServer(
   replyBody: Uint8Array,
   serveVariant: number,
@@ -499,6 +499,42 @@ test("describeIdentityState reads the identity row's state facts (m68/m69)", asy
     assert.equal(row.checked, "mixed", "the tri-state rides as its own word");
     assert.equal(row.focused, true, "the focused fact rides beside the row");
     assert.equal(row.enabled, true, "the enabled fact rides beside the row");
+
+    await client.close();
+  } finally {
+    server.close();
+  }
+});
+
+test("describeAllIdentityState reads the walk's state rows (m70/m71)", async () => {
+  // The golden file is the blessed cross-language contract: the m70
+  // vector is what a real Rust server answers DescribeAllIdentityState
+  // with — the m68 row per match, document order (the m64 walk payload
+  // in, the tri-state riding per row: a checked checkbox beside a mixed
+  // one in one round trip).
+  const golden = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "golden.json"), "utf8"),
+  );
+  const described = golden.responses.find(
+    (v: { name: string }) => v.name === "described_all_identity_state_checkboxes",
+  );
+  const frame = hexToBytes(described.frame_hex);
+  const server = await startDescribeIdentityServer(frame.subarray(4), 23);
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    const rows = await client.describeAllIdentityState({
+      kind: "role",
+      role: "CheckBox",
+      name: null,
+    });
+    assert.equal(rows.length, 2, "the walk answers one row per match, document order");
+    assert.equal(rows[0].role, "CheckBox");
+    assert.equal(rows[0].name, "Notifications");
+    assert.equal(rows[0].checked, "checked", "the tri-state rides per row");
+    assert.equal(rows[1].name, "Partially installed");
+    assert.equal(rows[1].checked, "mixed", "the mixed state is its own word");
 
     await client.close();
   } finally {
