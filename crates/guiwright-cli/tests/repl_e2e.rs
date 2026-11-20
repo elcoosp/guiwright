@@ -1784,3 +1784,378 @@ async fn repl_describe_row_rides_the_identity_read() {
 
     handle.shutdown();
 }
+
+/// The REPL state-assertion rows (m74 — the m73 seam assertions'
+/// interactive half, the m43/m61/m62 pattern): `assert checked <get-args…>
+/// is <word>` / `assert enabled <get-args…> is enabled|disabled` /
+/// `assert focused <get-args…>` ride the `ClientConn::expect_checked` /
+/// `expect_enabled` / `expect_focused` seam over a real socket — the
+/// four-way checked word demanded exactly, the satisfying m68 row
+/// rendered with the state facts named, the typed timeout naming the
+/// seam's state word and the fact the last evaluation found, and the
+/// grammar's usage lines. Its own checkbox-trio session — the base
+/// buttons fixture stays byte-stable for the assertion rows above.
+/// (The m66 body-budget split: the wake-and-re-read halves ride
+/// `repl_state_assert_rows_wake_on_the_push` below.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_state_assert_rows_wait_on_the_client_seam() {
+    let path = socket_path("repl-assert-state.sock");
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        || MockAdapter::with_fixture(&Fixture::with_checkboxes()),
+        guiwright_driver::ServerOptions::default(),
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    assert_state_rows_satisfied_on_entry(&mut repl).await;
+    assert_state_rows_validate_their_grammar(&mut repl).await;
+    assert_state_rows_print_the_typed_timeout(&mut repl).await;
+    assert_state_rows_discoverable_and_read_not_store(&mut repl).await;
+
+    handle.shutdown();
+}
+
+/// The satisfied forms: the four-way checked word demanded exactly (a
+/// mixed checkbox is not an unchecked one; a not-checkable role is the
+/// total fact, not an error), the enabled boolean both ways, the seeded
+/// focus answering the window row — each satisfying row rendered as the
+/// m68 facts with the state three named.
+async fn assert_state_rows_satisfied_on_entry(repl: &mut Repl) {
+    // The checked row: the fixture's "Notifications" is toggled True
+    // from the start — the satisfying m68 row renders the facts.
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox Notifications is checked")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert checked — "), "{out:?}");
+    assert!(out[0].contains(r#"CheckBox "Notifications""#), "{out:?}");
+    assert!(
+        out[0].contains("state unfocused enabled checked"),
+        "{out:?}"
+    );
+
+    // The unchecked word answers the same row set (the second checkbox).
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox \"Dark mode\" is unchecked")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert checked — "), "{out:?}");
+
+    // The tri-state demanded exactly: the mixed word satisfies the mixed
+    // checkbox — and would never satisfy an unchecked one (the m73 rule).
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox \"Partially installed\" is mixed")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("state unfocused enabled mixed-checked"),
+        "{out:?}"
+    );
+
+    // The four-way word's total fact: a not-checkable role answers
+    // `not-checkable` — a fact, never an error (the m68 rule at the
+    // prompt).
+    let out = rendered(
+        &repl
+            .step("assert checked role Button Save is not-checkable")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("state unfocused enabled not checkable"),
+        "{out:?}"
+    );
+
+    // The enabled row, both ways: the live checkbox answers `enabled`,
+    // the base fixture's disabled `Confirm` answers `disabled`.
+    let out = rendered(
+        &repl
+            .step("assert enabled role CheckBox Notifications is enabled")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert enabled — "), "{out:?}");
+    let out = rendered(
+        &repl
+            .step("assert enabled role Button Confirm is disabled")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("state unfocused disabled not checkable"),
+        "{out:?}"
+    );
+
+    // The focus row: the fixture seeds the focus at the window root, so
+    // the window row answers — the fact the walk carries.
+    let out = rendered(&repl.step(r#"assert focused role Window "Test App""#).await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].starts_with("assert focused — "), "{out:?}");
+    assert!(
+        out[0].contains("state focused enabled not checkable"),
+        "{out:?}"
+    );
+}
+
+/// The grammar validation: one error line naming the grammar per
+/// mistake, the session usable after (the survival rule).
+async fn assert_state_rows_validate_their_grammar(repl: &mut Repl) {
+    // A missing tail names the checked grammar.
+    let out = rendered(&repl.step("assert checked").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("`assert checked` needs"), "{out:?}");
+    assert!(
+        out[0].contains("checked | unchecked | mixed | not-checkable"),
+        "{out:?}"
+    );
+
+    // A missing separator names the same grammar (the `is` delimiter).
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox Notifications")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("checked | unchecked | mixed | not-checkable"),
+        "{out:?}"
+    );
+
+    // An unknown checked word names the four-way vocabulary.
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox Notifications is bogus")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("unknown checked word `bogus`"), "{out:?}");
+
+    // An unknown enabled word names the boolean pair.
+    let out = rendered(&repl.step("assert enabled role Button Save is maybe").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("unknown enabled word `maybe`"), "{out:?}");
+    assert!(out[0].contains("enabled | disabled"), "{out:?}");
+
+    // The focused row takes no expectation: the fact itself is the
+    // demand (the seam's typed timeout is the honest negative).
+    let out = rendered(
+        &repl
+            .step("assert focused role Button Save is focused")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("`assert focused` takes no expectation"),
+        "{out:?}"
+    );
+
+    // The kinds usage line teaches the whole grammar: the state kinds
+    // ride beside the m61/m62/m64 words.
+    let out = rendered(&repl.step("assert shiny role Button is 1").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("checked | enabled | focused"), "{out:?}");
+    assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
+}
+
+/// A spent budget prints the typed timeout — the seam's state word
+/// (`be checked` / `be enabled` / `be focused`), the locator and the
+/// fact the last evaluation found (the failures-name-names discipline),
+/// and the empty set stays pending (waitable — nodes stream in, the
+/// m54 empty-content rule's shape).
+async fn assert_state_rows_print_the_typed_timeout(repl: &mut Repl) {
+    assert_eq!(
+        rendered(&repl.step("timeout 150").await)[0],
+        "timeout = 150 ms"
+    );
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox Notifications is unchecked")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait be checked timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(
+        out[0].contains("checked is Checked, expected Unchecked"),
+        "{out:?}"
+    );
+
+    let out = rendered(
+        &repl
+            .step("assert enabled role CheckBox Notifications is disabled")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait be enabled timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(
+        out[0].contains("enabled is true, expected false"),
+        "{out:?}"
+    );
+
+    // The focus never arrives on the checkbox (the seeded focus stays at
+    // the window root) — the budget names the fact.
+    let out = rendered(
+        &repl
+            .step("assert focused role CheckBox Notifications")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("wait be focused timed out after 150 ms"),
+        "{out:?}"
+    );
+    assert!(
+        out[0].contains("focused is false, expected true"),
+        "{out:?}"
+    );
+
+    // An empty set stays pending (the m54 empty-content rule's shape):
+    // the spent budget names the empty set, not a found fact.
+    let out = rendered(&repl.step("assert checked testid ghost is checked").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("no match yet (the set is empty)"),
+        "{out:?}"
+    );
+
+    assert_eq!(
+        rendered(&repl.step("timeout 5000").await)[0],
+        "timeout = 5000 ms"
+    );
+}
+
+/// The vocabulary is discoverable (the help lists the rows) and the
+/// read-not-store rule held: `last` keeps the node `get` aimed at.
+async fn assert_state_rows_discoverable_and_read_not_store(repl: &mut Repl) {
+    let help_text = rendered(&repl.step("help").await);
+    assert!(
+        help_text.iter().any(|l| l.contains("assert checked")),
+        "{help_text:?}"
+    );
+    assert!(
+        help_text.iter().any(|l| l.contains("assert focused")),
+        "{help_text:?}"
+    );
+
+    rendered(&repl.step("get role Button Cancel").await);
+    rendered(
+        &repl
+            .step("assert checked role Button Save is not-checkable")
+            .await,
+    );
+    assert!(ok_line(&repl.step("last").await).contains("\"Cancel\""));
+}
+
+/// The state assertions are waitable (m73's wake-and-re-read half at the
+/// prompt): the "Dark mode" checkbox flips checked a moment after attach
+/// and the focus moves to "Notifications" later still — each assertion
+/// stays pending until its pushed `TreeChanged` wakes the re-read.
+/// Event-driven, no polling (§15.3) — and the `events on` filter
+/// survives the assertions' subscription windows (the m43 rule).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_state_assert_rows_wake_on_the_push() {
+    let scripts: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts_for_app = Arc::clone(&scripts);
+    let path = socket_path("repl-assert-state-wake.sock");
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        move || {
+            MockAdapter::with_fixture(&Fixture::with_checkboxes())
+                .with_shared_scripts(scripts_for_app)
+        },
+        guiwright_driver::ServerOptions {
+            log_tail: true,
+            ..guiwright_driver::ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The app checks "Dark mode" a moment after attach: the assertion
+    // subscribes, evaluates (Unchecked — pending), and wakes on the
+    // pushed TreeChanged (the m61 scripted shape at state width).
+    let scripts_for_flip = Arc::clone(&scripts);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        if let Some(update) = Fixture::with_checkboxes()
+            .checkbox_toggle_update(accesskit::NodeId(10), accesskit::Toggled::True)
+        {
+            scripts_for_flip.lock().expect("script lock").push(update);
+        }
+    });
+    assert_eq!(
+        rendered(&repl.step("timeout 5000").await)[0],
+        "timeout = 5000 ms"
+    );
+    let out = rendered(
+        &repl
+            .step("assert checked role CheckBox \"Dark mode\" is checked")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("state unfocused enabled checked"),
+        "{out:?}"
+    );
+
+    // The app focuses "Notifications" later still: the focus rides the
+    // scripted update's `focus` word (the same field a real toolkit's
+    // focus change carries), the wake fires on the pushed TreeChanged.
+    let scripts_for_focus = Arc::clone(&scripts);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        scripts_for_focus
+            .lock()
+            .expect("script lock")
+            .push(accesskit::TreeUpdate {
+                nodes: vec![],
+                tree: None,
+                tree_id: accesskit::TreeId::ROOT,
+                focus: accesskit::NodeId(9),
+            });
+    });
+    let out = rendered(
+        &repl
+            .step("assert focused role CheckBox Notifications")
+            .await,
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].contains("state focused enabled checked"),
+        "the satisfying row carries the arrived focus: {out:?}"
+    );
+
+    // The `events on` filter survives both assertion windows (the m43
+    // restore rule).
+    rendered(&repl.step("events on").await);
+    rendered(
+        &repl
+            .step("assert enabled role CheckBox Notifications is enabled")
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let out = rendered(&repl.step("ping").await);
+    assert!(
+        out.iter().any(|l| l.starts_with("event ")),
+        "the `events on` stream keeps flowing after an assertion: {out:?}"
+    );
+    rendered(&repl.step("events off").await);
+
+    handle.shutdown();
+}
