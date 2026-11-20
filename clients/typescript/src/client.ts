@@ -344,6 +344,28 @@ export class GwpClient {
     return resp.rows;
   }
 
+  /** The single-node identity describe read over the wire (m66/m67 —
+   * the m64 record's named standing gap, the Rust `ClientConn::
+   * describe_identity` mirrored): one node's facts — the identity four
+   * plus the accessible description — for a handle the client already
+   * holds (a `resolveAll()` row, a hit row, a dump row: the dump-row
+   * rule), one round trip instead of the whole-set walk
+   * `describeAllIdentity()` runs. The M36 `describe()` handle pair
+   * rides in and the M64 identity row rides out (the m64 payload-reuse
+   * rule at handle width); handle-addressed, so no window scope
+   * applies; a stale or unknown handle rejects with the typed `error`
+   * code the action on the same handle would meet. A driver older than
+   * m66 cannot decode the appended request at all (the append-only
+   * cost every appended domain has carried since M3), so there is no
+   * fallback derivation (the m41 fail-fast rule). */
+  async describeIdentity(node: NodeKey, generation: number): Promise<DescribedIdentityNode> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "describe_identity", node, generation });
+    if (resp.kind !== "described_identity")
+      throw new Error(`expected DescribedIdentity, got ${resp.kind}`);
+    return resp;
+  }
+
   /** The m29 bulk text read at set width (M41 — the m29 record's remote
    * note: "a remote bulk read would extend the `Resolve` reply exactly
    * as the m26/m22 records name … and stays open until a remote suite
