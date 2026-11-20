@@ -536,6 +536,49 @@ pub trait ClientConn: Send + 'static {
         }
     }
 
+    /// The set-width identity-state describe read over the wire (m70 —
+    /// the m68/m69 records' named standing gap: "no state facts at *set*
+    /// width: the `DescribeAllIdentity` rows stay identity-row shaped; a
+    /// state-fact set widening lands when a consumer asks — the same
+    /// append-only move, its own domain"): every current match of
+    /// `selector` with its facts derived from the
+    /// [`DescribedIdentityStateV1`] row — the identity four, the
+    /// description fact plus the state three (focused / enabled /
+    /// checked), the facts the kit's `to_be_checked` / `to_be_focused` /
+    /// `to_be_enabled` vocabulary answers one question at a time. One
+    /// round trip instead of one [`Self::describe_identity_state`] per
+    /// row; the read costs what [`Self::describe_all`] costs.
+    ///
+    /// **Appended, not reshaped** (the append-only wire discipline): the
+    /// M39/M64/M68 encodings stay byte-pinned, the widening lands as its
+    /// own `DescribeAllIdentityState`/`DescribedAllIdentityState` domain
+    /// reusing the `DescribeAll` payload — a driver older than m70
+    /// cannot decode the appended request at all (the append-only cost
+    /// every appended domain has carried since M3), so there is no
+    /// fallback derivation (the m41 fail-fast rule). Snapshot semantics,
+    /// unchanged from the `describe_all` family: no strict mode, no
+    /// waiting, an empty set answers an empty list, and the connection's
+    /// window scope narrows the read exactly like
+    /// [`Self::describe_all`].
+    fn describe_all_identity_state(
+        &mut self,
+        selector: SelectorV1,
+    ) -> impl Future<Output = Result<Vec<DescribedIdentityStateV1>, GwpError>> + Send {
+        async move {
+            match self
+                .request(RequestV1::DescribeAllIdentityState(DescribeAllV1 {
+                    selector,
+                }))
+                .await?
+            {
+                ResponseV1::DescribedAllIdentityState { rows } => Ok(rows),
+                other => Err(GwpError::Protocol(format!(
+                    "DescribeAllIdentityState answered by {other:?}"
+                ))),
+            }
+        }
+    }
+
     /// The kit's bulk text read over the wire (m46 — the m41 record's
     /// Rust-client half, closed): every current match of `selector` with
     /// its content derived client-side from the [`Self::describe_all`]
