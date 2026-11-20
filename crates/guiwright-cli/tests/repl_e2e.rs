@@ -1584,27 +1584,19 @@ async fn assert_rows_discoverable_and_append_only(repl: &mut Repl) {
 /// m62 grammar's third identity fact): `assert description <get-args…>
 /// is <expected>` rides the `ClientConn::expect_description` seam over a
 /// real socket — the satisfying-row render naming the description fact,
-/// the typed timeout naming `have description` (found and expected, the
-/// missing fact named on undescribed nodes), the grammar's usage line,
-/// the wake-and-re-read on a scripted restatement, and the `events on`
-/// filter restored after the assertion's subscription window (the m43
-/// rule). Its own described-fixture session — the base buttons fixture
-/// stays byte-stable for the assertion rows above.
+/// the typed timeout naming `have description` (found and expected), and
+/// the missing fact named on undescribed nodes plus the grammar's usage
+/// line. Its own described-fixture session — the base buttons fixture
+/// stays byte-stable for the assertion rows above. (The m66 clippy body
+/// budget split the conversation's halves: the wake-and-re-read rides
+/// `repl_description_rows_wake_on_the_restatement` below.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repl_description_rows_wait_on_the_client_seam() {
-    let scripts: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
-    let scripts_for_app = Arc::clone(&scripts);
     let path = socket_path("repl-description.sock");
     let handle = guiwright_driver::spawn_session_server_with(
         path.clone(),
-        move || {
-            MockAdapter::with_fixture(&Fixture::with_description())
-                .with_shared_scripts(scripts_for_app)
-        },
-        guiwright_driver::ServerOptions {
-            log_tail: true,
-            ..guiwright_driver::ServerOptions::default()
-        },
+        || MockAdapter::with_fixture(&Fixture::with_description()),
+        guiwright_driver::ServerOptions::default(),
     )
     .expect("server binds");
     let mut repl = Repl::connect(&ConnectTarget::Uds(path))
@@ -1679,9 +1671,36 @@ async fn repl_description_rows_wait_on_the_client_seam() {
     assert_eq!(out.len(), 1, "{out:?}");
     assert!(out[0].contains("description"), "{out:?}");
 
-    // Wake-and-re-read: the Save button gains its description a moment
-    // after attach — event-driven, no polling — and the `events on`
-    // filter survives the assertion's subscription window.
+    handle.shutdown();
+}
+
+/// The description assertion is waitable (m64's wake-and-re-read half):
+/// the Save button gains its description a moment after attach — the
+/// first evaluation is pending, the pushed `TreeChanged` wakes the
+/// re-read, and the restated row satisfies. Event-driven, no polling
+/// (§15.3 on both ends) — and the `events on` filter survives the
+/// assertion's subscription window (the m43 rule).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_description_rows_wake_on_the_restatement() {
+    let scripts: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts_for_app = Arc::clone(&scripts);
+    let path = socket_path("repl-description-wake.sock");
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        move || {
+            MockAdapter::with_fixture(&Fixture::with_description())
+                .with_shared_scripts(scripts_for_app)
+        },
+        guiwright_driver::ServerOptions {
+            log_tail: true,
+            ..guiwright_driver::ServerOptions::default()
+        },
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
     let scripts_for_push = Arc::clone(&scripts);
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(150));
@@ -1717,6 +1736,45 @@ async fn repl_description_rows_wait_on_the_client_seam() {
         "the `events on` stream keeps flowing after an assertion: {out:?}"
     );
     rendered(&repl.step("events off").await);
+
+    handle.shutdown();
+}
+
+/// The `describe` row rides the identity read (m66 — the m64 record's
+/// named standing gap closed at the prompt): the M36 facts render with
+/// the description fact named when the driver answers the appended
+/// `DescribeIdentity` domain — one handle-addressed round trip, no
+/// whole-set walk. A node without the fact renders the m37 shape
+/// unchanged (the absent fact renders nothing, never `null`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_describe_row_rides_the_identity_read() {
+    let path = socket_path("repl-describe-identity.sock");
+    let handle = guiwright_driver::spawn_session_server_with(
+        path.clone(),
+        || MockAdapter::with_fixture(&Fixture::with_description()),
+        guiwright_driver::ServerOptions::default(),
+    )
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The described row: the m37 facts plus the fact named.
+    let out = rendered(&repl.step("describe role Button Install").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("Button \"Install\""), "{out:?}");
+    assert!(
+        out[0].contains(r#"description "Installs the latest build""#),
+        "the description fact named at the prompt: {out:?}"
+    );
+
+    // The undescribed row: the m37 shape, unchanged (the absent fact
+    // renders nothing — the name and the value never answer a
+    // description read, the m38 rule).
+    let out = rendered(&repl.step("describe role Button Save").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("Button \"Save\""), "{out:?}");
+    assert!(!out[0].contains("description"), "{out:?}");
 
     handle.shutdown();
 }
