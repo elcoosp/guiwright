@@ -148,6 +148,10 @@
     {
       "frame_hex": "15000000001500010101010101010101010101010101010200",
       "name": "describe_identity_save_handle"
+    },
+    {
+      "frame_hex": "15000000001600010101010101010101010101010101010200",
+      "name": "describe_identity_state_save_handle"
     }
   ],
   "responses": [
@@ -391,6 +395,58 @@
       },
       "frame_hex": "6200000000180001010101010101010101010101010101040006427574746f6e0107496e7374616c6c00010000000000003040000000000080694000000000000061400000000000806d400119496e7374616c6c7320746865206c6174657374206275696c64",
       "name": "described_identity_install_button"
+    },
+    {
+      "decoded": {
+        "bounds": [
+          16.0,
+          204.0,
+          136.0,
+          236.0
+        ],
+        "checked": "not_checkable",
+        "description": "Installs the latest build",
+        "enabled": true,
+        "focused": false,
+        "generation": 0,
+        "kind": "described_identity_state",
+        "name": "Install",
+        "node": {
+          "kind": "accesskit",
+          "node": 4,
+          "tree": "01010101010101010101010101010101"
+        },
+        "role": "Button",
+        "value": null
+      },
+      "frame_hex": "6500000000190001010101010101010101010101010101040006427574746f6e0107496e7374616c6c00010000000000003040000000000080694000000000000061400000000000806d400119496e7374616c6c7320746865206c6174657374206275696c64000100",
+      "name": "described_identity_state_install_button"
+    },
+    {
+      "decoded": {
+        "bounds": [
+          16.0,
+          284.0,
+          136.0,
+          316.0
+        ],
+        "checked": "mixed",
+        "description": null,
+        "enabled": true,
+        "focused": true,
+        "generation": 0,
+        "kind": "described_identity_state",
+        "name": "Partially installed",
+        "node": {
+          "kind": "accesskit",
+          "node": 9,
+          "tree": "01010101010101010101010101010101"
+        },
+        "role": "CheckBox",
+        "value": null
+      },
+      "frame_hex": "5900000000190001010101010101010101010101010101090008436865636b426f7801135061727469616c6c7920696e7374616c6c6564000100000000000030400000000000c0714000000000000061400000000000c0734000010103",
+      "name": "described_identity_state_mixed_checkbox"
     },
     {
       "decoded": {
