@@ -365,6 +365,108 @@ test("the bulk reads derive the kit source orders from the describe-all rows (M4
   }
 });
 
+/** The m67 single-node identity describe server: handshake, then the
+ * DescribeIdentity request (variant 21) is answered with the blessed
+ * `described_identity_install_button` frame — the real Rust server's
+ * m66 reply, replayed byte-for-byte (the m41 harness shape). */
+function startDescribeIdentityServer(replyBody: Uint8Array): Promise<{
+  port: number;
+  close: () => void;
+}> {
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        const variant = chunk[5];
+        const reply = (payload: Uint8Array) => {
+          const frame = new Uint8Array(4 + payload.length);
+          const view = new DataView(frame.buffer);
+          view.setUint32(0, payload.length, true);
+          frame.set(payload, 4);
+          socket.write(frame);
+        };
+        if (variant === 0) {
+          // Hello → Welcome{...} — the hand-encoded postcard the other
+          // tests speak (§7: the handshake must land first).
+          const enc = new Encoder();
+          enc.u32(0); // GwpResponse::V1
+          enc.u32(0); // Welcome
+          enc.u32(1); // proto_version
+          enc.str("mock-session");
+          enc.u64(1);
+          enc.u64(2);
+          enc.str("mock");
+          enc.str("fixture");
+          enc.str("0.1");
+          for (const bit of [true, false, true, false, false, true]) enc.bool(bit);
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 21) {
+          // DescribeIdentity → the blessed DescribedIdentity row.
+          reply(replyBody);
+          return;
+        }
+        if (variant === 9) {
+          // Bye → Bye (the clean close, §7's last word).
+          reply(Uint8Array.from([0, 10]));
+          socket.end();
+          return;
+        }
+        // Anything else → Error{Internal} (the other tests' fallback).
+        const enc = new Encoder();
+        enc.u32(0).u32(9);
+        enc.u32(7);
+        enc.str("not implemented in the describe-identity mock server");
+        reply(Array.from(enc.finish()));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as net.AddressInfo).port;
+      resolve({
+        port,
+        close: () => {
+          server.close();
+          server.closeAllConnections?.();
+        },
+      });
+    });
+  });
+}
+
+test("describeIdentity reads the identity row at handle width (m66/m67)", async () => {
+  // The golden file is the blessed cross-language contract: the m66
+  // vector is what a real Rust server answers DescribeIdentity with —
+  // the identity four plus the description fact for the echoed handle.
+  const golden = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "golden.json"), "utf8"),
+  );
+  const described = golden.responses.find(
+    (v: { name: string }) => v.name === "described_identity_install_button",
+  );
+  const frame = hexToBytes(described.frame_hex);
+  const server = await startDescribeIdentityServer(frame.subarray(4));
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    // The row answers at handle width: the identity four ride beside
+    // the fact (the m38 description-only read — neither the name nor
+    // the value answers for it).
+    const row = await client.describeIdentity(
+      { kind: "accesskit", tree: "01".repeat(16), node: 4 },
+      0,
+    );
+    assert.equal(row.kind, "described_identity");
+    assert.deepEqual(row.bounds, [16.0, 204.0, 136.0, 236.0]);
+    assert.equal(row.description, "Installs the latest build");
+    assert.equal(row.name, "Install");
+
+    await client.close();
+  } finally {
+    server.close();
+  }
+});
+
 /** The M45 wait server: handshake, then subscribe acks, describe-all
  * replies from a script (in order), one optional pushed event, and the
  * request log the subscription-ownership assertions read. The bulk-read
