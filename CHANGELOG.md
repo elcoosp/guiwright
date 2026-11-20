@@ -8,6 +8,13 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **proto:** The identity read's state facts ride the identity row at handle width
+- **proto:** The client seam's describe_identity_state row
+- **driver:** The single-node identity-state arm at the boundary
+- **driver:** The demo app serves the state fixture
+- **cli:** The REPL describe row's state facts
+- **clients:** The schema tables and codec carry the identity-state read's variants
+- **clients:** The describeIdentityState method mirrors the m68 row
 - **proto:** The single-node identity describe read carries the identity row at handle width
 - **proto:** The client seam's describe_identity row
 - **driver:** The single-node identity describe arm at the boundary
