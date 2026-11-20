@@ -17,22 +17,26 @@
 //!   wall-clock in its animation paths (§14), so Guiwright owns time
 //!   completely.
 //! * The frame digest is the xxh3 of the tessellated scene (§10
-//!   "scene-digest where available") — no GPU readback at M0.
+//!   "scene-digest where available"); the pixel path (m77) rides
+//!   alongside — headless wgpu render + readback keyed by the
+//!   cumulative pass number (`pixels`).
 
 #![forbid(unsafe_code)]
 
 mod frame_digest;
 mod input;
 pub mod overlay;
+mod pixels;
 
 pub use input::translate_input;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use egui::{Context, RawInput};
 use guiwright_driver::adapter::{
-    ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
-    FrameworkAdapter, InputEvent, PumpOutcome, SemAction,
+    ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline, FrameRef,
+    FrameStamp, FrameworkAdapter, InputEvent, PumpOutcome, SemAction,
 };
 use guiwright_inspect::overlay::OverlayPlan;
 
@@ -62,6 +66,22 @@ pub struct EguiAdapter {
     /// every pass while a session is on (painter layer after the app
     /// closure — the §13 "egui: painter layer after the pass" path).
     overlay: Option<OverlayPlan>,
+    /// The §4.1 pixel path (m77): the headless wgpu backend, probed once.
+    pixels: PixelProbe,
+    /// The last presented frame's stamp (the pump's, or a fresh render's).
+    last_stamp: Option<FrameStamp>,
+}
+
+/// One cached pixel frame: its presented stamp, physical size, buffer.
+type CapturedFrame = (FrameStamp, (u32, u32), Arc<[u8]>);
+
+/// The lazily probed pixel backend. A GPU-less host caches the probe
+/// failure and every pixel row answers [`AdapterError::Unsupported`] (the
+/// masonry precedent); a GPU host renders once per pass (§15.4).
+enum PixelProbe {
+    Unprobed,
+    Failed(String),
+    Ready(Box<pixels::PixelBackend>),
 }
 
 impl std::fmt::Debug for EguiAdapter {
@@ -90,8 +110,11 @@ impl EguiAdapter {
                     tree_update: true,
                     logical_snapshot: false,
                     input: true,
-                    last_frame: false,
-                    render_frame: false,
+                    // m77: the §4.1 pixel path — headless wgpu offscreen
+                    // render + readback; GPU-less hosts answer the rows
+                    // with AdapterError::Unsupported at runtime.
+                    last_frame: true,
+                    render_frame: true,
                     clock: true,
                 },
             },
@@ -104,6 +127,8 @@ impl EguiAdapter {
             frame_seq: 0,
             frame_step: 1.0 / 60.0,
             overlay: None,
+            pixels: PixelProbe::Unprobed,
+            last_stamp: None,
         }
     }
 
@@ -161,6 +186,41 @@ impl EguiAdapter {
     }
 }
 
+impl EguiAdapter {
+    /// Physical pixel size of the window (logical rect at scale 1.0).
+    /// The guarded conversion is the session's documented pattern: clamp
+    /// into range, then `u32::try_from` proves it.
+    fn physical_size(&self) -> (u32, u32) {
+        let px = |v: f32| u32::try_from(v.round().clamp(0.0, u32::MAX as f32) as i64).unwrap_or(0);
+        (px(self.screen_rect.width()), px(self.screen_rect.height()))
+    }
+
+    /// Probe the pixel backend once (the outcome is cached: a GPU-less
+    /// host never retries, §11).
+    fn ensure_pixels_probed(&mut self) {
+        if matches!(self.pixels, PixelProbe::Unprobed) {
+            self.pixels = match pixels::PixelBackend::probe() {
+                Ok(backend) => PixelProbe::Ready(Box::new(backend)),
+                Err(e) => {
+                    tracing::info!("egui headless pixels unavailable: {e}");
+                    PixelProbe::Failed(e)
+                }
+            };
+        }
+    }
+
+    /// The pixel cache for the current pass, ready to hand out.
+    fn cached_pixels(&self) -> Option<CapturedFrame> {
+        let stamp = self.last_stamp?;
+        let PixelProbe::Ready(backend) = &self.pixels else {
+            return None;
+        };
+        let physical = self.physical_size();
+        let rgba = backend.cached(self.ctx.cumulative_pass_nr(), physical)?;
+        Some((stamp, physical, rgba))
+    }
+}
+
 impl FrameworkAdapter for EguiAdapter {
     fn meta(&self) -> &AdapterMeta {
         &self.meta
@@ -184,19 +244,43 @@ impl FrameworkAdapter for EguiAdapter {
             .any(|v| v.repaint_delay.is_zero());
 
         // Scene digest (§10): xxh3 over tessellated geometry — a cheap
-        // visual-change signal without any pixel readback.
+        // visual-change signal (the scene-digest row: egui has the scene,
+        // so the hash semantics stay unchanged with pixels around).
         let shapes = std::mem::take(&mut output.shapes);
         let prims = self.ctx.tessellate(shapes, output.pixels_per_point);
-        // Hash-only pipeline at M0: textures are not applied to any atlas,
-        // so the delta is dropped explicitly (pixel capture lands in M1).
-        output.drop_without_applying_deltas();
         let hash = frame_digest::digest(&prims);
+        let stamp = FrameStamp {
+            seq: self.frame_seq,
+            hash,
+        };
+        self.last_stamp = Some(stamp);
+
+        // The §4.1 pixel path (m77): render this pass once, keyed by the
+        // cumulative pass number, so `last_frame` (video capture, §10) and
+        // `render_frame` (screenshots) hand out the frame's own pixels.
+        // GPU-less hosts probe once and stay hash-only — the masonry
+        // precedent for a graceful row.
+        let physical = self.physical_size();
+        let pass_nr = self.ctx.cumulative_pass_nr();
+        self.ensure_pixels_probed();
+        if let PixelProbe::Ready(backend) = &mut self.pixels {
+            match backend.render(
+                &output.textures_delta,
+                &prims,
+                physical,
+                output.pixels_per_point,
+            ) {
+                Ok(rgba) => backend.remember(pass_nr, physical, rgba),
+                Err(e) => tracing::warn!("egui pixel render failed: {e}"),
+            }
+        }
+        // Textures are either applied by the pixel path (above) or dropped
+        // when no pixel backend is present (hash-only hosts never apply
+        // deltas — there is no atlas to feed).
+        output.drop_without_applying_deltas();
 
         PumpOutcome {
-            frames: vec![guiwright_driver::adapter::FrameStamp {
-                seq: self.frame_seq,
-                hash,
-            }],
+            frames: vec![stamp],
             repaint_requested,
             quit_requested: false,
         }
@@ -204,6 +288,97 @@ impl FrameworkAdapter for EguiAdapter {
 
     fn tree_update(&mut self) -> Option<accesskit::TreeUpdate> {
         self.pending_tree_update.take()
+    }
+
+    /// Last presented frame (§6.1): the pump already rendered this pass's
+    /// pixels into the pass-keyed cache — no re-render (the masonry shape).
+    /// `None` before the first pump or on a GPU-less host.
+    fn last_frame(&mut self) -> Option<FrameRef> {
+        let (stamp, size, rgba) = self.cached_pixels()?;
+        Some(FrameRef {
+            stamp,
+            size,
+            pixels: Some(rgba),
+        })
+    }
+
+    /// Headless render on demand (§11): render-once keyed by the egui
+    /// cumulative pass number — a cache hit returns the pass's own pixels;
+    /// a miss runs one pass (a caller-requested size swaps the window rect
+    /// for that pass, the app relays out) and renders it. GPU-less hosts
+    /// answer `Unsupported` (the cached probe failure, the masonry
+    /// precedent).
+    fn render_frame(&mut self, size: Option<(u32, u32)>) -> Result<FrameRef, AdapterError> {
+        self.ensure_pixels_probed();
+        if let PixelProbe::Failed(reason) = &self.pixels {
+            tracing::debug!("egui render_frame unsupported: {reason}");
+            return Err(AdapterError::Unsupported(
+                "render_frame (no wgpu adapter on this host — install lavapipe, §11)",
+            ));
+        }
+
+        let physical = size.unwrap_or_else(|| (self.physical_size().0, self.physical_size().1));
+        let pass_nr = self.ctx.cumulative_pass_nr();
+        if let PixelProbe::Ready(backend) = &self.pixels {
+            if let Some(rgba) = backend.cached(pass_nr, physical) {
+                let stamp = self.last_stamp.unwrap_or(FrameStamp {
+                    seq: self.frame_seq,
+                    hash: 0,
+                });
+                return Ok(FrameRef {
+                    stamp,
+                    size: physical,
+                    pixels: Some(rgba),
+                });
+            }
+        }
+
+        // A fresh pass for the cache miss. A caller-requested size runs the
+        // pass with the matching window rect; the adapter's own rect is
+        // restored afterwards (the pump keeps its size).
+        let mut output = match size {
+            Some(_) => {
+                let restored = self.screen_rect;
+                self.screen_rect = egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(
+                        f32::from(u16::try_from(physical.0).unwrap_or(u16::MAX)),
+                        f32::from(u16::try_from(physical.1).unwrap_or(u16::MAX)),
+                    ),
+                );
+                let output = self.run_pass();
+                self.screen_rect = restored;
+                output
+            }
+            None => self.run_pass(),
+        };
+        let shapes = std::mem::take(&mut output.shapes);
+        let prims = self.ctx.tessellate(shapes, output.pixels_per_point);
+        let hash = frame_digest::digest(&prims);
+        let pass_nr = self.ctx.cumulative_pass_nr();
+        let mut rgba = None;
+        if let PixelProbe::Ready(backend) = &mut self.pixels {
+            let rendered = backend
+                .render(
+                    &output.textures_delta,
+                    &prims,
+                    physical,
+                    output.pixels_per_point,
+                )
+                .map_err(AdapterError::Internal)?;
+            backend.remember(pass_nr, physical, rendered.clone());
+            rgba = Some(rendered);
+        }
+        let stamp = FrameStamp {
+            seq: self.frame_seq,
+            hash,
+        };
+        self.last_stamp = Some(stamp);
+        Ok(FrameRef {
+            stamp,
+            size: physical,
+            pixels: rgba,
+        })
     }
 
     fn act(
