@@ -34,6 +34,11 @@ pub enum PlatformEvent {
         dy: f64,
     },
     Keyboard(KeyEvent),
+    /// Text commit (the m79 fill path: the runner translates it to one
+    /// `Key::Character` `KeyDown`, the upstream `write_text` shape).
+    TextInput {
+        text: String,
+    },
 }
 
 /// Translate a driver input into the platform vocabulary. Total over the
@@ -66,8 +71,10 @@ pub fn translate(
             })
         }
         InputEvent::TextInput { text } => {
-            // Text commits as per-char key sequences (freya has no IME
-            // text event on the testing harness; §4.3 keyboard fidelity).
+            // Text commits as one character-key event (freya has no IME
+            // text event on the testing harness; the §4.3 keyboard
+            // fidelity rides raw Keyboard events — an empty commit is a
+            // no-op up-phase).
             let mut chars = text.chars();
             let Some(first) = chars.next() else {
                 return Ok(PlatformEvent::Keyboard(crate::keys::KeyEvent {
