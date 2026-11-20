@@ -8,6 +8,11 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **proto:** The single-node identity describe read carries the identity row at handle width
+- **proto:** The client seam's describe_identity row
+- **driver:** The single-node identity describe arm at the boundary
+- **cli:** The REPL describe row's description fact
+- **clients:** The schema tables and codec carry the single-node identity read's variants
 - **proto:** The describe-all identity read carries the description fact
 - **proto:** The expect tracker's description kind over the identity rows
 - **proto:** The client seam's expect_description row
@@ -18,6 +23,11 @@ Commits](https://www.conventionalcommits.org).
 - **clients:** The schema tables and codec carry the identity read's variants
 
 ### Documentation
+- **clients:** The describeIdentity method mirrors the m66 row
+- The m67 ts describe-identity milestone record
+- The m66 describe-identity-read milestone record
+- The m66 row and the record range
+- **clients:** Re-vendor the published GWP schema
 - **clients:** The description assertions mirror the m64 rows
 - The m65 ts description assertions milestone record
 - The m64 describe-all identity milestone record
