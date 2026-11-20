@@ -16,9 +16,12 @@
 //!   press→sync→move→release ordering").
 //! * [`platform`] — the [`InputEvent`] → `PlatformEvent` vocabulary.
 //!
-//! The `freya` feature adds [`runner`]: the thin `TestingRunner` glue.
-//! It is feature-gated because the framework stack (software Skia) must
-//! not leak into builds that do not ask for it (§18).
+//! The `freya` feature adds [`runner`]: the real `TestingRunner` glue —
+//! [`runner::FreyaTestingHarness`] owns a live runner and answers the
+//! [`runner::TestingSeam`] vocabulary from its verified public surface
+//! (bound at m79; the CI `adapter-freya` job runtime-tests it). It is
+//! feature-gated because the framework stack (software Skia) must not
+//! leak into builds that do not ask for it (§18).
 //!
 //! [`FrameworkAdapter`]: guiwright_driver::adapter::FrameworkAdapter
 //! [`InputEvent`]: guiwright_driver::adapter::InputEvent
