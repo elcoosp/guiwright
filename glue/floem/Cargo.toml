@@ -1,0 +1,106 @@
+# The floem glue workspace (architecture §4.7, §17 rows 6, m80).
+#
+# Its own workspace root, **excluded from the main workspace** by the
+# recorded floem constraint (§4.7 + the guiwright-adapter-floem crate
+# docs): floem 0.2.0 on crates.io predates the `HeadlessHarness` (the §4.7
+# recon cites `src/headless.rs:101` at `lapce/floem@1351ffb`, post-0.2.0
+# main), so the binding must ride a git revision — and the main workspace
+# must never carry that graph anyway (floem's Linux deps pull the gtk
+# menu stack through `muda`, the winit fork `floem-winit`, and the
+# understory git family; §5.3 "the default workspace build must never
+# require" applies here the same way it does for gpui). This workspace
+# carries the real `floem` graph; the main workspace carries none of it.
+# The glue path-depends on the main workspace's framework-free engine
+# (`guiwright-adapter-floem`), `guiwright-driver` and `guiwright-core`.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "guiwright-adapter-floem-glue"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elcoosp/guiwright"
+description = "Guiwright Floem harness glue (architecture §4.7, m80): FrameworkAdapter over the real lapce/floem HeadlessHarness — TestRoot boot, dispatch_event input with real hit-testing, ViewId::get_visual_rect geometry, tiny-skia offscreen PaintState pixels — driving a real floem counter+form app through Session"
+
+[dependencies]
+guiwright-adapter-floem = { path = "../../crates/guiwright-adapter-floem" }
+guiwright-driver = { path = "../../crates/guiwright-driver" }
+accesskit = "0.25.2"
+thiserror = "2.0.21"
+# The frame digest (§10 "hash = xxh3 of a scene/pixel digest") — the same
+# pinned hashing stack the main workspace rides.
+twox-hash = { version = "2.1.5", default-features = false, features = [
+    "std",
+    "xxhash3_64",
+] }
+
+# The framework stack this workspace exists to carry: the exact revision
+# the §4.7 recon cites for the HeadlessHarness (`src/headless.rs:101` at
+# `lapce/floem@1351ffb`, "fix: forward post_paint through Box<dyn View>
+# (#1089)"), pinned per the §18 churn-mitigation rule (semver-exempt
+# internals → pinned per release train). The renderer features stay off:
+# the headless `WindowHandle` never initializes a GPU `PaintState`
+# (`window/handle.rs` `new_headless` — "a paint state that will never
+# initialize"), so no wgpu/skia renderer activation is needed for the
+# tree/input contract; pixels come from the engine's tiny-skia
+# `PaintState` fed by real view geometry (§4.7 contribution 2's
+# driver-side half). `editor` stays on: `text_input` rides the editor
+# buffer surface it documents as its advanced path. `vger` stays on
+# because floem's `paint/renderer.rs` imports `floem_vger_renderer`
+# unconditionally (E0432 without the feature) — the vger renderer
+# compiles (wgpu is already a hard dep of floem itself) and the headless
+# harness never initializes it at runtime.
+floem = { git = "https://github.com/lapce/floem", rev = "1351ffb", default-features = false, features = [
+    "editor",
+    "serde",
+    "vger",
+] }
+floem_reactive = { git = "https://github.com/lapce/floem", rev = "1351ffb" }
+# `ViewId`'s opaque-handle conversion (`KeyData::as_ffi`) — the engine's
+# `u64` view identity (§8.2 ABA guards) rides it.
+slotmap = "1.0"
+# The ui-events vocabulary floem's `Event` carries (`Event::Pointer`
+# / `Event::Key`): the glue's key mapping constructs `KeyboardEvent`s.
+ui-events = "0.3.0"
+
+[dev-dependencies]
+guiwright-core = { path = "../../crates/guiwright-core" }
+criterion = { version = "0.8.2", default-features = false, features = [
+    "cargo_bench_support",
+] }
+
+[[bench]]
+name = "harness"
+harness = false
+
+[lints]
+# Mirrors the main workspace lints table (§17 policy) — this crate is its
+# own workspace root and cannot inherit, so the policy rides here with
+# the same documented carve-outs. `unsafe_code` rides `deny` (the floem
+# graph carries framework-internal unsafe the same way the slint
+# `include_modules!` expansion does); the hand-written glue keeps zero
+# unsafe and zero #[allow] attributes.
+rust.unsafe_code = "deny"
+rust.missing_debug_implementations = "allow"
+clippy.all = { level = "warn", priority = -1 }
+clippy.pedantic = { level = "warn", priority = -1 }
+# The adapter/glue surface repeats module names by design (§4.7 vocabulary
+# mirrors `Event`/`KeyboardEvent` names).
+clippy.module_name_repetitions = "allow"
+# Quantization paths convert rounded-and-clamped floats to their integer
+# domain by design (the §10 pixel ramp); Rust has no TryFrom float→int.
+clippy.cast_possible_truncation = "allow"
+clippy.cast_precision_loss = "allow"
+# The same guarded conversions: headless surface sizes are window px
+# (non-negative by construction, clamped at the use site) cast into the
+# tiny-skia pixel domain.
+clippy.cast_sign_loss = "allow"
+clippy.missing_errors_doc = "allow"
+clippy.missing_panics_doc = "allow"
+
+[profile.bench]
+debug = true
