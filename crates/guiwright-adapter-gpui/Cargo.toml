@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Guiwright Level-1/hybrid adapter engine for GPUI (architecture §4.5, M3): a11y-hybrid activation model, PlatformInput mapping with the VisualTestContext keystroke vocabulary, test-support clock plan, run_in runner-context contract and strided frame digests; the app glue runs downstream (gpui 0.2.2's platform stack needs system libs — recorded constraint)"
 
 [dependencies]
