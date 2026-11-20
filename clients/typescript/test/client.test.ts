@@ -365,11 +365,15 @@ test("the bulk reads derive the kit source orders from the describe-all rows (M4
   }
 });
 
-/** The m67 single-node identity describe server: handshake, then the
- * DescribeIdentity request (variant 21) is answered with the blessed
- * `described_identity_install_button` frame — the real Rust server's
- * m66 reply, replayed byte-for-byte (the m41 harness shape). */
-function startDescribeIdentityServer(replyBody: Uint8Array): Promise<{
+/** The m67/m69 single-node identity describe server: handshake, then the
+ * named request variant (21 = DescribeIdentity, m66; 22 =
+ * DescribeIdentityState, m68) is answered with the blessed frame — the
+ * real Rust server's reply, replayed byte-for-byte (the m41 harness
+ * shape). */
+function startDescribeIdentityServer(
+  replyBody: Uint8Array,
+  serveVariant: number,
+): Promise<{
   port: number;
   close: () => void;
 }> {
@@ -401,8 +405,8 @@ function startDescribeIdentityServer(replyBody: Uint8Array): Promise<{
           reply(enc.finish());
           return;
         }
-        if (variant === 21) {
-          // DescribeIdentity → the blessed DescribedIdentity row.
+        if (variant === serveVariant) {
+          // The named identity/state read → the blessed reply row.
           reply(replyBody);
           return;
         }
@@ -444,7 +448,7 @@ test("describeIdentity reads the identity row at handle width (m66/m67)", async 
     (v: { name: string }) => v.name === "described_identity_install_button",
   );
   const frame = hexToBytes(described.frame_hex);
-  const server = await startDescribeIdentityServer(frame.subarray(4));
+  const server = await startDescribeIdentityServer(frame.subarray(4), 21);
   try {
     const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
     await client.handshake("client.test/0.1");
@@ -460,6 +464,41 @@ test("describeIdentity reads the identity row at handle width (m66/m67)", async 
     assert.deepEqual(row.bounds, [16.0, 204.0, 136.0, 236.0]);
     assert.equal(row.description, "Installs the latest build");
     assert.equal(row.name, "Install");
+
+    await client.close();
+  } finally {
+    server.close();
+  }
+});
+
+test("describeIdentityState reads the identity row's state facts (m68/m69)", async () => {
+  // The golden file is the blessed cross-language contract: the m68
+  // vector is what a real Rust server answers DescribeIdentityState
+  // with — the M64 row's fields plus the state three for the echoed
+  // handle (the mixed checkbox: the mixed state is its own vocabulary
+  // word, never an Option).
+  const golden = JSON.parse(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "golden.json"), "utf8"),
+  );
+  const described = golden.responses.find(
+    (v: { name: string }) => v.name === "described_identity_state_mixed_checkbox",
+  );
+  const frame = hexToBytes(described.frame_hex);
+  const server = await startDescribeIdentityServer(frame.subarray(4), 22);
+  try {
+    const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+    await client.handshake("client.test/0.1");
+
+    const row = await client.describeIdentityState(
+      { kind: "accesskit", tree: "01".repeat(16), node: 9 },
+      0,
+    );
+    assert.equal(row.kind, "described_identity_state");
+    assert.equal(row.role, "CheckBox");
+    assert.equal(row.name, "Partially installed");
+    assert.equal(row.checked, "mixed", "the tri-state rides as its own word");
+    assert.equal(row.focused, true, "the focused fact rides beside the row");
+    assert.equal(row.enabled, true, "the enabled fact rides beside the row");
 
     await client.close();
   } finally {
