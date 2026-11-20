@@ -44,6 +44,17 @@ jobs:
       - name: Test suite (--locked)
         run: cargo test --workspace --locked
 
+      # The publishability gate: cargo publish --dry-run across the whole
+      # workspace, verification ON. The packaged family re-resolves
+      # against the LOCAL members, so this proves packaging, metadata and
+      # the version graph for all 18 crates in dependency order before
+      # any release artifact is cut. (Per-crate dry-runs against the
+      # crates.io index only resolve once the rc.1 family's first
+      # publish lands; a real token-driven publish then walks the same
+      # order the justfile's `topo` carries.)
+      - name: Publish dry-run (workspace, verification on)
+        run: cargo publish --workspace --dry-run --locked
+
       - name: Release notes for this tag
         run: git-cliff --latest --strip header > RELEASE_NOTES.md
 
