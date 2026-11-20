@@ -27,6 +27,8 @@ import {
 import { CountTracker, HAVE_COUNT_STATE, type CountCompare } from "./count.ts";
 import {
   type ClockCmd,
+  type DescribedIdentityNode,
+  type DescribedIdentityStateNode,
   type DescribedNode,
   type EventKind,
   type EventV1,
@@ -363,6 +365,32 @@ export class GwpClient {
     const resp = await this.request({ kind: "describe_identity", node, generation });
     if (resp.kind !== "described_identity")
       throw new Error(`expected DescribedIdentity, got ${resp.kind}`);
+    return resp;
+  }
+
+  /** The single-node identity-state describe read over the wire (m68/m69
+   * — the m67 record's named standing gap, the Rust `ClientConn::
+   * describe_identity_state` mirrored): one node's facts — the identity
+   * four, the accessible description plus the state three (focused /
+   * enabled / checked) — for a handle the client already holds (a
+   * `resolveAll()` row, a hit row, a dump row: the dump-row rule), one
+   * round trip instead of one question per assertion. The M36
+   * `describe()` handle pair rides in and the M68 identity-state row
+   * rides out (the m64 row-widening rule's third link);
+   * handle-addressed, so no window scope applies; a stale or unknown
+   * handle rejects with the typed `error` code the action on the same
+   * handle would meet. A driver older than m68 cannot decode the
+   * appended request at all (the append-only cost every appended domain
+   * has carried since M3), so there is no fallback derivation (the m41
+   * fail-fast rule). */
+  async describeIdentityState(
+    node: NodeKey,
+    generation: number,
+  ): Promise<DescribedIdentityStateNode> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "describe_identity_state", node, generation });
+    if (resp.kind !== "described_identity_state")
+      throw new Error(`expected DescribedIdentityState, got ${resp.kind}`);
     return resp;
   }
 
