@@ -556,3 +556,11 @@ p95_us = 6000
 notes = "the m59 client seam's count-assertion rows (the kit's to_have_count family — the M22 exact form + the M25 comparators — over any door): one ClientConn::expect_count satisfied on entry over the embedded door — the subscribe round-trip, the resolve-all entry evaluation (the resolve_all_wire round-trip shape with the CountMatch comparison on top) and the unsubscribe cleanup; the whole-match-set floor satisfies on the first row set, so no wake and no re-read ride this number (the event-driven cost is the wire_event_delivery row's); a client-side composition of existing domains, no wire change"
 m0_measurable = true
 sample = "client_count_assert"
+
+[[budget]]
+id = "iced_tree_readback"
+name = "Iced tree read-back (one full §4.6 dump)"
+p50_us = 2000
+p95_us = 9000
+notes = "one Emulator update + Task::widget walk + report fold on the §4.6 read-back (m76); renderer-bound, not CPU-bound — the Emulator owns the tiny-skia device, so the number measures the harness path, not the renderer; design target until the iced runtime matrix lands, then enforced like the other framework rows"
+m0_measurable = false
