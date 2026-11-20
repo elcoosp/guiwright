@@ -83,7 +83,7 @@ harness = false
 #
 # unsafe_code rides `deny`, not the main table's `forbid`: the slint
 # `include_modules!` expansion (the compiled `counter_form.slint`, built
-# by build.rs into OUT_DIR) carries its own `#[allow(unsafe_code)]` for
+# by build.rs into OUT_DIR) carries its own `allow(unsafe_code)` opt-in for
 # the generated vtable macros — under `forbid` those attributes are hard
 # errors (E0453). `deny` keeps the same practical guarantee for the
 # hand-written glue (the zero-`#[allow]` gate in the repo's hand-off
