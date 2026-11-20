@@ -611,6 +611,49 @@ try {
     "✓ describeIdentityState: the state three at handle width — door healthy (m68/m69)",
   );
 
+  // --- the set-width identity-state describe over the door (m70/m71) ---
+  // The m68/m69 records' named standing gap ("no state facts at *set*
+  // width"), mirrored on the TS client (the m45/m60/m63/m65/m67/m69
+  // one-milestone-per-surface pattern): the describeAll() walk payload
+  // rides in, `describeAllIdentityState()` answers the m68 row per
+  // match, document order — one round trip instead of one
+  // `describeIdentityState()` per row, the tri-state riding per row and
+  // an empty set answering the honest empty list (the m30 rule).
+  const stateRows = await client.describeAllIdentityState({
+    kind: "role",
+    role: "CheckBox",
+    name: null,
+  });
+  assert.equal(stateRows.length, 3, "the demo's checkbox trio rides one walk");
+  assert.equal(stateRows[0].role, "CheckBox", "the m68 row rides per match");
+  assert.deepEqual(
+    stateRows.map((row) => row.checked),
+    ["checked", "unchecked", "mixed"],
+    "the tri-state rides per row in document order",
+  );
+  assert.ok(
+    stateRows.every((row) => row.enabled),
+    "the trio's checkboxes are live — a total fact per row",
+  );
+  const narrowedState = await client.describeAllIdentityState({
+    kind: "role",
+    role: "Button",
+    name: { text: "Confirm", exact: true, ignore_case: true },
+  });
+  assert.equal(narrowedState.length, 1, "the narrowed walk answers the one match");
+  assert.equal(narrowedState[0].enabled, false, "the Disabled flag reads as enabled: false");
+  assert.equal(narrowedState[0].checked, "not_checkable", "a button exposes no checked state");
+  const emptyState = await client.describeAllIdentityState({
+    kind: "role",
+    role: "CheckBox",
+    name: { text: "No such toggle", exact: true, ignore_case: true },
+  });
+  assert.deepEqual(emptyState, [], "the empty set is the answer, never an error");
+  await client.ping();
+  console.log(
+    "✓ describeAllIdentityState: the state three at set width — door healthy (m70/m71)",
+  );
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
