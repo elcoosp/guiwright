@@ -654,6 +654,132 @@ try {
     "✓ describeAllIdentityState: the state three at set width — door healthy (m70/m71)",
   );
 
+  // --- the state assertions over the door (m73/m75) ---
+  // The kit's `to_be_checked` / `to_be_enabled` / `to_be_focused`
+  // vocabulary mirrored on the TS client (the m45/m60/m63/m65/m67/m69/m71
+  // one-milestone-per-surface pattern) over the appended
+  // `describeAllIdentityState()` re-reads: the m68 four-way word demanded
+  // exactly (a mixed checkbox is not an unchecked one, a not-checkable
+  // role answering the total fact), the enabled boolean both ways, the
+  // focus riding the seeded window root, and the typed expiry naming
+  // `be checked` and the word the last evaluation found.
+  const checkedAnswer = await client.expectChecked(
+    { kind: "role", role: "CheckBox", name: { text: "Notifications", exact: true, ignore_case: true } },
+    "checked",
+    2000,
+  );
+  assert.equal(checkedAnswer.checked, "checked", "the fact the assertion speaks");
+  assert.equal(checkedAnswer.name, "Notifications", "the m68 row rides beside it");
+  assert.equal(
+    (await client.expectChecked(
+      { kind: "role", role: "CheckBox", name: { text: "Dark mode", exact: true, ignore_case: true } },
+      "unchecked",
+      2000,
+    )).checked,
+    "unchecked",
+    "the unchecked word answers its checkbox",
+  );
+  const mixedAnswer = await client.expectChecked(
+    { kind: "role", role: "CheckBox", name: { text: "Partially installed", exact: true, ignore_case: true } },
+    "mixed",
+    2000,
+  );
+  assert.equal(mixedAnswer.checked, "mixed", "the tri-state demanded exactly");
+  const notCheckableAnswer = await client.expectChecked(
+    { kind: "role", role: "Button", name: { text: "Save", exact: true, ignore_case: true } },
+    "not_checkable",
+    2000,
+  );
+  assert.equal(notCheckableAnswer.checked, "not_checkable", "the total fact, never an error");
+  assert.equal(
+    (await client.expectEnabled(
+      { kind: "role", role: "CheckBox", name: { text: "Notifications", exact: true, ignore_case: true } },
+      true,
+      2000,
+    )).enabled,
+    true,
+    "the enabled fact answers",
+  );
+  assert.equal(
+    (await client.expectEnabled(
+      { kind: "role", role: "Button", name: { text: "Confirm", exact: true, ignore_case: true } },
+      false,
+      2000,
+    )).enabled,
+    false,
+    "the disabled fact answers",
+  );
+  const windowFocusAnswer = await client.expectFocused(
+    { kind: "role", role: "Window", name: { text: "Test App", exact: true, ignore_case: true } },
+    2000,
+  );
+  assert.ok(windowFocusAnswer.focused, "the seeded focus answers the window row");
+  await assert.rejects(
+    () =>
+      client.expectChecked(
+        { kind: "role", role: "CheckBox", name: { text: "Notifications", exact: true, ignore_case: true } },
+        "unchecked",
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "be checked", "the static state word");
+      assert.match(
+        timeout.lastEvaluation,
+        /checked is "checked", expected "unchecked"/,
+        "both sides ride the line",
+      );
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      client.expectEnabled(
+        { kind: "role", role: "CheckBox", name: { text: "Notifications", exact: true, ignore_case: true } },
+        false,
+        200,
+      ),
+    (err: unknown) => {
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "be enabled", "the static state word");
+      assert.match(timeout.lastEvaluation, /enabled is true, expected false/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      client.expectFocused(
+        { kind: "role", role: "CheckBox", name: { text: "Notifications", exact: true, ignore_case: true } },
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "be focused", "the static state word");
+      assert.match(timeout.lastEvaluation, /focused is false, expected true/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () =>
+      client.expectChecked(
+        { kind: "test_id", id: "ghost" },
+        "checked",
+        200,
+      ),
+    (err: unknown) => {
+      assert.match(
+        (err as GwpWaitTimeout).lastEvaluation,
+        /no match yet \(the set is empty\)/,
+        "the empty set stays pending",
+      );
+      return true;
+    },
+  );
+  await client.ping(); // the spent assertions left the door healthy
+  console.log("✓ expectChecked/expectEnabled/expectFocused: the state three + the typed expiry — door healthy (m73/m75)");
+
   // --- filtered tree dump: one subtree as data (M13) ---
   const under = await client.treeDumpUnder(
     { kind: "role", role: "Group", name: null },
