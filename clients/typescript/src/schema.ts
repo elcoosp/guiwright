@@ -54,6 +54,8 @@ export const RequestV1 = {
   DescribeAllIdentity: 20,
   /** §8.1 identity fact set at handle width (M66): the M36 handle pair in, the M64 identity row out — the description fact for one node, no scope, no timeout. */
   DescribeIdentity: 21,
+  /** §8.1 identity fact set plus the state facts at handle width (M68): the M36 handle pair in, the M68 identity-state row out — the state three for one node, no scope, no timeout. */
+  DescribeIdentityState: 22,
 } as const;
 
 export const ClockV1 = {
@@ -169,6 +171,8 @@ export const ResponseV1 = {
   DescribedAllIdentity: 23,
   /** §8.1 identity fact set at handle width (M66): the M64 row for the request's handle — the identity four plus the description fact. */
   DescribedIdentity: 24,
+  /** §8.1 identity row's state facts at handle width (M68): the M68 row for the request's handle — the identity four, the description fact plus the state three. */
+  DescribedIdentityState: 25,
 } as const;
 
 export const ErrorCode = {
@@ -309,6 +313,26 @@ export interface DescribedIdentityNode {
   description: string | null;
 }
 
+/** The checked-state fact's wire vocabulary (M68): AccessKit's
+ * tri-state beside the not-checkable fact — the m67 record's named
+ * standing gap, closed as a four-way word, never squeezed into
+ * `boolean | null` (a mixed checkbox is not an unchecked one). */
+export type CheckedState = "not_checkable" | "unchecked" | "checked" | "mixed";
+
+/** §8.1 identity row's state facts at handle width (M68): the
+ * `DescribedIdentityNode` fields plus the state three — the m67
+ * record's named standing gap, closed as the m64 row-widening rule's
+ * third link (the M64 rows stay byte-pinned; the widening rides its
+ * own domain). */
+export interface DescribedIdentityStateNode extends DescribedIdentityNode {
+  /** The focused fact: the node IS the tree's focus right now. */
+  focused: boolean;
+  /** The enabled fact: false = the AccessKit `Disabled` state flag set. */
+  enabled: boolean;
+  /** The checked tri-state beside the not-checkable fact. */
+  checked: CheckedState;
+}
+
 export type NodeKey =
   | { kind: "accesskit"; tree: string; node: number }  // tree = 32 hex chars (16 bytes)
   | { kind: "logical"; adapter: string; id: number };
@@ -399,7 +423,8 @@ export type GwpRequest =
   | { kind: "describe"; node: NodeKey; generation: number }
   | { kind: "describe_all"; selector: Selector }
   | { kind: "describe_all_identity"; selector: Selector }
-  | { kind: "describe_identity"; node: NodeKey; generation: number };
+  | { kind: "describe_identity"; node: NodeKey; generation: number }
+  | { kind: "describe_identity_state"; node: NodeKey; generation: number };
 
 export type Selector =
   | { kind: "role"; role: string; name: TextMatchV1 | null }
@@ -537,4 +562,5 @@ export type GwpResponse =
   | ({ kind: "described" } & DescribedNode)
   | { kind: "described_all"; rows: DescribedNode[] }
   | { kind: "described_all_identity"; rows: DescribedIdentityNode[] }
-  | ({ kind: "described_identity" } & DescribedIdentityNode);
+  | ({ kind: "described_identity" } & DescribedIdentityNode)
+  | ({ kind: "described_identity_state" } & DescribedIdentityStateNode);
