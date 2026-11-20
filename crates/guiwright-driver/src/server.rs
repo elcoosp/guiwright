@@ -845,6 +845,9 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::DescribeIdentityState(DescribeV1 { node, generation }) => {
             describe_identity_state_response(session, node, generation)
         }
+        RequestV1::DescribeAllIdentityState(DescribeAllV1 { selector }) => {
+            describe_all_identity_state_response(session, selector, window)
+        }
         RequestV1::Action {
             node,
             generation,
@@ -1110,6 +1113,37 @@ fn describe_all_identity_response<A: FrameworkAdapter>(
     match result {
         Ok(rows) => ResponseV1::DescribedAllIdentity {
             rows: rows.into_iter().map(described_identity_row).collect(),
+        },
+        Err(err) => error_response(&err),
+    }
+}
+
+/// The describe-all identity-state read over the wire (M70 — the
+/// m68/m69 records' named standing gap: "no state facts at *set* width:
+/// the `DescribeAllIdentity` rows stay identity-row shaped; a state-fact
+/// set widening lands when a consumer asks — the same append-only move,
+/// its own domain"): the same walk as the M39/M64 arms, the rows
+/// carrying the state three beside the identity row — the facts the kit
+/// assertion vocabulary answers one question at a time, one round trip
+/// instead of one `DescribeIdentityState` per row. The M64/M68 encodings
+/// stay byte-pinned (the widening is its own appended domain); snapshot
+/// semantics and window scoping are the `describe_all` arm's, unchanged,
+/// and the row mapping is the m68 single-node arm's one copy (the m64
+/// `described_row` factoring's rule — the set arm projects per row, it
+/// does not carry a second mapping).
+fn describe_all_identity_state_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    selector: SelectorV1,
+    window: Option<&str>,
+) -> ResponseV1 {
+    if let Err(err) = scoped_resolve(session, window) {
+        return error_response(&err);
+    }
+    let result = session.describe_all_state(&Selector::from(selector));
+    session.clear_resolve_scope();
+    match result {
+        Ok(rows) => ResponseV1::DescribedAllIdentityState {
+            rows: rows.into_iter().map(described_identity_state_row).collect(),
         },
         Err(err) => error_response(&err),
     }
