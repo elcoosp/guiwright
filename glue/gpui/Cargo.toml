@@ -1,0 +1,94 @@
+# The gpui glue workspace (architecture §4.5, §17 row 7, m80).
+#
+# Its own workspace root, **excluded from the main workspace** by the
+# recorded gpui constraint (§5.3, the guiwright-adapter-gpui crate docs):
+# gpui's Linux platform stack needs system libraries (xkbcommon, wayland)
+# a default build must never require, and the `test-support` feature the
+# harness rides exists only on the git source — crates.io `gpui` 0.2.2
+# ships no such feature (verified against the registry index: its feature
+# list is `inspector, leak-detection, macos-blade, runtime_shaders,
+# screen-capture, wayland, windows-manifest`). This workspace carries the
+# real zed graph; the main workspace carries none of it. The glue
+# path-depends on the main workspace's framework-free engine
+# (`guiwright-adapter-gpui`), `guiwright-driver` and `guiwright-core`.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "guiwright-adapter-gpui-glue"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elcoosp/guiwright"
+description = "Guiwright GPUI harness glue (architecture §4.5, m80): FrameworkAdapter over the real gpui test-support platform — TestDispatcher rounds, Window::dispatch_event input, real laid-out geometry via the framework's recorded debug bounds, painted-quad scene digest — driving a real gpui counter+form app through Session"
+
+[dependencies]
+guiwright-adapter-gpui = { path = "../../crates/guiwright-adapter-gpui" }
+guiwright-driver = { path = "../../crates/guiwright-driver" }
+accesskit = "0.25.2"
+thiserror = "2.0.21"
+# gpui's element DSL speaks its own accesskit generation (zed's
+# workspace pins 0.24; the main workspace pins 0.25.2 for the driver
+# and engines) — aliased so both ride the same graph without unifying:
+# the app's `role(...)` calls use this one, the synthesized
+# `LogicalTreeDiff` uses the main workspace's.
+accesskit-gpui = { package = "accesskit", version = "0.24" }
+# The frame digest (§10 "hash = xxh3 of a scene/pixel digest") — the same
+# pinned hashing stack the main workspace rides.
+twox-hash = { version = "2.1.5", default-features = false, features = [
+    "std",
+    "xxhash3_64",
+] }
+
+# The framework stack this workspace exists to carry. git-only by
+# necessity: the `test-support` feature (TestDispatcher, TestPlatform,
+# painted_quads, render_to_image) is defined on zed's source and absent
+# from every crates.io release (0.2.2 included). test-support itself
+# enables the `wayland` + `x11` Linux platform features — their system
+# libraries (xkbcommon, wayland) are this workspace's build-time
+# requirement, exactly the §5.3 constraint that keeps them out of the
+# main workspace.
+gpui = { git = "https://github.com/zed-industries/zed", default-features = false, features = [
+    "test-support",
+] }
+
+[dev-dependencies]
+guiwright-core = { path = "../../crates/guiwright-core" }
+criterion = { version = "0.8.2", default-features = false, features = [
+    "cargo_bench_support",
+] }
+
+[[bench]]
+name = "harness"
+harness = false
+
+[lints]
+# Mirrors the main workspace lints table (§17 policy) — this crate is its
+# own workspace root and cannot inherit, so the policy rides here with
+# the same documented carve-outs. `unsafe_code` rides `deny` (the gpui
+# graph carries framework-internal unsafe the same way the slint
+# expansion does); the hand-written glue keeps zero unsafe and zero
+# #[allow] attributes.
+rust.unsafe_code = "deny"
+rust.missing_debug_implementations = "allow"
+clippy.all = { level = "warn", priority = -1 }
+clippy.pedantic = { level = "warn", priority = -1 }
+# The adapter/glue surface repeats module names by design (§4.5
+# vocabulary mirrors `PlatformInput`/`Keystroke` names).
+clippy.module_name_repetitions = "allow"
+# Quantization paths convert rounded-and-clamped floats to their integer
+# domain by design (the §10 pixel ramp); Rust has no TryFrom float→int.
+clippy.cast_possible_truncation = "allow"
+clippy.cast_precision_loss = "allow"
+# The same guarded conversions: headless surface sizes are window px
+# (non-negative by construction, clamped at the use site) cast into the
+# pixel domain.
+clippy.cast_sign_loss = "allow"
+clippy.missing_errors_doc = "allow"
+clippy.missing_panics_doc = "allow"
+
+[profile.bench]
+debug = true
