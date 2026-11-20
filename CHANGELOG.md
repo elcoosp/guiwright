@@ -8,6 +8,10 @@ Commits](https://www.conventionalcommits.org).
 
 ## [Unreleased]
 ### Features
+- **clients:** The expectChecked, expectEnabled and expectFocused rows mirror the m73 seam
+- **clients:** The state assertions' consumer demo
+- **cli:** The REPL's assert state rows
+- **cli:** The state-assert rows' consumer demo
 - **proto:** The client seam's expect_checked, expect_enabled and expect_focused rows
 - **proto:** The state tracker evaluates the state three over the state walk
 - **kit:** The locator surface carries the identity-state reads
