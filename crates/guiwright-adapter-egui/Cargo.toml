@@ -18,6 +18,16 @@ thiserror.workspace = true
 tracing.workspace = true
 twox-hash.workspace = true
 guiwright-inspect.workspace = true
+# The §4.1 pixel path (m77): headless wgpu offscreen render + buffer
+# readback (the egui_kittest shape). wgpu already rides the workspace
+# graph through masonry's vello; egui_wgpu versions with egui.
+# wgpu 30 shares types with egui-wgpu (masonry's vello pins 26; the two
+# major versions coexist in the graph, each crate binding its own).
+egui_wgpu = { package = "egui-wgpu", version = "0.37" }
+wgpu = "30"
+# The probe's adapter/device requests are futures (wgpu 26+): pollster
+# is the wgpu-ecosystem block_on for sync adapters.
+pollster = "0.4"
 
 [lints]
 workspace = true
