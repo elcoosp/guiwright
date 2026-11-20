@@ -248,6 +248,13 @@ impl GpuiAdapter {
         Ok(adapter)
     }
 
+    /// One introspection pass: the real scene draw folded into the
+    /// framework-recorded geometry digest (the boot fold's unit).
+    /// Public so the m80 bench can measure exactly one fold.
+    pub fn introspect_once(&mut self) -> u64 {
+        self.fold_pass().unwrap_or(0)
+    }
+
     /// The bounds the framework recorded for one named element at
     /// paint — real laid-out geometry, read through the public test
     /// surface (`VisualTestContext::debug_bounds`; dev/test builds
@@ -509,7 +516,7 @@ impl FrameworkAdapter for GpuiAdapter {
     }
 
     fn act(&mut self, node: NodeId, action: SemAction) -> Result<ActionOutcome, AdapterError> {
-        let (index, bounds) = self.facts_of(node)?;
+        let (_, bounds) = self.facts_of(node)?;
         let center = (
             bounds[0] + (bounds[2] - bounds[0]) / 2.0,
             bounds[1] + (bounds[3] - bounds[1]) / 2.0,
