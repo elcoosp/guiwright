@@ -1,0 +1,35 @@
+# The downstream-glue gpui reference example (architecture §4.5, §17 row 7).
+#
+# Its own workspace root, like the repo's `glue/gpui` workspace: gpui's
+# Linux platform stack needs system libraries (xkbcommon, wayland) a
+# default build must never require (§5.3 — the recorded constraint the
+# engine crate's contract documents), and a system-dep-free reference has
+# to compile anywhere. This crate carries NO framework graph at all: the
+# gpui API surface the binding touches is **mirrored** (`src/mirror.rs`)
+# with the exact names and signatures the real `glue/gpui` harness rides
+# (`Window::dispatch_event(PlatformInput)`, `VisualTestContext`, the
+# `Entity` reads, `a11y_tree_update`), so the engine calls compile and run
+# identically against the mirrored types — the canonical dependency-free
+# binding proof the `guiwright-adapter-gpui` contract points to.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "guiwright-downstream-glue-gpui"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elcoosp/guiwright"
+description = "Downstream gpui glue reference example (architecture §4.5): FrameworkAdapter over the gpui-shaped mirror — dispatch_event input, per-frame a11y TreeUpdates through the engine's A11yHybrid activation model, test-support-gated pixels with strided xxh3 digests, foreground run_in seams — driving a counter app through Session"
+
+[dependencies]
+guiwright-adapter-gpui = { path = "../../../crates/guiwright-adapter-gpui" }
+guiwright-driver = { path = "../../../crates/guiwright-driver" }
+guiwright-core = { path = "../../../crates/guiwright-core" }
+accesskit = "0.25.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
