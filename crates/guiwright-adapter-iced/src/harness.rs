@@ -119,6 +119,12 @@ pub struct IcedAdapter<S: SimulatorSeam> {
     sim: S,
     pass_seq: u64,
     last_frame_hash: u64,
+    /// The §10 `last_frame` readback cache (m86): the pixels of the most
+    /// recent screenshot pass, keyed by the `pass_seq` they were
+    /// rendered at — the video recorder's per-stamp readback hits the
+    /// cache within one pump and re-renders only across passes (the
+    /// tiny-skia pass is CPU-only and side-effect-free, §15.4).
+    last_frame_cache: Option<(u64, std::sync::Arc<[u8]>, (u32, u32), u64)>,
     /// The §14 virtual-time ledger (M84): the Emulator's determinism
     /// machinery is the framework's clock primitive.
     clock_ledger: Option<Duration>,
@@ -140,7 +146,11 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
                     tree_update: false,
                     logical_snapshot: true,
                     input: true,
-                    last_frame: false,
+                    // §6.2 iced row: `last_frame` ✅ — the Emulator's
+                    // headless screenshot doubles as the readback path
+                    // (m86: the cached screenshot pass, no re-render
+                    // within a pass — the video recorder's pixel source).
+                    last_frame: true,
                     render_frame: true,
                     clock: true,
                 },
@@ -151,6 +161,7 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
             sim,
             pass_seq: 0,
             last_frame_hash: 0,
+            last_frame_cache: None,
             clock_ledger: None,
             clock_paused: false,
         }
@@ -293,25 +304,78 @@ impl<S: SimulatorSeam + 'static> FrameworkAdapter for IcedAdapter<S> {
         // The Emulator rasterizes at its boot viewport (the headless
         // window size is fixed at construction — §4.6).
         let _ = size;
-        let (width, height, rgba) = self.sim.screenshot()?;
-        let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(rgba);
-        let hash = {
-            use std::hash::Hasher;
-            use std::time::Duration;
-            use twox_hash::xxhash3_64::Hasher as Xxh3;
-            let mut hasher = Xxh3::default();
-            hasher.write(&pixels);
-            hasher.finish()
-        };
+        let (pixels, size, hash) = self.screenshot_pass_cached()?;
         self.pass_seq += 1;
         Ok(FrameRef {
             stamp: FrameStamp {
                 seq: self.pass_seq,
                 hash,
             },
-            size: (width, height),
+            size,
             pixels: Some(pixels),
         })
+    }
+
+    /// The §10 `last_frame` readback (m86): the most recent presented
+    /// frame's pixels, without disturbing app state (§6.2 "last_frame
+    /// w/o re-render" — the Emulator's side-effect-free screenshot pass,
+    /// cached per pass). The video recorder reads this per frame stamp
+    /// (§10 "the trace recorder doubles as video").
+    fn last_frame(&mut self) -> Option<FrameRef> {
+        if let Some((seq, pixels, size, hash)) = self.last_frame_cache.as_ref() {
+            if *seq == self.pass_seq {
+                return Some(FrameRef {
+                    stamp: FrameStamp {
+                        seq: *seq,
+                        hash: *hash,
+                    },
+                    size: *size,
+                    pixels: Some(std::sync::Arc::clone(pixels)),
+                });
+            }
+        }
+        let (pixels, size, hash) = self.screenshot_pass_cached().ok()?;
+        Some(FrameRef {
+            stamp: FrameStamp {
+                seq: self.pass_seq,
+                hash,
+            },
+            size,
+            pixels: Some(pixels),
+        })
+    }
+}
+
+impl<S: SimulatorSeam> IcedAdapter<S> {
+    /// One side-effect-free screenshot pass, cached at the current
+    /// `pass_seq` (the m86 readback path shared by `render_frame` and
+    /// `last_frame`). The pixel digest is the §15.5 strided-surface
+    /// xxh3 — the same pinned hashing stack every adapter's frame path
+    /// rides.
+    fn screenshot_pass_cached(
+        &mut self,
+    ) -> Result<(std::sync::Arc<[u8]>, (u32, u32), u64), AdapterError> {
+        if let Some((seq, pixels, size, hash)) = self.last_frame_cache.as_ref() {
+            if *seq == self.pass_seq {
+                return Ok((std::sync::Arc::clone(pixels), *size, *hash));
+            }
+        }
+        let (width, height, rgba) = self.sim.screenshot()?;
+        let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(rgba);
+        let hash = {
+            use std::hash::Hasher;
+            use twox_hash::xxhash3_64::Hasher as Xxh3;
+            let mut hasher = Xxh3::default();
+            hasher.write(&pixels);
+            hasher.finish()
+        };
+        self.last_frame_cache = Some((
+            self.pass_seq,
+            std::sync::Arc::clone(&pixels),
+            (width, height),
+            hash,
+        ));
+        Ok((pixels, (width, height), hash))
     }
 }
 
@@ -370,6 +434,17 @@ mod tests {
         fn screen_size(&self) -> (f64, f64) {
             self.screen
         }
+        fn screenshot(&mut self) -> Result<(u32, u32, Vec<u8>), AdapterError> {
+            // A deterministic 4×2 raster (the §10 readback paths need
+            // genuine pixels — `last_frame`'s cache serves them, m86).
+            let mut rgba = Vec::with_capacity(4 * 2 * 4);
+            for y in 0..2_u32 {
+                for x in 0..4_u32 {
+                    rgba.extend_from_slice(&[x as u8 * 60, y as u8 * 90, 99, 255]);
+                }
+            }
+            Ok((4, 2, rgba))
+        }
     }
 
     fn make_adapter() -> IcedAdapter<ScriptedSim> {
@@ -404,7 +479,39 @@ mod tests {
         assert!(caps.logical_snapshot);
         assert!(caps.input);
         assert!(caps.render_frame, "the Emulator screenshot path (§11)");
+        assert!(
+            caps.last_frame,
+            "the cached screenshot readback (§6.2 iced row, m86)"
+        );
         assert!(caps.clock, "the §14 determinism-drain binding (M84)");
+    }
+
+    #[test]
+    fn last_frame_reads_back_the_presented_pixels() {
+        // §6.2 iced row + the §10 video source (m86): the readback
+        // serves real pixels at the boot viewport, and the pixel digest
+        // matches the on-demand render of the same view.
+        let mut adapter = make_adapter();
+        let deadline = FrameDeadline::within(std::time::Duration::from_millis(100));
+        let _ = adapter.pump(deadline);
+
+        let last = adapter.last_frame().expect("the readback has pixels");
+        assert!(last.pixels.is_some(), "the readback carries pixels");
+        assert!(last.size.0 > 0 && last.size.1 > 0, "the boot viewport");
+
+        // Cache discipline: the second readback within the same pass is
+        // the cached frame (byte-identical, same digest).
+        let again = adapter.last_frame().expect("cached readback");
+        assert_eq!(last.stamp.hash, again.stamp.hash, "same pixels");
+        assert_eq!(last.size, again.size, "same viewport");
+
+        // The on-demand render of the same view digests identically —
+        // the readback IS the presented frame (no stale pixels).
+        let rendered = adapter.render_frame(None).expect("render");
+        assert_eq!(
+            last.stamp.hash, rendered.stamp.hash,
+            "the readback digest matches the render"
+        );
     }
 
     #[test]
