@@ -355,7 +355,7 @@ impl Program for TickerApp {
         &self,
         _state: &Self::State,
     ) -> iced_test::futures::Subscription<Self::Message> {
-        iced_test::futures::subscription::time::every(Duration::from_millis(50))
+        iced_test::futures::backend::default::time::every(Duration::from_millis(50))
             .map(|_| TickMsg::Tick)
     }
 }
@@ -401,4 +401,36 @@ fn clock_fast_forward_completes_subscription_timers() {
         !session.resolve(&Selector::text("Ticks: 0")).is_ok(),
         "clock_fast_forward completed the subscription timer"
     );
+}
+
+// --- §12 m85: the trace end-to-end row --------------------------------
+
+/// The §12 pipeline over a real iced session (m85): the kit records the
+/// App's actions into a `gwtrace/v1` archive and `guiwright show-trace`
+/// renders the scrubber HTML — the iced adapter header and the recorded
+/// event vocabulary included.
+#[test]
+fn trace_archive_renders_through_show_trace() {
+    use guiwright_kit::App;
+
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let archive_path = dir.path().join("guiwright-iced-trace.zip");
+    let harness = EmulatorHarness::new(CounterForm, (480.0, 320.0)).expect("harness boots");
+    let adapter = guiwright_adapter_iced::emulator::embedded_adapter(harness, RoleRegistry::new());
+    let mut app = App::launch("iced_trace", adapter);
+    app.enable_trace(&archive_path);
+    app.get_by_role(accesskit::Role::Button, "Increment")
+        .click()
+        .expect("click Increment");
+
+    let archive = app.finish().expect("trace finalized");
+    assert_eq!(archive, archive_path, "the explicit path is honored");
+    let written = std::fs::metadata(&archive).expect("archive exists").len();
+    assert!(written > 0, "the archive is not empty ({written} bytes)");
+
+    let html = guiwright_cli::show_trace(&archive, None, false).expect("html rendered");
+    let rendered = std::fs::read_to_string(&html).expect("html written next to the archive");
+    assert!(rendered.contains("gwtrace"), "schema marker present");
+    assert!(rendered.contains("iced"), "adapter name in the header");
+    assert!(rendered.contains("click"), "the click event is in the HTML");
 }
