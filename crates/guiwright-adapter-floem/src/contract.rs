@@ -3,11 +3,13 @@
 //! This crate ships **framework-free** (the `guiwright-adapter-slint`
 //! precedent, §18): floem 0.2.0 on crates.io predates the
 //! `HeadlessHarness` (§4.7 recon cites `src/headless.rs:101` at
-//! `lapce/floem@1351ffb`, post-0.2.0 main), so the harness binding
-//! compiles downstream until the harness releases. The binding itself is
-//! small and fully specified here — [`FloemAdapterContract`] is the data
-//! shape a downstream glue implements, and the upstream patches are
-//! enumerated below (design details: `docs/m3-floem-contributions.md`).
+//! `lapce/floem@1351ffb`, post-0.2.0 main), so the harness binding lives
+//! downstream — it ships in the repo's `glue/floem` workspace since m80
+//! (riding the git revision above) and moves here only when the harness
+//! releases to crates.io. The binding itself is small and fully
+//! specified here — [`FloemAdapterContract`] is the data shape the glue
+//! implements, and the upstream patches are enumerated below (design
+//! details: `docs/m3-floem-contributions.md`).
 //!
 //! # Upstream patch 1 — `test_id(...)` decorator (§4.7 contribution 1a)
 //!
@@ -38,7 +40,22 @@
 //! // inspector `Capture` path uses, `Renderer::finish()`)
 //! ```
 //!
-//! # The downstream binding (once the harness releases)
+//! # The upstream fill blocker (m80, file-level evidence)
+//!
+//! The harness rides the same headless constraint the §4.7 recon left as
+//! a gap, now with file-level evidence: floem's `text_input` requests
+//! IME the moment it gains focus (`src/views/text_input.rs:1403`,
+//! `set_ime_allowed(true)` hard-coded), and the headless `MockWindow`
+//! rejects every IME request (`src/window/mock.rs:262`,
+//! `Err(ImeRequestError::NotSupported)`) — which
+//! `src/window/handle.rs:1270` unwraps into a panic (floem's own
+//! 40-file harness suite never focuses a `text_input`). The glue gates
+//! `SetValue` on `Role::TextInput` **before** the focus click and
+//! reports `AdapterError::Unsupported` carrying this evidence; the real
+//! fill sequence (focus click + real `KeyboardEvent`s) stays in the
+//! harness for the upstream fix.
+//!
+//! # The downstream binding (realized in `glue/floem`, m80)
 //!
 //! ```ignore
 //! pub struct FloemAdapter {
