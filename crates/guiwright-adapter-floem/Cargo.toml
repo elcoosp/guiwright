@@ -12,6 +12,9 @@ description = "Guiwright Level-2 adapter engine for Floem (architecture §4.7): 
 [dependencies]
 guiwright-core.workspace = true
 guiwright-driver.workspace = true
+# The §13 overlay plan vocabulary (`OverlayPlan` — the data the overlay
+# host's present hook translates into PaintOps, m86).
+guiwright-inspect.workspace = true
 accesskit.workspace = true
 thiserror.workspace = true
 twox-hash.workspace = true
