@@ -95,7 +95,7 @@ pub struct FreyaAdapter<S: TestingSeam> {
     /// The §10 `last_frame` readback cache (m86): the most recent
     /// rendered frame, keyed by the `pass_seq` it was rendered at — the
     /// video recorder's per-stamp readback hits the cache within a pass
-    /// and re-renders only across passes (the TestingRunner snapshot is
+    /// and re-renders only across passes (the `TestingRunner` snapshot is
     /// deterministic and side-effect-free, §15.4).
     last_frame_cache: Option<(u64, FrameRef)>,
     /// Laid-out bounds per accessibility id (the coordinate actions' target).
@@ -255,7 +255,7 @@ impl<S: TestingSeam> FreyaAdapter<S> {
     fn fill_at(&mut self, freya_id: u64, text: &str) -> Result<(), AdapterError> {
         let (x, y) = self.center_of(freya_id)?;
         self.click_at(x, y)?;
-        let clear = self.values.get(&freya_id).map(String::len).unwrap_or(0);
+        let clear = self.values.get(&freya_id).map_or(0, String::len);
         for _ in 0..clear {
             self.queue(PendingEvent::Keyboard(crate::keys::KeyEvent {
                 phase: crate::keys::KeyPhase::Down,
@@ -433,7 +433,7 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
         let image = guiwright_shot::codec::decode_png(&png)
             .map_err(|err| AdapterError::Internal(format!("freya snapshot decode: {err}")))?;
         let (width, height) = (image.width, image.height);
-        let mut rgba: Vec<u8> = image.rgba.into();
+        let mut rgba = image.rgba;
         // §13 present-time composition (M83): the overlay paints into the
         // frame the runner just rasterized — same engine, no extra pass.
         if let Some(plan) = &self.overlay_plan {
@@ -547,7 +547,7 @@ impl<T: 'static> FreyaTestingHarness<T> {
 }
 
 /// Map the mirror key vocabulary onto the real `keyboard_types::Key`
-/// (freya 0.5 rides keyboard_types: named keys live under `Key::Named`).
+/// (freya 0.5 rides `keyboard_types`: named keys live under `Key::Named`).
 fn real_key(key: &str) -> freya_testing::prelude::Key {
     use freya_testing::prelude::NamedKey;
     type Key = freya_testing::prelude::Key;
@@ -660,7 +660,7 @@ impl<T: 'static> TestingSeam for FreyaTestingHarness<T> {
             // `write_text` shape (the Input editor inserts the string).
             PlatformEvent::TextInput { text } => freya_testing::prelude::PlatformEvent::Keyboard {
                 name: KeyboardEventName::KeyDown,
-                key: freya_testing::prelude::Key::Character(text.into()),
+                key: freya_testing::prelude::Key::Character(text),
                 code: Code::Unidentified,
                 modifiers: Modifiers::default(),
             },
@@ -713,7 +713,7 @@ impl<T: 'static> TestingSeam for FreyaTestingHarness<T> {
 
     /// The runner context is the hook's root context (`state: T`) — the
     /// app state the reactive graph consumes. The task runs on the same
-    /// thread the harness owns (TestingRunner is a sync, single-threaded
+    /// thread the harness owns (`TestingRunner` is a sync, single-threaded
     /// harness — no executor hop, the §5.1 waker row degenerates).
     fn run_in(&mut self, task: SeamTask) -> Result<String, AdapterError> {
         task(&mut self.state as &mut dyn std::any::Any).map_err(AdapterError::Internal)
