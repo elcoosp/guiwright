@@ -215,6 +215,7 @@ dependencies = [
  "accesskit",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "thiserror",
  "twox-hash",
 ]
@@ -237,6 +238,7 @@ dependencies = [
  "guiwright-adapter-gpui",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "tempfile",
 ]
 
