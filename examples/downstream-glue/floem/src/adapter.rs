@@ -19,11 +19,12 @@ use accesskit::NodeId;
 use guiwright_adapter_floem::clock::{FloemClockStep, plan as clock_plan};
 use guiwright_adapter_floem::input::{FloemButton, FloemEvent, translate};
 use guiwright_adapter_floem::paint::{Color, PaintOp, PaintState};
-use guiwright_adapter_floem::{FloemAdapterContract, FloemLogicalTree, TestIdRegistry, ViewReport};
+use guiwright_adapter_floem::{FloemAdapterContract, FloemLogicalTree, OverlayHost, TestIdRegistry, ViewReport};
 use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, ClockCmd, ClockState, FrameDeadline, FrameRef,
     FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PumpOutcome, SemAction,
 };
+use guiwright_inspect::overlay::OverlayPlan;
 use twox_hash::XxHash3_64;
 
 use crate::mirror::{self, Event, HeadlessHarness, MirrorView, TestRoot};
@@ -53,6 +54,13 @@ pub struct FloemDownstreamGlue {
     /// The last introspection pass' diff, delivered to the session on the
     /// next `logical_snapshot` call (Level-2 polling, §6.1).
     pending_diff: Option<LogicalTreeDiff>,
+    /// The §13 overlay binding (m86): the active plan + the mock overlay
+    /// host — the present-path hook the real floem surface routes
+    /// (`WindowHandle` post-paint → PaintOps, mirrored per contract.rs).
+    /// `render_frame` extends its scene with the host's ops, so the
+    /// overlay composites onto the presented pixels at present time.
+    overlay_plan: Option<OverlayPlan>,
+    overlay_host: OverlayHost,
     pointer: (f64, f64),
     pass_seq: u64,
     virtual_ms: u64,
@@ -93,6 +101,8 @@ impl FloemDownstreamGlue {
             size,
             facts: HashMap::new(),
             pending_diff: None,
+            overlay_plan: None,
+            overlay_host: OverlayHost::new(),
             pointer: (size.0 / 2.0, size.1 / 2.0),
             pass_seq: 0,
             virtual_ms: 0,
@@ -100,6 +110,12 @@ impl FloemDownstreamGlue {
         };
         me.introspect_once();
         Ok(me)
+    }
+
+    /// The §13 draw-call evidence (the adapters' `take_paint_log` shape):
+    /// one entry per overlay draw since the last drain.
+    pub fn take_overlay_paint_log(&mut self) -> Vec<String> {
+        self.overlay_host.take_paint_log()
     }
 
     /// One introspection pass: the `ViewId` walk folded into the engine.
@@ -324,7 +340,14 @@ impl FrameworkAdapter for FloemDownstreamGlue {
             self.paint = PaintState::new(w, h)
                 .map_err(|err| AdapterError::Internal(format!("floem paint state: {err}")))?;
         }
-        self.paint.paint(&self.paint_ops());
+        // One scene, app + overlay (§13 present-time composition, m86):
+        // the overlay host's ops paint after the app's own, so the
+        // outline + badges land on top of the presented pixels.
+        let mut ops = self.paint_ops();
+        if let Some(plan) = self.overlay_plan.as_ref() {
+            ops.extend(self.overlay_host.present(plan));
+        }
+        self.paint.paint(&ops);
         Ok(FrameRef {
             stamp: FrameStamp {
                 seq: self.pass_seq,
@@ -333,6 +356,21 @@ impl FrameworkAdapter for FloemDownstreamGlue {
             size: (w, h),
             pixels: Some(Arc::from(self.paint.rgba())),
         })
+    }
+
+    /// Inspector overlay (§13, m86): store the plan — every
+    /// `render_frame` composites it on the present path (the tiny-skia
+    /// surface paints the host's ops into the same frame); `None`
+    /// clears the scene (the `DisableOverlay` reset).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay_plan = plan.cloned();
+        if self.overlay_plan.is_none() {
+            self.overlay_host.clear();
+        }
+        Ok(())
     }
 
     fn clock(&mut self, cmd: ClockCmd) -> Result<ClockState, AdapterError> {
