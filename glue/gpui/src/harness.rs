@@ -54,7 +54,7 @@ use gpui::{
 use guiwright_adapter_gpui::clock::{GpuiClockStep, plan as clock_plan};
 use guiwright_adapter_gpui::frames::FrameDigest;
 use guiwright_adapter_gpui::input::{GpuiButton, GpuiInputStep, KeyStroke, Modifier, translate};
-use guiwright_adapter_gpui::{A11yHybrid, ActivationPolicy};
+use guiwright_adapter_gpui::{A11yHybrid, ActivationPolicy, OverlayHost};
 use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline, FrameRef,
     FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PumpOutcome, SemAction,
@@ -190,6 +190,15 @@ pub struct GpuiAdapter {
     /// Minted `NodeId` per binding index (stable across passes; the
     /// bindings are boot-declared, so identity is boot-stable).
     nodes: Vec<NodeId>,
+    /// The §13 overlay binding (m86): the active plan + the engine's
+    /// overlay host — the paint route the real test-support surface
+    /// rides (`Window::paint_quad` → `painted_quads`, mirrored per
+    /// contract.rs). The host's quads join the §15.5 scene digest the
+    /// fold pass rides, so the overlay registers as a visual change on
+    /// the hash-only path (the pixels blocker stays the documented
+    /// upstream gap).
+    overlay_plan: Option<guiwright_inspect::overlay::OverlayPlan>,
+    overlay_host: OverlayHost,
     size: (f64, f64),
     pointer: Point<Pixels>,
     pass_seq: u64,
@@ -238,6 +247,8 @@ impl GpuiAdapter {
             bindings,
             hybrid: A11yHybrid::new(ActivationPolicy::Immediate),
             nodes,
+            overlay_plan: None,
+            overlay_host: OverlayHost::new(),
             size: window_size,
             pointer: point(px64(window_size.0 / 2.0), px64(window_size.1 / 2.0)),
             pass_seq: 0,
@@ -317,6 +328,13 @@ impl GpuiAdapter {
             if let Some(value) = &facts.values[index] {
                 digest_input.extend_from_slice(value.as_bytes());
             }
+        }
+        // The §13 overlay layer joins the scene digest (m86): the
+        // host's painted quads are part of the presented frame, so
+        // "wait for visual change" sees the overlay on the hash-only
+        // path too.
+        if self.overlay_plan.is_some() {
+            digest_input.extend_from_slice(&self.overlay_host.scene_digest().to_le_bytes());
         }
         Ok(FrameDigest::of(&digest_input).value())
     }
@@ -725,6 +743,24 @@ impl FrameworkAdapter for GpuiAdapter {
              TestPlatform::new ships no factory — \
              platform/test/platform.rs passes None)",
         ))
+    }
+
+    /// Inspector overlay (§13, m86): store the plan and paint the
+    /// host's scene (the `paint_quad` route the real test-support
+    /// window rides) — the fold pass folds the scene digest, so the
+    /// overlay moves the frame stamp. `None` clears the scene (the
+    /// `DisableOverlay` reset).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay_plan = plan.cloned();
+        if let Some(active) = self.overlay_plan.as_ref() {
+            self.overlay_host.paint_quads(active);
+        } else {
+            self.overlay_host.clear();
+        }
+        Ok(())
     }
 
     /// State seams (§14): the task runs inside the root entity — the
