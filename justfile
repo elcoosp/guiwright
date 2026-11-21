@@ -41,22 +41,56 @@ check-metadata:
 
 # Bump the workspace version and every internal version reference in
 # one pass ([workspace.package] + the workspace.dependencies table +
-# kit's path-dep version req on guiwright-macros), then refresh the
-# lockfile's member entries so --locked publish dry-runs stay honest.
+# kit's path-dep version req on guiwright-macros + the TypeScript
+# client's package.json, the §16 lockstep rule), then refresh both
+# lockfiles so --locked publish dry-runs and `npm ci` stay honest.
 bump new_version:
     #!/bin/sh
     set -eu
     sed -i "s/^version = \".*\"/version = \"{{new_version}}\"/" Cargo.toml
     sed -i "s/version = \"{{version}}\" }/version = \"{{new_version}}\" }/g" Cargo.toml
     sed -i "s/guiwright-macros = { path = \"..\/guiwright-macros\", version = \"{{version}}\" }/guiwright-macros = { path = \"..\/guiwright-macros\", version = \"{{new_version}}\" }/" crates/guiwright-kit/Cargo.toml
+    sed -i "s/^  \"version\": \".*\"/  \"version\": \"{{new_version}}\"/" clients/typescript/package.json
+    grep -q "\"version\": \"{{new_version}}\"" clients/typescript/package.json || {
+        echo "ts client version sync failed: clients/typescript/package.json"
+        exit 1
+    }
     cargo metadata --format-version 1 > /dev/null
-    echo "bumped: {{version}} -> {{new_version}} (lockfile refreshed)"
+    # npm ci requires the lockfile to agree with package.json — refresh
+    # it when npm exists (a Rust-only release host tolerates its absence;
+    # the CI release job runs npm ci and fails loudly on a stale lock).
+    if command -v npm >/dev/null 2>&1; then
+        (cd clients/typescript && npm install --package-lock-only --silent)
+    else
+        echo "warning: npm not found — clients/typescript/package-lock.json not refreshed"
+    fi
+    echo "bumped: {{version}} -> {{new_version}} (rust + ts client lockstep, lockfiles refreshed)"
 
 # Regenerate CHANGELOG.md from the Conventional Commits history, cutting
-# the current workspace version as the release section (cliff.toml).
+# the current workspace version as the release section (cliff.toml — the
+# curated 1.0.0 journey block rides the template, so regeneration keeps
+# it). Robust on a dirty tree: git-cliff walks COMMITTED history, so
+# uncommitted milestone work never silently lands in the section — the
+# exact manual step for the release manager is printed instead.
 changelog:
+    #!/bin/sh
+    set -eu
+    if ! command -v git-cliff >/dev/null 2>&1; then
+        echo "git-cliff is required (CI pins git-cliff@2.14.2): cargo install git-cliff --locked"
+        exit 1
+    fi
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "changelog: the working tree is dirty — the section renders from COMMITTED history only."
+        echo "  Manual step: commit the milestone work (or curate the section by hand against"
+        echo "  the cliff.toml 1.0.0 journey block) BEFORE tagging; the CI changelog refresh"
+        echo "  runs on the pushed tag with full history."
+    fi
     git-cliff --tag "v{{version}}" --output CHANGELOG.md
-    grep -m1 -A1 "^## {{version}}" CHANGELOG.md
+    if ! grep -qm1 '^## \[`{{version}}`\]' CHANGELOG.md; then
+        echo "changelog: no '{{version}}' section was cut (check the tag and the commit range)"
+        exit 1
+    fi
+    grep -m1 -A1 '^## \[`{{version}}`\]' CHANGELOG.md
 
 # The publishability proof: cargo publish --dry-run across the whole
 # workspace — verification ON. The packaged family re-resolves against
