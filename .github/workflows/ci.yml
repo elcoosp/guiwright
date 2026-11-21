@@ -69,6 +69,11 @@ jobs:
     # fill; §4.6, §17 MVP trio). m79: the freya job runs its REAL harness
     # too — `freya_testing::TestingRunner` driving the counter/form app
     # through Session (the software-Skia stack compiles here).
+    # m87: each leg is ALSO linted at `-D warnings` — the workspace clippy
+    # job carries the default build only, so the leg-gated code (the
+    # adapter's harness glue behind the feature) gets its own clippy pass
+    # here; the §17 policy's zero-warning gate holds on every compiled
+    # configuration, not just the default one.
     name: features (${{ matrix.adapter }})
     runs-on: ubuntu-latest
     strategy:
@@ -94,8 +99,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo ${{ matrix.adapter.cmd }} -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --locked
+      # The leg's own clippy gate (m87): the harness glue compiles only
+      # under the feature, so the workspace clippy job never sees it —
+      # this step does, at the same `-D warnings` bar.
+      - name: clippy (feature leg, -D warnings)
+        run: cargo clippy -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --all-targets --locked -- -D warnings
+      # The leg's own test gate (m76 iced, m79 freya — `test`, not
+      # `check`: the harness runtime-tests through the real framework).
+      - name: test (feature leg)
+        run: cargo ${{ matrix.adapter.cmd }} -p ${{ matrix.adapter.crate }} --features ${{ matrix.adapter.feature }} --locked
 
   slint-glue:
     # m78 (§4.4 door A, §17 row 5): the slint glue workspace runtime-tests
