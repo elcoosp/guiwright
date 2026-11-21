@@ -196,6 +196,14 @@ fn video_records_presented_pixels() {
     let adapter = MasonryAdapter::<Flex>::new_with_size(counter_app(), 400.0, 300.0);
     let mut app = App::launch("masonry_video", adapter);
 
+    // The §6.2 dual behavior (the `pixels_render_headlessly` rule): the
+    // vello raster needs a GPU or lavapipe — a GPU-less host skips to
+    // the honest row instead of panicking inside the framework harness.
+    if !app.session().adapter().gpu_available() {
+        eprintln!("gpu-less host: the vello video row rides the CI leg");
+        return;
+    }
+
     app.video().start_in(dir.path(), 25).expect("video starts");
     app.session().pump();
     // A real wall-clock span between the first and the last accepted
