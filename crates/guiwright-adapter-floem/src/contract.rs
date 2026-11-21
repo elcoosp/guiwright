@@ -55,6 +55,21 @@
 //! fill sequence (focus click + real `KeyboardEvent`s) stays in the
 //! harness for the upstream fix.
 //!
+//! # The §13 overlay binding (m86 — the 7/7 count's floem leg)
+//!
+//! The inspector overlay routes through the engine's
+//! [`crate::overlay::OverlayHost`] — the mock of the real present-path
+//! hook (`WindowHandle` post-paint → `PaintOp`s, the same dispatch the
+//! inspector `Capture` path uses): `show_overlay` stores the plan and
+//! every present composites the host's ops onto the tiny-skia surface,
+//! on top of the app's own scene. The mock-binding proof is the plan's
+//! sanctioned fallback for the upstream blockers: the mirror example
+//! (`examples/downstream-glue/floem`) drives the §13 pixel-diff +
+//! paint-log + `DisableOverlay`-restore evidence through a real
+//! `Session` (`tests/overlay.rs`), and the `compile_fail` doc test pins
+//! the present signature. `glue/floem` wires the identical hook against
+//! the real harness (the CI leg compiles it where the system deps live).
+
 //! # The canonical binding proof (`examples/downstream-glue/floem`)
 //!
 //! The binding as **compilable, runnable code**:
