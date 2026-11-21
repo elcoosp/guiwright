@@ -460,6 +460,13 @@ fn video_records_presented_pixels() {
     });
     let mut app = App::launch("egui_video", adapter);
 
+    // The §6.2 dual behavior probe (the sibling pixel tests' rule): a
+    // GPU host (CI linux rides lavapipe, macOS/Windows have real GPUs)
+    // records real frames; a GPU-less host finalizes the honest empty
+    // artifact (the cached probe failure — never a silent partial
+    // frame). Both branches assert their contract.
+    let gpu_host = app.session().adapter_mut().render_frame(None).is_ok();
+
     app.video().start_in(dir.path(), 25).expect("video starts");
     app.session().pump();
     // A real wall-clock span between the first and the last accepted
@@ -469,6 +476,26 @@ fn video_records_presented_pixels() {
         .click()
         .expect("click repaints the counter label");
     let summary = app.video().stop().expect("video stops");
+
+    if !gpu_host {
+        // GPU-less host: the recorder runs, the pixel probe answers
+        // Unsupported per stamp, and the stop reports the honest zero
+        // frame row — zero accepted frames finalize nothing (the PNG
+        // folder is created by the first frame), never a silent
+        // partial recording.
+        assert_eq!(summary.frames, 0, "no pixels were claimed: {summary:?}");
+        assert_eq!(summary.dropped, 0, "nothing was deduped: {summary:?}");
+        assert_eq!(
+            summary.duration_ms, 0,
+            "no accepted frames carry no span: {summary:?}"
+        );
+        assert!(
+            !summary.path.exists(),
+            "zero frames finalize no artifact: {}",
+            summary.path.display()
+        );
+        return;
+    }
 
     assert!(
         summary.frames >= 2,
