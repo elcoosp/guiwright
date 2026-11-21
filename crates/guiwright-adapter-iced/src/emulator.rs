@@ -35,8 +35,10 @@ use iced_test::Instruction;
 use iced_test::core::mouse::Button;
 use iced_test::core::{Point, Size};
 use iced_test::emulator::{Emulator, Event, Mode};
+use iced_test::futures::Executor as FuturesExecutor;
 use iced_test::futures::futures::channel::mpsc;
 use iced_test::instruction::{Interaction, Key, Keyboard, Mouse, Target};
+use iced_test::program::Program as IcedProgram;
 
 use guiwright_driver::adapter::AdapterError;
 
@@ -47,6 +49,7 @@ pub use crate::dump::{HarnessApp, TreeDumpTx};
 use crate::harness::{IcedAdapter, ReportFn, SimInteraction, SimulatorSeam};
 use crate::input::PointerOp;
 use crate::logical::WidgetReport;
+use crate::overlay::{OverlayProgram, OverlayState};
 use crate::registry::RoleRegistry;
 
 /// How long an interaction may wait for the Emulator's `Zen` settle (the
@@ -79,11 +82,13 @@ fn instruction_key(key: &str) -> Option<Key> {
 
 /// The real harness seam: owns the [`Emulator`], the program and the
 /// read-back receiver, and answers the [`SimulatorSeam`] vocabulary by
-/// running real instructions through iced's pipeline.
+/// running real instructions through iced's pipeline. The program rides
+/// the [`OverlayProgram`] wrapper: the §13 overlay composites inside the
+/// app's own view build (the screenshot pass paints it, M83).
 pub struct EmulatorHarness<P: HarnessApp> {
-    program: P,
-    emulator: Emulator<P>,
-    events: mpsc::Receiver<Event<P>>,
+    program: OverlayProgram<P>,
+    emulator: Emulator<OverlayProgram<P>>,
+    events: mpsc::Receiver<Event<OverlayProgram<P>>>,
     last: Option<WidgetReport>,
     size: Size,
 }
@@ -96,10 +101,10 @@ impl<P: HarnessApp> EmulatorHarness<P> {
         // The runtime sends boot/instruction/task events through this
         // channel; the harness performs each action until `Ready` (Zen).
         let (sender, events) = mpsc::channel(1024);
-        let emulator = Emulator::new(sender, &program, Mode::Zen, size);
+        let wrapped = OverlayProgram::new(program, OverlayState::default());
         let mut harness = Self {
-            program,
-            emulator,
+            emulator: Emulator::new(sender, &wrapped, Mode::Zen, size),
+            program: wrapped,
             events,
             last: None,
             size,
@@ -112,6 +117,63 @@ impl<P: HarnessApp> EmulatorHarness<P> {
     /// The last tree read, window-rooted — the adapter's report source.
     pub fn last_report(&self) -> Option<WidgetReport> {
         self.last.clone()
+    }
+
+    /// Install/clear the §13 overlay plan: the wrapper program composites
+    /// it inside the app's own view build — the next UI build (any
+    /// instruction pass or screenshot) paints it (M83).
+    pub fn set_overlay_plan(&mut self, plan: Option<&guiwright_inspect::overlay::OverlayPlan>) {
+        self.program.overlay_state().set_plan(plan);
+    }
+
+    /// Drain the overlay paint log — one entry per draw call the layer
+    /// performed (the §13 draw-call evidence).
+    pub fn take_overlay_paint_log(&mut self) -> Vec<String> {
+        self.program.overlay_state().take_paint_log()
+    }
+
+    /// One headless render pass (§10/§11): build + draw the current view
+    /// through a dedicated `tiny-skia` headless renderer — the same pass
+    /// shape the instructions ride, overlay composited when active.
+    ///
+    /// This does NOT reuse `Emulator::screenshot`: that path consumes the
+    /// Emulator's layout cache (`take().unwrap()` in iced_test's
+    /// operation/instruction branches would panic on the next pass). A
+    /// mid-session render must be side-effect-free (§15.4's render-once
+    /// invariant), so the UI builds over a fresh cache and the Emulator's
+    /// cache stays untouched (the §9 quirk row).
+    pub fn screenshot_pass(&mut self) -> Result<(u32, u32, Vec<u8>), AdapterError> {
+        use iced_test::core::renderer::Headless;
+        use iced_test::runtime::user_interface::{Cache, UserInterface};
+
+        let executor = <P::Executor as FuturesExecutor>::new()
+            .map_err(|err| AdapterError::Internal(format!("iced screenshot executor: {err}")))?;
+        let settings = self.program.settings();
+        let mut renderer = executor
+            .block_on(P::Renderer::new(
+                settings.default_font,
+                settings.default_text_size,
+                None,
+            ))
+            .ok_or_else(|| AdapterError::Internal("iced headless renderer unavailable".into()))?;
+
+        let theme = self.emulator.theme(&self.program).unwrap_or_else(|| {
+            <P::Theme as iced_test::core::theme::Base>::default(iced_test::core::theme::Mode::Light)
+        });
+        let style = <P::Theme as iced_test::core::theme::Base>::base(&theme);
+        let element = self.emulator.view(&self.program);
+        let mut ui = UserInterface::build(element, self.size, Cache::default(), &mut renderer);
+        ui.draw(
+            &mut renderer,
+            &theme,
+            &iced_test::core::renderer::Style {
+                text_color: style.text_color,
+            },
+            iced_test::core::mouse::Cursor::Unavailable,
+        );
+        let physical = Size::new(self.size.width as u32, self.size.height as u32);
+        let rgba = renderer.screenshot(physical, 1.0, style.background_color);
+        Ok((physical.width, physical.height, rgba))
     }
 
     /// Receive and perform runtime events until the channel settles. An
@@ -393,6 +455,18 @@ impl<P: HarnessApp> SimulatorSeam for EmulatorHarness<P> {
     fn screen_size(&self) -> (f64, f64) {
         (f64::from(self.size.width), f64::from(self.size.height))
     }
+
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.set_overlay_plan(plan);
+        Ok(())
+    }
+
+    fn screenshot(&mut self) -> Result<(u32, u32, Vec<u8>), AdapterError> {
+        self.screenshot_pass()
+    }
 }
 
 impl<P: HarnessApp> std::fmt::Debug for EmulatorHarness<P> {
@@ -428,6 +502,17 @@ impl<P: HarnessApp> SimulatorSeam for SharedHarness<P> {
 
     fn screen_size(&self) -> (f64, f64) {
         self.0.borrow().screen_size()
+    }
+
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.0.borrow_mut().show_overlay(plan)
+    }
+
+    fn screenshot(&mut self) -> Result<(u32, u32, Vec<u8>), AdapterError> {
+        self.0.borrow_mut().screenshot()
     }
 }
 
