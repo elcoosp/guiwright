@@ -137,7 +137,7 @@ impl<P: HarnessApp> EmulatorHarness<P> {
     /// shape the instructions ride, overlay composited when active.
     ///
     /// This does NOT reuse `Emulator::screenshot`: that path consumes the
-    /// Emulator's layout cache (`take().unwrap()` in iced_test's
+    /// Emulator's layout cache (`take().unwrap()` in `iced_test`'s
     /// operation/instruction branches would panic on the next pass). A
     /// mid-session render must be side-effect-free (§15.4's render-once
     /// invariant), so the UI builds over a fresh cache and the Emulator's
@@ -171,7 +171,12 @@ impl<P: HarnessApp> EmulatorHarness<P> {
             },
             iced_test::core::mouse::Cursor::Unavailable,
         );
-        let physical = Size::new(self.size.width as u32, self.size.height as u32);
+        // The guarded conversion is the session's documented pattern (the
+        // egui adapter's `physical_size`): clamp into range, then
+        // `u32::try_from` proves it — negative or absurd viewport values
+        // cannot reach the raster as sign-truncated garbage.
+        let px = |v: f32| u32::try_from(v.round().clamp(0.0, u32::MAX as f32) as i64).unwrap_or(0);
+        let physical = Size::new(px(self.size.width), px(self.size.height));
         let rgba = renderer.screenshot(physical, 1.0, style.background_color);
         Ok((physical.width, physical.height, rgba))
     }
