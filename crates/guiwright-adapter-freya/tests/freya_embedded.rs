@@ -112,7 +112,7 @@ fn counter_form() -> Element {
 }
 
 fn counter_session() -> Session<FreyaAdapter<FreyaTestingHarness<AppState>>> {
-    let mut harness = FreyaTestingHarness::boot(counter_form, (480.0, 320.0), |runner| {
+    let harness = FreyaTestingHarness::boot(counter_form, (480.0, 320.0), |runner| {
         // The context the app consumes IS the AppState (freya 0.5
         // registers contexts by type — `use_consume::<AppState>()`).
         runner.provide_root_context(|| AppState {
@@ -294,6 +294,34 @@ fn key_events_carry_the_full_sequence() {
             modifiers: vec!["Shift".into()],
         })
         .expect("key up with modifier");
+}
+
+/// The §14 state-seam end-to-end (the gpui glue's `run_in` shape): a
+/// compiled `SeamTask` runs inside the runner context — the hook's
+/// `AppState` — writes the count through the state handle, and the next
+/// committed diff carries the re-rendered label. State mutation with no
+/// input event at all.
+#[test]
+fn run_in_mutates_app_state_end_to_end() {
+    let mut session = counter_session();
+
+    session
+        .adapter_mut()
+        .run_in(Box::new(|ctx: &mut dyn std::any::Any| {
+            let state = ctx
+                .downcast_mut::<AppState>()
+                .ok_or("wrong runner context type")?;
+            let mut count = state.count.clone();
+            *count.write() = 42;
+            Ok("count set to 42".to_string())
+        }))
+        .expect("seam executed in the runner context");
+
+    // The write re-rendered on the next committed diff.
+    session.settle(Instant::now() + Duration::from_secs(1));
+    session
+        .resolve(&Selector::text("Count: 42"))
+        .expect("run_in mutation re-rendered");
 }
 
 #[test]
