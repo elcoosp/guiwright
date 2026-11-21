@@ -29,6 +29,10 @@ description = "Guiwright Slint harness glue (architecture §4.4, m78): Framework
 [dependencies]
 guiwright-adapter-slint = { path = "../../crates/guiwright-adapter-slint" }
 guiwright-driver = { path = "../../crates/guiwright-driver" }
+# The §13 overlay plan vocabulary (`OverlayPlan`/`Badge`/`OverlayRect`)
+# the harness composites (m84): framework-free, riding the same
+# core/accesskit/thiserror graph the glue already carries.
+guiwright-inspect = { path = "../../crates/guiwright-inspect" }
 accesskit = "0.25.2"
 thiserror = "2.0.21"
 # The frame digest (§10 "hash = xxh3 of a scene/pixel digest") — the same
@@ -68,6 +72,14 @@ slint-build = { version = "=1.19.0" }
 
 [dev-dependencies]
 guiwright-core = { path = "../../crates/guiwright-core" }
+# The m85 trace/video validation drives the kit App (the §12 recorder +
+# the §10 video surface) and renders the archive through the CLI's
+# `show-trace` — both are framework-free members, so the slint-only
+# workspace carries them as path deps without touching the skia record.
+guiwright-kit = { path = "../../crates/guiwright-kit" }
+guiwright-cli = { path = "../../crates/guiwright-cli" }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
 criterion = { version = "0.8.2", default-features = false, features = [
     "cargo_bench_support",
 ] }
