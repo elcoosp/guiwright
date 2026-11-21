@@ -33,6 +33,29 @@
 //! `compile_fail` doc test below pins the shape: a harness without the
 //! floem surface cannot bind.
 //!
+//! # The overlay binding is signature-enforced too (m86)
+//!
+//! The §13 route (the 7/7 overlay count's floem leg): `show_overlay`
+//! hands the plan to the engine's [`guiwright_adapter_floem::OverlayHost`]
+//! — the mock of the real present-path hook — and `render_frame` extends
+//! its scene with the host's ops. When the real framework API matches
+//! the mock signature, the binding compiles and routes unchanged; a
+//! surface WITHOUT the present signature cannot bind:
+//!
+//! ```compile_fail
+//! use guiwright_adapter_floem::OverlayHost;
+//! use guiwright_inspect::overlay::OverlayPlan;
+//!
+//! struct Placeholder;
+//!
+//! fn present(host: &mut Placeholder, plan: &OverlayPlan) {
+//!     // E0599: `present` is the overlay host's method — a surface
+//!     // without the overlay-host signature cannot bind the §13 route,
+//!     // which is exactly the contract the mirror pins.
+//!     host.present(plan);
+//! }
+//! ```
+//!
 //! # The binding is signature-enforced (compile-fail proof)
 //!
 //! ```compile_fail
