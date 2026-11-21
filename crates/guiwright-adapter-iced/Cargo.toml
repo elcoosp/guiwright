@@ -12,6 +12,9 @@ description = "Guiwright Level-2 adapter for iced (architecture §4.6): logical-
 [dependencies]
 guiwright-core.workspace = true
 guiwright-driver.workspace = true
+# The §13 overlay plan vocabulary (`show_overlay` hands one to the seam —
+# the egui adapter's shape; framework-free, ungated).
+guiwright-inspect.workspace = true
 accesskit.workspace = true
 thiserror.workspace = true
 # The feature-gated harness glue hashes the harness's widget stream
@@ -33,9 +36,12 @@ iced_renderer = { version = "0.14.0", optional = true, features = [
     "wayland",
     "x11",
 ] }
+# The overlay layer rides `Stack` (the wrapper program composites the §13
+# plan as a second child of the app's own view tree, M83).
+iced_widget = { version = "0.14.0", optional = true }
 
 [features]
-iced = ["dep:iced_test", "dep:iced_renderer", "dep:twox-hash"]
+iced = ["dep:iced_test", "dep:iced_renderer", "dep:iced_widget", "dep:twox-hash"]
 
 [dev-dependencies]
 iced = { version = "0.14.0", default-features = false, features = [
