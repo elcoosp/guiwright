@@ -40,6 +40,10 @@ fn name_input() -> Selector {
     Selector::role(Role::TextInput)
 }
 
+fn burst_button() -> Selector {
+    Selector::role_named(Role::Button, "Start burst")
+}
+
 #[test]
 fn logical_tree_resolves_slint_elements_with_bounds() {
     let mut session = counter_session();
@@ -175,6 +179,45 @@ fn mock_clock_advances_virtual_time() {
         virtual_time >= Duration::from_millis(1_500),
         "mock_elapsed_time advanced: {virtual_time:?}"
     );
+}
+
+/// The §14 slint clock row, proven against a REAL timer: arming the
+/// burst timer and stepping the driver's frame-sized fast-forward fires
+/// the timer's 100 ms tick once per `mock_elapsed_time` step (§4.4:
+/// "each step here is exactly one `mock_elapsed_time`" — one due tick is
+/// processed per step, so five 100 ms steps are five ticks). The app
+/// state (the burst label) changes purely through `mock_elapsed_time` —
+/// no wall clock involved.
+#[test]
+fn clock_fast_forward_fires_slint_timers() {
+    let mut session = counter_session();
+
+    // The timer is stopped at boot: the burst label reflects it.
+    session
+        .resolve(&Selector::text("Burst: 0"))
+        .expect("burst label reflects the stopped timer");
+
+    // Arm the timer (the click handler flips `burst-running`).
+    session.click(&burst_button()).expect("click Start burst");
+
+    // Five frame-sized steps: each advances the mock clock by 100 ms
+    // (from the click's 50 ms gesture gap) and fires exactly one tick.
+    for step in 1..=5u32 {
+        let state = session
+            .adapter_mut()
+            .clock(guiwright_driver::adapter::ClockCmd::FastForward(
+                Duration::from_millis(100),
+            ))
+            .expect("fast forward");
+        assert!(
+            state.virtual_time.expect("virtual clock installed")
+                >= Duration::from_millis(50 + 100 * u64::from(step)),
+            "step {step} advanced the mock clock: {state:?}"
+        );
+        session
+            .resolve(&Selector::text(format!("Burst: {step}")))
+            .unwrap_or_else(|err| panic!("step {step} ticked the timer: {err}"));
+    }
 }
 
 #[test]
