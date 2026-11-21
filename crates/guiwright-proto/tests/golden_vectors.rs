@@ -10,8 +10,14 @@
 //! GUIWRIGHT_BLESS=1 cargo test -p guiwright-proto --test golden_vectors
 //! ```
 //!
+//! Under cargo-nextest the bless write is refused (the fixed repo path
+//! would be raced by the per-test process fan-out); bless via plain
+//! `cargo test`.
+//!
 //! The TypeScript side re-pins the vendor copy in
 //! `test/codec.test.ts`; the two fail the build together on drift.
+
+mod common;
 
 use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
@@ -1137,7 +1143,10 @@ fn write_golden_vectors() {
     });
     let rendered = serde_json::to_string_pretty(&doc).expect("pretty") + "\n";
 
-    if std::env::var("GUIWRIGHT_BLESS").ok().as_deref() == Some("1") {
+    if common::bless_write_permitted(
+        std::env::var("GUIWRIGHT_BLESS").ok().as_deref(),
+        std::env::var("NEXTEST").ok().as_deref(),
+    ) {
         std::fs::write(GOLDEN_PATH, rendered).expect("write golden");
         eprintln!("blessed: {GOLDEN_PATH}");
         return;
