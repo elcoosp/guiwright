@@ -11,7 +11,7 @@
     <a href="https://github.com/elcoosp/guiwright/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/elcoosp/guiwright/ci.yml?style=flat-square&label=CI" alt="CI status"/></a>
     <a href="https://github.com/elcoosp/guiwright/blob/main/.github/workflows/ci.yml"><img src="https://img.shields.io/badge/tested-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Tested on Linux, macOS and Windows"/></a>
     <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/MSRV-1.85-blue?style=flat-square" alt="MSRV 1.85"/></a>
-    <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/version-1.0.0--rc.1-blue?style=flat-square" alt="Workspace version 1.0.0-rc.1"/></a>
+    <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Workspace version 1.0.0"/></a>
     <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square" alt="License: MIT OR Apache-2.0"/></a>
     <a href="https://github.com/elcoosp/guiwright/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/unsafe%20code-forbidden-success?style=flat-square" alt="unsafe code forbidden workspace-wide"/></a>
   </p>
@@ -451,7 +451,7 @@ the same paths as a per-scenario `artifacts` array.
 ## Status & milestones
 
 > [!NOTE]
-> **Release candidate `1.0.0-rc.1`.** MSRV **1.85**, edition 2024, `unsafe` forbidden
+> **Release `1.0.0`.** MSRV **1.85**, edition 2024, `unsafe` forbidden
 > workspace-wide. Every crate is publish-verified (`cargo publish --dry-run`) in strict
 > topological order by the release workflow on a `v*` tag — and by `just release-prep`
 > locally before a tag is pushed; crates.io publication stays manual until the registry
