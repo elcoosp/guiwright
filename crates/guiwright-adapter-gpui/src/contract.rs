@@ -53,6 +53,23 @@
 //! protocol): `ActionRequest` synthesis pacing (§9 table row), frame
 //! hashes via [`crate::frames`] (§15.5), `AdapterMeta.framework_version`
 //! reports the GPUI **platform** crate versions (§18 churn mitigation).
+//!
+//! # Upstream blockers (m80, file-level evidence)
+//!
+//! * **Fill** — the real `KeyDown` path panics inside zed's test
+//!   scheduler (`scheduler/src/test_scheduler.rs:232`,
+//!   `state.next_session_id.0 += 1` overflow, reproducible with three
+//!   real `Keystroke` dispatches after a real focus click). The glue
+//!   gates `SetValue` with `AdapterError::Unsupported` carrying the
+//!   evidence; the real sequence (focus click + `Keystroke`s through
+//!   `dispatch_event` into the focused `on_key_down`) is specified and
+//!   waits on the upstream scheduler fix.
+//! * **Pixels** — `Window::render_to_image` bails without a
+//!   `HeadlessRenderer` and `TestPlatform::new` ships no factory
+//!   (`platform/test/platform.rs` passes `None`); `render_frame`
+//!   reports `Unsupported` with that evidence, and `last_frame` stays
+//!   the hash-only §15.5 row until a `PlatformHeadlessRenderer` over
+//!   lavapipe/llvmpipe can be configured.
 
 /// The §6.2 capability row, GPUI column — kept as data so the glue cannot
 /// silently drift from it (the floem contract pattern).
