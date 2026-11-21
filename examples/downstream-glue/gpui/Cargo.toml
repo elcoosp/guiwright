@@ -29,6 +29,9 @@ description = "Downstream gpui glue reference example (architecture §4.5): Fram
 guiwright-adapter-gpui = { path = "../../../crates/guiwright-adapter-gpui" }
 guiwright-driver = { path = "../../../crates/guiwright-driver" }
 guiwright-core = { path = "../../../crates/guiwright-core" }
+# The §13 overlay plan vocabulary (`OverlayPlan` — the data the engine's
+# overlay host translates into the painted-quad scene, m86).
+guiwright-inspect = { path = "../../../crates/guiwright-inspect" }
 accesskit = "0.25.2"
 
 [dev-dependencies]
