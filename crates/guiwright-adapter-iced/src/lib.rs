@@ -44,6 +44,8 @@ pub mod dump;
 pub mod emulator;
 #[cfg(feature = "iced")]
 pub mod harness;
+#[cfg(feature = "iced")]
+pub mod overlay;
 
 pub use actions::{WidgetOp, route};
 pub use input::{InputOp, KeyOp, PointerOp, translate};
