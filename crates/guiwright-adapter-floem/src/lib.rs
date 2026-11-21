@@ -54,11 +54,13 @@ pub mod contract;
 pub mod ids;
 pub mod input;
 pub mod logical;
+pub mod overlay;
 pub mod paint;
 pub mod roles;
 
 pub use contract::FloemAdapterContract;
 pub use ids::{TestIdError, TestIdRegistry};
 pub use logical::{FloemLogicalTree, ViewReport};
+pub use overlay::OverlayHost;
 pub use paint::{PaintError, PaintOp, PaintState};
 pub use roles::RoleRegistry;
