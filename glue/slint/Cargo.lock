@@ -1436,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-slint"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit",
  "guiwright-core",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-core"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-driver"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -1491,7 +1491,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-inspect"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit",
  "guiwright-core",
@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-proto"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit",
  "guiwright-core",
@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-shot"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "png",
  "serde",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-trace"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "guiwright-shot",
  "lz4_flex",
