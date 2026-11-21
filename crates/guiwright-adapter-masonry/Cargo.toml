@@ -26,6 +26,11 @@ tracing.workspace = true
 
 [dev-dependencies]
 masonry = "0.4.0"
+# The m85 video validation drives the kit App's §10 surface over the real
+# vello_cpu pixels (framework-free members, dev-only).
+guiwright-kit.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
