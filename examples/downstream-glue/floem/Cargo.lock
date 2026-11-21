@@ -233,6 +233,7 @@ dependencies = [
  "accesskit",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "thiserror",
  "tiny-skia",
  "twox-hash",
@@ -256,6 +257,7 @@ dependencies = [
  "guiwright-adapter-floem",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "tempfile",
  "twox-hash",
 ]
