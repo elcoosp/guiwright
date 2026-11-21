@@ -179,3 +179,76 @@ fn dynamic_widget_edit_is_observed() {
         .resolve(&Selector::text("Added later").first())
         .expect("dynamically added label is locatable");
 }
+
+// --- §10 m85: the video end-to-end row --------------------------------
+
+/// The §10 recorder over real masonry pixels (m85): the pump's
+/// `vello_cpu` frames flow through `last_frame` into the recorder; the
+/// static span dedups (the §10 compression contract — this app has no
+/// callbacks, so every presented frame is byte-identical), and the stop
+/// finalizes a valid artifact: non-zero size, at least the first
+/// presented frame encoded, a wall-clock duration.
+#[test]
+fn video_records_presented_pixels() {
+    use guiwright_kit::App;
+
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let adapter = MasonryAdapter::<Flex>::new_with_size(counter_app(), 400.0, 300.0);
+    let mut app = App::launch("masonry_video", adapter);
+
+    app.video().start_in(dir.path(), 25).expect("video starts");
+    app.session().pump();
+    // A real wall-clock span between the first and the last accepted
+    // frame (the summary's duration metadata, §10).
+    std::thread::sleep(Duration::from_millis(80));
+    app.get_by_role(accesskit::Role::Button, "Save")
+        .click()
+        .expect("click pumps the harness");
+    let summary = app.video().stop().expect("video stops");
+
+    assert!(
+        summary.frames >= 1,
+        "the first presented frame encoded: {summary:?}"
+    );
+    assert!(
+        summary.dropped >= 1,
+        "hash-equality dedup collapsed the static span: {summary:?}"
+    );
+    assert!(
+        summary.path.exists(),
+        "finalized at {}",
+        summary.path.display()
+    );
+    let size = std::fs::metadata(&summary.path)
+        .expect("artifact exists")
+        .len();
+    assert!(size > 0, "the artifact is not empty ({size} bytes)");
+    // The duration metadata is consistent with the recorder's contract:
+    // the span between the first and the last ACCEPTED frame — zero for
+    // the single-frame static span (every later stamp deduped), positive
+    // once a repaint survives.
+    if summary.frames == 1 {
+        assert_eq!(
+            summary.duration_ms, 0,
+            "one accepted frame carries no span: {summary:?}"
+        );
+    } else {
+        assert!(
+            summary.duration_ms > 0,
+            "multiple accepted frames span the window: {summary:?}"
+        );
+    }
+    if summary.path.is_file() {
+        let bytes = std::fs::read(&summary.path).expect("read the webm");
+        assert_eq!(
+            bytes.get(0..4).expect("magic bytes"),
+            &[0x1A, 0x45, 0xDF, 0xA3],
+            "the webm carries the EBML magic"
+        );
+    } else {
+        let manifest = std::fs::read_to_string(summary.path.join("video.json")).expect("manifest");
+        let manifest: serde_json::Value = serde_json::from_str(&manifest).expect("valid json");
+        assert_eq!(manifest["schema"], "gwvideo/v1");
+        assert!(manifest["frames"].as_u64().expect("frames") >= 1);
+    }
+}
