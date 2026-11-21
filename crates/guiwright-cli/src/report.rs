@@ -2,7 +2,10 @@
 //! live progress lines, the `gwrun/v1` JSON document, the `junit.xml` (one
 //! `<testsuite>` per spec file) and the self-contained HTML summary (the
 //! `trace.html` precedent). All renderers are pure functions over
-//! [`RunReport`] — file writing is the runner's job.
+//! [`RunReport`] — file writing is the runner's job. The HTML report deep
+//! links each scenario's artifact paths (m82: the runner harvests the
+//! `shot:`/`video:` paths its own steps wrote; the files stay where the
+//! REPL command put them).
 
 use std::fmt::Write;
 
@@ -77,6 +80,11 @@ pub struct ScenarioRecord {
     pub duration_ms: u64,
     /// The last failure message (`None` when passed).
     pub error: Option<String>,
+    /// Artifact paths the scenario's own steps wrote (m82: harvested from
+    /// the `shot:` / `video:` Ok lines, in step order across all attempts).
+    /// The runner never emits artifacts itself — the REPL command wrote
+    /// each file; the record carries the path so reports can link it.
+    pub artifacts: Vec<String>,
 }
 
 /// Aggregated counts.
@@ -256,6 +264,14 @@ pub fn render_json(report: &RunReport) -> String {
             }
             None => out.push_str(", \"error\": null"),
         }
+        out.push_str(", \"artifacts\": [");
+        for (j, artifact) in record.artifacts.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "{}", json_string(artifact));
+        }
+        out.push(']');
         out.push('}');
     }
     if !report.scenarios.is_empty() {
@@ -355,7 +371,9 @@ pub fn render_html(report: &RunReport) -> String {
     out.push_str(".card .num { font-size: 1.4rem; font-weight: 600; }\n");
     out.push_str("table { border-collapse: collapse; width: 100%; }\n");
     out.push_str("th, td { text-align: left; padding: 0.4rem 0.7rem; border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent); vertical-align: top; }\n");
-    out.push_str("td.err { font-family: ui-monospace, monospace; font-size: 0.85rem; white-space: pre-wrap; }\n");
+    out.push_str("td.err, td.art { font-family: ui-monospace, monospace; font-size: 0.85rem; }\n");
+    out.push_str("td.err { white-space: pre-wrap; }\n");
+    out.push_str("td.art a { color: inherit; }\n");
     out.push_str(".passed { color: #1a7f37; font-weight: 600; }\n");
     out.push_str(".failed { color: #cf222e; font-weight: 600; }\n");
     out.push_str(".flaky { color: #9a6700; font-weight: 600; }\n");
@@ -385,19 +403,30 @@ pub fn render_html(report: &RunReport) -> String {
         );
     }
     out.push_str("</div>\n");
-    out.push_str("<table>\n<tr><th>spec</th><th>scenario</th><th>status</th><th>attempts</th><th>time</th><th>error</th></tr>\n");
+    out.push_str("<table>\n<tr><th>spec</th><th>scenario</th><th>status</th><th>attempts</th><th>time</th><th>error</th><th>artifacts</th></tr>\n");
     for record in &report.scenarios {
         let error = record.error.as_deref().unwrap_or("");
+        let artifact_cell = if record.artifacts.is_empty() {
+            String::new()
+        } else {
+            record
+                .artifacts
+                .iter()
+                .map(|artifact| format!("<a href=\"{0}\">{0}</a>", escape_html(artifact)))
+                .collect::<Vec<String>>()
+                .join(", ")
+        };
         let _ = writeln!(
             out,
-            "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td><td>{} ms</td><td class=\"err\">{}</td></tr>",
+            "<tr><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td>{}</td><td>{} ms</td><td class=\"err\">{}</td><td class=\"art\">{}</td></tr>",
             escape_html(&record.file),
             escape_html(&record.name),
             record.status.tag(),
             record.status.tag(),
             record.attempts,
             record.duration_ms,
-            escape_html(error)
+            escape_html(error),
+            artifact_cell
         );
     }
     out.push_str("</table>\n</body>\n</html>\n");
@@ -421,6 +450,7 @@ mod tests {
             attempts,
             duration_ms: 112,
             error: error.map(Into::into),
+            artifacts: Vec::new(),
         }
     }
 
@@ -494,6 +524,7 @@ mod tests {
         assert_eq!(scenarios[0]["status"], "passed");
         assert_eq!(scenarios[0]["attempts"], 1);
         assert_eq!(scenarios[0]["error"], serde_json::Value::Null);
+        assert_eq!(scenarios[0]["artifacts"], serde_json::json!([]));
         assert_eq!(scenarios[1]["status"], "failed");
         assert!(
             scenarios[1]["error"]
@@ -613,6 +644,42 @@ mod tests {
         assert!(!html.contains("<script>alert"), "{html}");
         assert!(!html.contains("<img src=x"), "{html}");
         assert!(html.contains("&lt;script&gt;"), "{html}");
+    }
+
+    #[test]
+    fn artifacts_render_into_json_and_html() {
+        let mut report = sample();
+        report.scenarios[0].artifacts = vec!["shots/window.png".into(), "a & b <weird>.png".into()];
+        report.scenarios[1].artifacts = vec!["failed-attempt.png".into()];
+
+        let json = render_json(&report);
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(
+            value["scenarios"][0]["artifacts"],
+            serde_json::json!(["shots/window.png", "a & b <weird>.png"]),
+            "{json}"
+        );
+        assert_eq!(value["scenarios"][2]["artifacts"], serde_json::json!([]));
+
+        let html = render_html(&report);
+        assert!(
+            html.contains("<th>spec</th><th>scenario</th><th>status</th><th>attempts</th><th>time</th><th>error</th><th>artifacts</th>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<a href=\"shots/window.png\">shots/window.png</a>"),
+            "{html}"
+        );
+        // The artifact link text is HTML-escaped like every other cell.
+        assert!(
+            html.contains(
+                "<a href=\"a &amp; b &lt;weird&gt;.png\">a &amp; b &lt;weird&gt;.png</a>"
+            ),
+            "{html}"
+        );
+        assert!(!html.contains("<weird>"), "{html}");
+        // The failed record's artifact rides its row too.
+        assert!(html.contains("failed-attempt.png"), "{html}");
     }
 
     #[test]
