@@ -28,6 +28,12 @@ body = """
         ## {{ version | trim_start_matches(pat="v") }} \
     {% endif %}\
     - {{ timestamp | date(format="%Y-%m-%d") }}\
+    {% if version and version is containing("1.0.0") %}\
+        \n> **The 1.0.0 journey** — the §6 parity matrix closed across m1–m86.\n\
+        > - **7/7 GUI adapters** bound to the one `FrameworkAdapter` seam: egui, iced, masonry, slint and freya on real harnesses and real pixels; floem and gpui through the downstream-glue bindings (m76–m86).\n\
+        > - **Playwright parity (§6)**: auto-wait actionability, locator filter/all/nth, checked + negated + count assertions and comparators, describe identity/state reads, element screenshots with per-platform baselines, `gwtrace/v1` traces with the `show-trace` scrubber, `gwvideo/v1` video, the inspector overlay, and the kit runner with nextest reports (m19–m86).\n\
+        > - **Release automation (§15)**: the git-cliff changelog, the workspace publish dry-run in topo order, and the TypeScript client's npm build + publish gate — the Rust family and `@guiwright/gwp` ship in lockstep.\n\
+    {% endif %}\
 {% else %}\
     ## [Unreleased]\
 {% endif %}\
