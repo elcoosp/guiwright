@@ -367,7 +367,16 @@ impl HarnessApp for TickerApp {
 }
 
 /// The §14 M2 proof: `clock_fast_forward` advances the framework's own
-/// timers — the subscription ticks landed and the label moved off zero.
+/// timers — the subscription ticks landed and the label moved. The boot
+/// read is race-free by construction: the subscription fires on real
+/// time (`iced_test` exposes no virtual timer), so the exact boot label
+/// depends on how many 50ms ticks landed inside the settle window —
+/// under first-build load the ticks beat the assertion and the old
+/// literal `"Ticks: 0"` assert lost the race before it ever ran. The
+/// boot count is therefore read (role-resolved, parsed) instead of
+/// assumed, and the clock proof is the strict advance past that boot
+/// count under the drained clock — the old "moved off zero" was only
+/// the `boot == 0` case of this.
 #[test]
 fn clock_fast_forward_completes_subscription_timers() {
     let harness = EmulatorHarness::new(TickerApp, (300.0, 200.0)).expect("harness boots");
@@ -375,11 +384,9 @@ fn clock_fast_forward_completes_subscription_timers() {
     let mut session = Session::new(adapter);
     session.settle(Instant::now() + Duration::from_secs(2));
 
-    // Boot state: zero ticks (the label is exactly "Ticks: 0").
-    assert!(
-        session.resolve(&Selector::text("Ticks: 0")).is_ok(),
-        "boot state shows zero ticks"
-    );
+    // Boot state: the ticker label resolves and parses — whatever the
+    // settle window's tick count was on this host.
+    let boot_ticks = ticker_ticks(&mut session).expect("boot state resolves the ticker label");
 
     session
         .adapter_mut()
@@ -396,11 +403,27 @@ fn clock_fast_forward_completes_subscription_timers() {
         "the ledger advanced: {state:?}"
     );
 
-    // The subscription fired through the real pipeline: the label moved.
+    // The subscription fired through the real pipeline: the label moved
+    // strictly past the boot count — the drained clock's ≥300ms of frame
+    // steps always release the 50ms interval.
+    let advanced = ticker_ticks(&mut session).expect("the ticker label still resolves");
     assert!(
-        !session.resolve(&Selector::text("Ticks: 0")).is_ok(),
-        "clock_fast_forward completed the subscription timer"
+        advanced > boot_ticks,
+        "clock_fast_forward completed the subscription timer: boot {boot_ticks} → {advanced}"
     );
+}
+
+/// The ticker label's current tick count: resolve the `Ticks:` text
+/// (the app's only text node — the Playwright-default substring match)
+/// and parse the number off the identity read's name/value.
+fn ticker_ticks(session: &mut Session<impl FrameworkAdapter>) -> Option<u64> {
+    let described = session
+        .describe_all(&Selector::text("Ticks:"))
+        .expect("the ticker label resolves")
+        .into_iter()
+        .next()?;
+    let text = described.name.or(described.value)?;
+    text.split_once(':')?.1.trim().parse().ok()
 }
 
 // --- §12 m85: the trace end-to-end row --------------------------------
