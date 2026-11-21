@@ -9,9 +9,13 @@
 //! GUIWRIGHT_BLESS=1 cargo test -p guiwright-proto --test schema_golden
 //! ```
 //!
-//! (same env-var flow as the screenshot baselines, §10), then re-publish
+//! (same env-var flow as the screenshot baselines, §10; a `GUIWRIGHT_BLESS=1`
+//! run under cargo-nextest refuses to write — the per-test process fan-out
+//! would race the fixed repo path — so bless via plain `cargo test`), then re-publish
 //! the copy the TypeScript client vendors: copy the printed path's file to
 //! `clients/typescript/gwp-schema.json`.
+
+mod common;
 
 use guiwright_proto::schema::{ClockV1, EventKindV1, InspectV1, MockV1, SnapshotV1, SubscribeV1};
 use guiwright_proto::{RequestV1, ResponseV1, schemadoc::gwp_schema_json};
@@ -265,7 +269,10 @@ fn mock_variants() -> usize {
 fn gwp_schema_json_matches_golden() {
     let doc = serde_json::to_string_pretty(&gwp_schema_json()).expect("pretty json") + "\n";
 
-    if std::env::var("GUIWRIGHT_BLESS").ok().as_deref() == Some("1") {
+    if common::bless_write_permitted(
+        std::env::var("GUIWRIGHT_BLESS").ok().as_deref(),
+        std::env::var("NEXTEST").ok().as_deref(),
+    ) {
         std::fs::write(GOLDEN_PATH, &doc).expect("write golden");
         eprintln!("blessed: {GOLDEN_PATH}");
         return;
