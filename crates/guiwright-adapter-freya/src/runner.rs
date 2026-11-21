@@ -92,6 +92,12 @@ pub struct FreyaAdapter<S: TestingSeam> {
     overlay_paint_log: Vec<String>,
     /// The latest committed update (the `tree_update` one-shot).
     latest: Option<TreeUpdate>,
+    /// The §10 `last_frame` readback cache (m86): the most recent
+    /// rendered frame, keyed by the `pass_seq` it was rendered at — the
+    /// video recorder's per-stamp readback hits the cache within a pass
+    /// and re-renders only across passes (the TestingRunner snapshot is
+    /// deterministic and side-effect-free, §15.4).
+    last_frame_cache: Option<(u64, FrameRef)>,
     /// Laid-out bounds per accessibility id (the coordinate actions' target).
     bounds: HashMap<u64, [f64; 4]>,
     /// Current editor values per id (the fill's clear count).
@@ -125,6 +131,7 @@ impl<S: TestingSeam> FreyaAdapter<S> {
                 paused: false,
             },
             latest: None,
+            last_frame_cache: None,
             overlay_plan: None,
             overlay_paint_log: Vec::new(),
             bounds: HashMap::new(),
@@ -444,20 +451,31 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
             hasher.finish()
         };
         self.pass_seq += 1;
-        Ok(FrameRef {
+        let frame = FrameRef {
             stamp: FrameStamp {
                 seq: self.pass_seq,
                 hash,
             },
             size: (width, height),
             pixels: Some(pixels),
-        })
+        };
+        // The §10 readback cache (m86): `last_frame` serves this frame
+        // until the next pass moves the sequence.
+        self.last_frame_cache = Some((self.pass_seq, frame.clone()));
+        Ok(frame)
     }
 
     fn last_frame(&mut self) -> Option<FrameRef> {
-        // No continuous presentation on the testing runner; the frame
-        // hash rides the §10 pixel digest of the last render call.
-        None
+        // §6.2 freya row (m86): the last presented frame's pixels — the
+        // cached render when the pass hasn't moved, one fresh
+        // deterministic snapshot when it has (the TestingRunner renders
+        // on demand, side-effect-free, §15.4).
+        if let Some((seq, frame)) = self.last_frame_cache.as_ref() {
+            if *seq == self.pass_seq {
+                return Some(frame.clone());
+            }
+        }
+        self.render_frame(None).ok()
     }
 
     /// Inspector overlay (§13, M83): store the plan — every
@@ -791,7 +809,14 @@ mod tests {
             self.log.borrow_mut().push(format!("poll:{step:?}x{times}"));
         }
         fn render(&mut self) -> Result<Vec<u8>, AdapterError> {
-            Ok(vec![])
+            // A real 1×1 RGBA PNG (the mock raster): the adapter decodes
+            // it back like the runner's snapshot bytes, so the §10
+            // readback paths have genuine pixels to serve (m86). The
+            // encoder is the same codec stack the real runner's PNG
+            // rides — the bytes are always a valid snapshot.
+            let image = guiwright_shot::Image::solid(1, 1, [28, 28, 32, 255]);
+            guiwright_shot::codec::encode_png(&image)
+                .map_err(|err| AdapterError::Internal(format!("mock raster: {err}")))
         }
         fn screen_size(&self) -> (f64, f64) {
             (400.0, 300.0)
@@ -820,6 +845,33 @@ mod tests {
         assert!(!caps.logical_snapshot);
         assert!(caps.input);
         assert!(caps.render_frame, "software Skia");
+        assert!(
+            caps.last_frame,
+            "the cached render readback (§6.2 freya row, m86)"
+        );
+    }
+
+    #[test]
+    fn last_frame_reads_back_the_presented_pixels() {
+        // §6.2 freya row + the §10 video source (m86): the readback
+        // serves the presented frame's pixels — cache within a pass,
+        // one fresh deterministic snapshot across passes.
+        let (mut adapter, _log) = logging_adapter();
+        adapter.pump(FrameDeadline::within(std::time::Duration::from_millis(50)));
+
+        let last = adapter.last_frame().expect("the readback has pixels");
+        assert!(last.pixels.is_some(), "the readback carries pixels");
+        let again = adapter.last_frame().expect("cached readback");
+        assert_eq!(last.stamp.hash, again.stamp.hash, "same pixels");
+        assert_eq!(last.size, again.size, "same viewport");
+
+        // The on-demand render of the same view digests identically —
+        // the readback IS the presented frame (no stale pixels).
+        let rendered = adapter.render_frame(None).expect("render");
+        assert_eq!(
+            last.stamp.hash, rendered.stamp.hash,
+            "the readback digest matches the render"
+        );
     }
 
     #[test]
