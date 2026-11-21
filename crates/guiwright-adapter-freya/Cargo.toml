@@ -12,6 +12,9 @@ description = "Guiwright Level-1 adapter for Freya (architecture §4.3): Accessi
 [dependencies]
 guiwright-core.workspace = true
 guiwright-driver.workspace = true
+# The §13 overlay plan vocabulary (`show_overlay` hands one in — the
+# egui adapter's shape; framework-free, ungated).
+guiwright-inspect.workspace = true
 accesskit.workspace = true
 thiserror.workspace = true
 
@@ -19,13 +22,34 @@ thiserror.workspace = true
 # default build carries none of it; `--features freya` pulls the testing
 # runner (freya-engine → software Skia — the CI leg compiles it, no local
 # clang needed for the rest of the workspace).
-freya-testing = { version = "0.5.0", optional = true }
+freya-testing = { version = "0.5.3", optional = true }
+# The §13 overlay composite paints through the framework's own Skia
+# engine (the render pipeline's raster surface), M83.
+freya-skia-safe = { version = "0.104.0", optional = true }
+# The runner glue names freya-core types outside the testing prelude
+# (`element::AppComponent`, `runner::Runner` — freya 0.5 stopped
+# re-exporting them through `freya_testing::prelude`).
+freya-core = { version = "0.5.3", optional = true }
+# `torin::prelude` owns `CursorPoint` / `Size2D` in freya 0.5 (the
+# testing prelude stopped re-exporting them); the platform-event
+# translation needs both.
+torin = { version = "0.5.3", optional = true }
+# The render_frame §10 pixel digest rides the workspace's pinned hashing
+# stack (the same twox-hash row every adapter's frame path uses).
+twox-hash = { workspace = true, optional = true }
 # The m79 render seam decodes the runner's PNG snapshots into §10 RGBA
 # frames (guiwright-shot is the framework-free codec stack).
 guiwright-shot = { workspace = true, optional = true }
 
 [features]
-freya = ["dep:freya-testing", "dep:guiwright-shot"]
+freya = [
+    "dep:freya-testing",
+    "dep:freya-skia-safe",
+    "dep:freya-core",
+    "dep:torin",
+    "dep:twox-hash",
+    "dep:guiwright-shot",
+]
 
 [[example]]
 name = "counter_form"
@@ -38,7 +62,7 @@ required-features = ["freya"]
 # graph already; as a dev-dep it compiles only when tests/examples build —
 # and those require the `freya` feature (see the [[example]] gate), so the
 # default build still carries no framework stack.
-freya-components = "0.5.0"
+freya-components = "0.5.3"
 
 [lints]
 workspace = true
