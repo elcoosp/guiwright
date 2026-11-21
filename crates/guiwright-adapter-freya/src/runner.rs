@@ -38,6 +38,7 @@ use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline, FrameRef,
     FrameStamp, FrameworkAdapter, InputEvent, PumpOutcome, SemAction,
 };
+use guiwright_driver::seams::SeamTask;
 
 use crate::buffer::{PendingEvent, SyncEventBuffer};
 use crate::ids::AccessibilityMap;
@@ -68,6 +69,11 @@ pub trait TestingSeam {
     fn render(&mut self) -> Result<Vec<u8>, AdapterError>;
     /// Screen size in logical px.
     fn screen_size(&self) -> (f64, f64);
+    /// The §14 state seam: run one compiled [`SeamTask`] inside the
+    /// runner context — the harness hands over the hook's root context
+    /// (the app state the hook registered, §14 "state writes need the
+    /// runner's context").
+    fn run_in(&mut self, task: SeamTask) -> Result<String, AdapterError>;
 }
 
 /// The freya adapter (§6.1): Level-1 — real AccessKit diffs, real event
@@ -464,6 +470,13 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
         self.overlay_plan = plan.cloned();
         Ok(())
     }
+
+    /// State seams (§14): the task runs inside the runner context the
+    /// seam hands over — the same handoff the gpui adapter documents
+    /// ("state writes need the runner's context").
+    fn run_in(&mut self, task: SeamTask) -> Result<String, AdapterError> {
+        self.seam.run_in(task)
+    }
 }
 
 /// The **real** seam: `freya_testing::TestingRunner` owned wholesale, its
@@ -679,6 +692,14 @@ impl<T: 'static> TestingSeam for FreyaTestingHarness<T> {
     fn screen_size(&self) -> (f64, f64) {
         self.size
     }
+
+    /// The runner context is the hook's root context (`state: T`) — the
+    /// app state the reactive graph consumes. The task runs on the same
+    /// thread the harness owns (TestingRunner is a sync, single-threaded
+    /// harness — no executor hop, the §5.1 waker row degenerates).
+    fn run_in(&mut self, task: SeamTask) -> Result<String, AdapterError> {
+        task(&mut self.state as &mut dyn std::any::Any).map_err(AdapterError::Internal)
+    }
 }
 
 trait PumpExt {
@@ -702,6 +723,15 @@ mod tests {
     /// Shared seam: the adapter owns it, the test observes the same log.
     type SharedLog = Rc<RefCell<Vec<String>>>;
 
+    /// The runner context the seam hands to `run_in` tasks (§14: state
+    /// writes need the runner's context) — a dedicated store the task
+    /// mutates through `&mut dyn Any`, separate from the delivery log.
+    #[derive(Default)]
+    struct SeamDb {
+        rows: usize,
+    }
+    type SharedSeamDb = Rc<RefCell<SeamDb>>;
+
     fn empty_update() -> TreeUpdate {
         TreeUpdate {
             nodes: vec![],
@@ -714,17 +744,23 @@ mod tests {
     struct LoggingRunner {
         log: SharedLog,
         removed: Vec<u64>,
+        /// The runner context handed over by `run_in` (shared with the
+        /// test so the mutation is observable from outside the adapter).
+        db: SharedSeamDb,
     }
 
     impl LoggingRunner {
-        fn new() -> (Self, SharedLog) {
+        fn new() -> (Self, SharedLog, SharedSeamDb) {
             let log: SharedLog = Rc::new(RefCell::new(Vec::new()));
+            let db: SharedSeamDb = Rc::new(RefCell::new(SeamDb::default()));
             (
                 Self {
                     log: Rc::clone(&log),
                     removed: Vec::new(),
+                    db: Rc::clone(&db),
                 },
                 log,
+                db,
             )
         }
     }
@@ -760,11 +796,20 @@ mod tests {
         fn screen_size(&self) -> (f64, f64) {
             (400.0, 300.0)
         }
+        fn run_in(&mut self, task: SeamTask) -> Result<String, AdapterError> {
+            task(&mut self.db as &mut dyn std::any::Any).map_err(AdapterError::Internal)
+        }
     }
 
     fn logging_adapter() -> (FreyaAdapter<LoggingRunner>, SharedLog) {
-        let (seam, log) = LoggingRunner::new();
-        (FreyaAdapter::new(seam), log)
+        let (seam, log, _db) = logging_adapter_with_db();
+        (seam, log)
+    }
+
+    /// The seam routing tests also observe the runner context itself.
+    fn logging_adapter_with_db() -> (FreyaAdapter<LoggingRunner>, SharedLog, SharedSeamDb) {
+        let (seam, log, db) = LoggingRunner::new();
+        (FreyaAdapter::new(seam), log, db)
     }
 
     #[test]
@@ -790,15 +835,15 @@ mod tests {
         let delivered: Vec<&String> = entries.iter().filter(|e| e.starts_with("event:")).collect();
         assert_eq!(delivered.len(), 3, "all three flushed: {entries:?}");
         assert!(
-            delivered[0].contains("MouseDown"),
+            delivered[0].contains("MouseButtonDown"),
             "press first: {delivered:?}"
         );
         assert!(
-            delivered[1].contains("MouseMove"),
+            delivered[1].contains("MouseMoved"),
             "move second: {delivered:?}"
         );
         assert!(
-            delivered[2].contains("MouseUp"),
+            delivered[2].contains("MouseButtonUp"),
             "release third: {delivered:?}"
         );
         assert!(entries.iter().any(|e| e == "sync"), "one harness step ran");
@@ -892,6 +937,44 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("phase: Up") && e.contains("escape")),
             "the up phase is delivered: {entries:?}"
+        );
+    }
+
+    /// The §14 state-seam row (mirrors the gpui adapter's seam): the
+    /// task runs inside the runner context the seam hands over — the
+    /// hook writes through `&mut dyn Any`, the app state actually moves.
+    #[test]
+    fn run_in_executes_the_task_in_the_runner_context() {
+        let (mut adapter, _log, db) = logging_adapter_with_db();
+        db.borrow_mut().rows = 9;
+        let task: guiwright_driver::seams::SeamTask = Box::new(|ctx: &mut dyn std::any::Any| {
+            let db = ctx
+                .downcast_mut::<Rc<RefCell<SeamDb>>>()
+                .ok_or("wrong runner context type")?;
+            db.borrow_mut().rows = 0;
+            Ok("state reset".to_string())
+        });
+        let detail = adapter.run_in(task).expect("seam executed");
+        assert_eq!(detail, "state reset");
+        assert_eq!(
+            db.borrow().rows,
+            0,
+            "the hook wrote through the runner context"
+        );
+    }
+
+    #[test]
+    fn run_in_context_mismatch_is_loud() {
+        let (mut adapter, _log, _db) = logging_adapter_with_db();
+        let task: guiwright_driver::seams::SeamTask = Box::new(|ctx: &mut dyn std::any::Any| {
+            ctx.downcast_mut::<Vec<String>>()
+                .ok_or("wrong runner context type")?;
+            Ok("unreachable".to_string())
+        });
+        let err = adapter.run_in(task).expect_err("type mismatch");
+        assert!(
+            err.to_string().contains("wrong runner context type"),
+            "{err}"
         );
     }
 }
