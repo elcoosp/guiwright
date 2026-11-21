@@ -96,7 +96,7 @@ fn counter_form() -> Element {
 }
 
 fn main() {
-    let mut harness = FreyaTestingHarness::boot(counter_form, (480.0, 320.0), |runner| {
+    let harness = FreyaTestingHarness::boot(counter_form, (480.0, 320.0), |runner| {
         // The context the app consumes IS the AppState (freya 0.5
         // registers contexts by type — `use_consume::<AppState>()`).
         runner.provide_root_context(|| AppState {
