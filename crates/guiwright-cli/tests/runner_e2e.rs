@@ -41,6 +41,33 @@ fn spawn_server(tag: &str) -> (PathBuf, GwpServerHandle) {
     (path, handle)
 }
 
+/// The `spawn_server` shape with a scripted render surface (`wire_screenshot`'s
+/// `with_frame_pixels` contract) — the report test's `screenshot` step needs
+/// a frame to pull; every other suite runs on the bare fixture.
+fn spawn_shot_server(tag: &str) -> (PathBuf, GwpServerHandle) {
+    let gradient_rgba = |w: u32, h: u32| -> Vec<u8> {
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .flat_map(|(x, y)| [(x & 0xff) as u8, (y & 0xff) as u8, 99u8, 255u8])
+            .collect()
+    };
+    let dir = leak_dir(tag);
+    let path = dir.join(format!("{tag}.sock"));
+    let handle = GwpServerHandle::spawn_with_seams(
+        path.clone(),
+        move || {
+            MockAdapter::with_fixture(&Fixture::buttons()).with_frame_pixels(
+                48,
+                24,
+                gradient_rgba(48, 24),
+            )
+        },
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("server binds");
+    (path, handle)
+}
+
 fn uds_opts(path: &Path) -> TestOptions {
     TestOptions {
         target: Some(ConnectTarget::Uds(path.to_path_buf())),
@@ -266,17 +293,22 @@ async fn workers_run_scenarios_in_parallel() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_target_overrides_the_spec_target() {
     let dir = leak_dir("runner-target-override");
-    // The spec points at a socket that does not exist…
+    // The spec points at a socket that does not exist — inside the leaked
+    // temp dir, so the connect-failure path carries no `/`-rooted literal
+    // (nextest friendliness: nothing outside the test's own tree).
     write_spec(
         &dir,
         "wrong.spec.toml",
-        r#"
-target = "uds:///nonexistent-gw-runner-test.sock"
+        &format!(
+            r#"
+target = "uds://{}/never-bound.sock"
 
 [[scenario]]
 name = "ping"
 steps = ["ping"]
 "#,
+            dir.display()
+        ),
     );
     // …but the CLI target wins, so the run is green.
     let (path, _server) = spawn_server("runner-target-override");
@@ -354,13 +386,21 @@ fn discovery_scans_directories_recursively_and_ignores_other_toml() {
     );
 }
 
+/// M82 (the m81 deferral closed): the runner harvests the artifact paths
+/// its own steps write (`shot: <path>` / `video: <path>` Ok lines) into
+/// each scenario record, the JSON report carries them as an `artifacts`
+/// array, and the HTML report links them — without owning emission (the
+/// REPL command language already writes the files; the runner only reads
+/// the paths back out of the step outcomes).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn report_files_are_written_for_json_junit_and_html() {
     let dir = leak_dir("runner-reports");
+    let artifact = leak_dir("runner-reports-artifacts").join("window.png");
     write_spec(
         &dir,
         "mixed.spec.toml",
-        r#"
+        &format!(
+            r#"
 timeout_ms = 150
 
 [[scenario]]
@@ -368,11 +408,17 @@ name = "green"
 steps = ["ping"]
 
 [[scenario]]
+name = "shots"
+steps = ["screenshot {}"]
+
+[[scenario]]
 name = "red"
 steps = ["expect role button Nope"]
 "#,
+            artifact.display()
+        ),
     );
-    let (path, _server) = spawn_server("runner-reports");
+    let (path, _server) = spawn_shot_server("runner-reports");
     let out_dir = leak_dir("runner-reports-out");
 
     let specs = runner::discover(&[dir]).expect("discovery");
@@ -390,13 +436,42 @@ steps = ["expect role button Nope"]
         runner::write_reports(&outcome.report, &opts.reports, &out_dir).expect("reports write");
     assert_eq!(written.len(), 3);
     let junit = std::fs::read_to_string(out_dir.join("junit.xml")).expect("junit file");
-    assert!(junit.contains("tests=\"2\""), "{junit}");
+    assert!(junit.contains("tests=\"3\""), "{junit}");
     assert!(junit.contains("failures=\"1\""), "{junit}");
     assert!(junit.contains("expectation failed"), "{junit}");
     let json = std::fs::read_to_string(out_dir.join("report.json")).expect("json file");
     assert!(json.contains("\"schema\": \"gwrun/v1\""), "{json}");
     let html = std::fs::read_to_string(out_dir.join("report.html")).expect("html file");
     assert!(html.contains("guiwright run report"), "{html}");
+
+    // The screenshot step's artifact: the REPL wrote the PNG (the step is
+    // the emission), the record carries the path, JSON and HTML surface it.
+    let artifact_str = artifact.to_string_lossy().into_owned();
+    assert!(
+        artifact.exists(),
+        "the screenshot step wrote {artifact_str}"
+    );
+    let shots = outcome
+        .report
+        .scenarios
+        .iter()
+        .find(|s| s.name == "shots")
+        .expect("shot scenario record");
+    assert_eq!(shots.status, ScenarioStatus::Passed, "{shots:?}");
+    assert_eq!(shots.artifacts, vec![artifact_str.clone()], "{shots:?}");
+    let value: serde_json::Value =
+        serde_json::from_str(&json).expect("the gwrun/v1 document parses");
+    assert_eq!(
+        value["scenarios"][1]["artifacts"],
+        serde_json::json!([artifact_str]),
+        "{json}"
+    );
+    let green_empty = &value["scenarios"][0]["artifacts"];
+    assert_eq!(green_empty, &serde_json::json!([]), "{json}");
+    assert!(
+        html.contains(&format!("href=\"{artifact_str}\"")),
+        "the html links the artifact: {html}"
+    );
 }
 
 /// M6 (§16 v0.4 multi-window): a spec step re-aims its connection at a
