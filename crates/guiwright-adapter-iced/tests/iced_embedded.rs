@@ -261,3 +261,144 @@ fn logical_snapshot_is_stable_across_pumps() {
     assert_eq!(first, second, "tree size stable across re-snapshots");
     assert!(first > 5, "the full widget tree is in the snapshot");
 }
+
+/// The §13 inspector overlay (m8 promise): with the session on, the
+/// adapter composites the hover outline + role badges onto the Emulator's
+/// own headless rendering — the screenshot pixels differ from the bare
+/// app's baseline (M83).
+#[test]
+fn overlay_pixel_diff_is_non_zero() {
+    let mut session = counter_session();
+
+    // Baseline: the bare app, no overlay session (§10 capture path).
+    let baseline = session
+        .adapter_mut()
+        .render_frame(None)
+        .expect("headless render");
+    let base = baseline.pixels.expect("software raster pixels");
+
+    // The overlay session: badges on interactive widgets + the hover
+    // outline on the resolved Increment button.
+    session
+        .inspect_enable_overlay()
+        .expect("overlay session on");
+    session
+        .inspect_highlight(&increment())
+        .expect("highlight resolves");
+
+    let overlaid = session
+        .adapter_mut()
+        .render_frame(None)
+        .expect("headless render with the overlay");
+    let over = overlaid.pixels.expect("software raster pixels");
+
+    assert_eq!(base.len(), over.len(), "same viewport");
+    let diff = base.iter().zip(over.iter()).filter(|(a, b)| a != b).count();
+    assert!(diff > 0, "the overlay painted onto the scene: {diff} bytes");
+    assert!(
+        overlaid.stamp.hash != baseline.stamp.hash,
+        "frame digest moved"
+    );
+}
+
+/// A timer-driven app (§14): the counter label advances on a real
+/// `subscription::time::every` tick — the proof surface for the clock
+/// binding.
+struct TickerApp;
+
+#[derive(Debug, Clone)]
+enum TickMsg {
+    Tick,
+    Hook(TreeDumpTx),
+}
+
+impl Program for TickerApp {
+    type State = u64;
+    type Message = TickMsg;
+    type Theme = Theme;
+    type Renderer = renderer::Renderer;
+    type Executor = iced_test::futures::backend::default::Executor;
+
+    fn name() -> &'static str {
+        "guiwright_ticker"
+    }
+
+    fn settings(&self) -> Settings {
+        Settings::default()
+    }
+
+    fn window(&self) -> Option<iced_test::core::window::Settings> {
+        None
+    }
+
+    fn boot(&self) -> (Self::State, Task<Self::Message>) {
+        (0, Task::none())
+    }
+
+    fn update(&self, state: &mut Self::State, message: Self::Message) -> Task<Self::Message> {
+        match message {
+            TickMsg::Tick => *state += 1,
+            TickMsg::Hook(tx) => return <TickerApp as HarnessApp>::run_hook(state, tx),
+        }
+        Task::none()
+    }
+
+    fn view<'a>(
+        &self,
+        state: &'a Self::State,
+        _window: iced_test::core::window::Id,
+    ) -> Element<'a, Self::Message, Self::Theme, Self::Renderer> {
+        column![text(format!("Ticks: {state}"))].into()
+    }
+
+    fn subscription(
+        &self,
+        _state: &Self::State,
+    ) -> iced_test::futures::Subscription<Self::Message> {
+        iced_test::futures::subscription::time::every(Duration::from_millis(50))
+            .map(|_| TickMsg::Tick)
+    }
+}
+
+impl HarnessApp for TickerApp {
+    fn hook(tx: TreeDumpTx) -> Self::Message {
+        TickMsg::Hook(tx)
+    }
+}
+
+/// The §14 M2 proof: `clock_fast_forward` advances the framework's own
+/// timers — the subscription ticks landed and the label moved off zero.
+#[test]
+fn clock_fast_forward_completes_subscription_timers() {
+    let harness = EmulatorHarness::new(TickerApp, (300.0, 200.0)).expect("harness boots");
+    let adapter = guiwright_adapter_iced::emulator::embedded_adapter(harness, RoleRegistry::new());
+    let mut session = Session::new(adapter);
+    session.settle(Instant::now() + Duration::from_secs(2));
+
+    // Boot state: zero ticks (the label is exactly "Ticks: 0").
+    assert!(
+        session.resolve(&Selector::text("Ticks: 0")).is_ok(),
+        "boot state shows zero ticks"
+    );
+
+    session
+        .adapter_mut()
+        .clock(guiwright_driver::adapter::ClockCmd::InstallVirtual)
+        .expect("install virtual clock");
+    let state = session
+        .adapter_mut()
+        .clock(guiwright_driver::adapter::ClockCmd::FastForward(
+            Duration::from_millis(300),
+        ))
+        .expect("fast forward drains due timers");
+    assert!(
+        state.virtual_time.expect("ledger") >= Duration::from_millis(300),
+        "the ledger advanced: {state:?}"
+    );
+
+    // The subscription fired through the real pipeline: the label moved.
+    assert!(
+        !session.resolve(&Selector::text("Ticks: 0")).is_ok(),
+        "clock_fast_forward completed the subscription timer"
+    );
+}
