@@ -73,8 +73,14 @@ pub fn composite(plan: &OverlayPlan, rgba: &mut [u8], width: u32, height: u32) {
     if plan.is_empty() {
         return;
     }
-    let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    let Some(mut surface) = surfaces::raster_n32_premul((width as i32, height as i32)) else {
+    // Skia's surface sizes are i32; a frame dimension past the i32 range
+    // cannot exist (the runner's viewport is a real raster), so the
+    // guarded conversion proves the range instead of wrapping — an
+    // impossible size degrades to 0, the surface creation fails, and the
+    // frame pixels stay untouched (the documented composite contract).
+    let dims = |v: u32| i32::try_from(v).unwrap_or(0);
+    let info = ImageInfo::new_n32_premul((dims(width), dims(height)), None);
+    let Some(mut surface) = surfaces::raster_n32_premul((dims(width), dims(height))) else {
         return;
     };
     let row_bytes = (width as usize) * 4;
@@ -105,7 +111,7 @@ pub fn composite(plan: &OverlayPlan, rgba: &mut [u8], width: u32, height: u32) {
     // freya-engine's skia backend).
     let typeface = FontMgr::default().legacy_make_typeface(None, FontStyle::default());
     for badge in &plan.badges {
-        paint_badge(canvas, &typeface, badge);
+        paint_badge(canvas, typeface.as_ref(), badge);
     }
 
     // A failed read-back leaves the frame pixels untouched (the overlay
@@ -117,7 +123,7 @@ pub fn composite(plan: &OverlayPlan, rgba: &mut [u8], width: u32, height: u32) {
 /// laid-out center. Returns the paint-log entry.
 fn paint_badge(
     canvas: &skia_safe::Canvas,
-    typeface: &Option<skia_safe::Typeface>,
+    typeface: Option<&skia_safe::Typeface>,
     badge: &Badge,
 ) -> String {
     let width = BADGE_CHAR_W * badge.text.chars().count() as f32 + 8.0;
