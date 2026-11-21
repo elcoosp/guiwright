@@ -39,9 +39,9 @@ fn counter_form() -> Element {
             .a11y_id(AccessibilityId(0))
             .into();
     }
-    let mut count = state.count.clone();
-    let name = state.name.clone();
-    let name_input = name.clone();
+    let mut count = state.count;
+    let name = state.name;
+    let name_input = name;
 
     rect()
         .width(Size::px(480.))
@@ -107,7 +107,7 @@ fn main() {
     });
     // The mount flip lands after freya's internal boot commit and before
     // the session's first sync — the next diff IS the full tree (§9).
-    let mut mounted = harness.state().mounted.clone();
+    let mut mounted = harness.state().mounted;
     *mounted.write() = true;
     let mut session = Session::new(FreyaAdapter::new(harness));
     session.settle(Instant::now() + Duration::from_secs(2));
