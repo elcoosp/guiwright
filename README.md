@@ -429,7 +429,9 @@ guiwright test --tcp 127.0.0.1:41234 --shard 1/3 --retries 2 \
 No protocol change — every step maps onto an existing GWP request. Failed scenarios re-run per
 `retries` (spec, scenario or flag); passing on a retry reports `flaky`. `--list` prints
 shard-aware discovery without touching the wire. Reports: `report.json` (`gwrun/v1`),
-`junit.xml` (one suite per spec), a self-contained `report.html`.
+`junit.xml` (one suite per spec), a self-contained `report.html` that deep links each
+scenario's artifact paths (`screenshot` / `video stop` step outputs, m82); the JSON carries
+the same paths as a per-scenario `artifacts` array.
 
 ## Adapters
 
