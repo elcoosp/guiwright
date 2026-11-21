@@ -34,6 +34,8 @@ pub mod keys;
 pub mod platform;
 
 #[cfg(feature = "freya")]
+pub mod overlay;
+#[cfg(feature = "freya")]
 pub mod runner;
 
 pub use buffer::{PendingEvent, SyncEventBuffer, click_sequence};
