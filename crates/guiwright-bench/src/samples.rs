@@ -892,6 +892,60 @@ pub fn locator_element_screenshot() -> Duration {
     elapsed
 }
 
+// --- Expect screenshot retry sample (§16 over §10) --------------------------
+
+/// §16 screenshot retry waiter, kit side: one
+/// `expect(locator).to_have_screenshot(name, bless)` on its satisfied
+/// path — the resolve consistency pump, one frame render, the clip-aware
+/// crop (`crop_element`, the §10 hot path the retry shares with the
+/// single-shot) and the waitable `check_snapshot` diff. The launch,
+/// settle and baseline bootstrap stay outside the measured span; the
+/// measured operation is the first-frame-match poll — the floor cost
+/// every retry iteration rides (each mismatching poll adds one pump and
+/// the artifact writes, bounded by the timeout, not by this budget).
+pub fn expect_screenshot_retry() -> Duration {
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::{App, BlessMode};
+
+    let mut adapter = MockAdapter::with_fixture(&Fixture::buttons());
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let rgba: Vec<u8> = (0..240u32)
+        .flat_map(|y| (0..480u32).map(move |x| (x, y)))
+        .flat_map(|(x, y)| [(x & 0xff) as u8, (y & 0xff) as u8, 99u8, 255u8])
+        .collect();
+    let adapter = adapter.with_frame_pixels(480, 240, rgba);
+    let scratch = ScratchDir(std::env::temp_dir().join(format!(
+        "gwp-bench-expect-shot-{}-{}",
+        std::process::id(),
+        guiwright_trace::video::epoch_ms()
+    )));
+    let mut app = App::launch("expect_screenshot_retry", adapter).with_baseline_dir(&scratch.0);
+    app.wait_for_settle();
+    app.get_by_role(accesskit::Role::Button, "Save")
+        .screenshot("save", BlessMode::Failing)
+        .expect("baseline bootstrapped");
+
+    let start = Instant::now();
+    guiwright_kit::expect(app.get_by_role(accesskit::Role::Button, "Save"))
+        .to_have_screenshot("save", BlessMode::Off)
+        .expect("first-frame match inside the retry waiter");
+    let elapsed = start.elapsed();
+    // The artifacts dir stays clean: a first-frame match writes nothing.
+    assert!(
+        !scratch
+            .0
+            .join("save")
+            .read_dir()
+            .expect("baseline dir")
+            .filter_map(std::result::Result::ok)
+            .any(|e| e.file_name().to_string_lossy().ends_with(".new.png")),
+        "the satisfied poll wrote no mismatch artifacts"
+    );
+    elapsed
+}
+
 // --- Wire screenshot sample (§7 render domain over §10 capture, M10) ---------
 
 /// §7 render domain (M10): one `Session::screenshot_window` end-to-end —
