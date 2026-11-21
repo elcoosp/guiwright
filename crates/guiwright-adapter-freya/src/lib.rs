@@ -19,9 +19,12 @@
 //! The `freya` feature adds [`runner`]: the real `TestingRunner` glue —
 //! [`runner::FreyaTestingHarness`] owns a live runner and answers the
 //! [`runner::TestingSeam`] vocabulary from its verified public surface
-//! (bound at m79; the CI `adapter-freya` job runtime-tests it). It is
-//! feature-gated because the framework stack (software Skia) must not
-//! leak into builds that do not ask for it (§18).
+//! (bound at m79; the CI `adapter-freya` job runtime-tests it), including
+//! the §14 `run_in` state seam: a compiled `SeamTask` runs inside the
+//! hook's root context — the app state the reactive graph consumes — so
+//! tests mutate state without an input event. It is feature-gated because
+//! the framework stack (software Skia) must not leak into builds that do
+//! not ask for it (§18).
 //!
 //! [`FrameworkAdapter`]: guiwright_driver::adapter::FrameworkAdapter
 //! [`InputEvent`]: guiwright_driver::adapter::InputEvent
