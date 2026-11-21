@@ -55,6 +55,27 @@
 //! fill sequence (focus click + real `KeyboardEvent`s) stays in the
 //! harness for the upstream fix.
 //!
+//! # The canonical binding proof (`examples/downstream-glue/floem`)
+//!
+//! The binding as **compilable, runnable code**:
+//! `examples/downstream-glue/floem` (its own workspace, dependency-free)
+//! implements [`FrameworkAdapter`] over a floem-shaped **mirror** — the
+//! exact `TestRoot`/`HeadlessHarness`/`ViewId`/`Event` surface this
+//! contract documents, scripted — through this crate's engine modules:
+//! the [`crate::logical::FloemLogicalTree`] fold over `ViewReport`s, the
+//! [`crate::ids::TestIdRegistry`] registration, [`crate::input::translate`]
+//! → `dispatch_event`, [`crate::clock::plan`] harness ticks and the
+//! [`crate::paint::PaintState`] pixel path. Its integration test drives a
+//! real `Session` end to end (resolve → click → `expect` → tiny-skia
+//! screenshot) and the `compile_fail` doc test pins the harness shape (a
+//! non-floem harness cannot bind). The mirror keeps the seams honest:
+//! text/value facts ride shared app state (the `SemReader` pattern) and
+//! `SetValue` reports `Unsupported` with the fill-blocker evidence
+//! below. When the harness releases upstream and the glue lands here, the
+//! example is the diff target: swap the mirror types for the real ones,
+//! keep the engine calls identical. `glue/floem` remains the REAL-graph
+//! proof (CI-exercised); this example is the anywhere-compilable one.
+//!
 //! # The downstream binding (realized in `glue/floem`, m80)
 //!
 //! ```ignore
