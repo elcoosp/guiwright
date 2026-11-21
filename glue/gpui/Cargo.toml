@@ -28,6 +28,10 @@ description = "Guiwright GPUI harness glue (architecture §4.5, m80): FrameworkA
 [dependencies]
 guiwright-adapter-gpui = { path = "../../crates/guiwright-adapter-gpui" }
 guiwright-driver = { path = "../../crates/guiwright-driver" }
+# The §13 overlay plan vocabulary (`show_overlay` hands one in — the
+# engine's overlay host translates it into the painted-quad scene the
+# frame digest folds, m86).
+guiwright-inspect = { path = "../../crates/guiwright-inspect" }
 accesskit = "0.25.2"
 thiserror = "2.0.21"
 # gpui's element DSL speaks its own accesskit generation (zed's
