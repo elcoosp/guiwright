@@ -9,8 +9,13 @@ Commits](https://www.conventionalcommits.org).
 ## [Unreleased]
 
 ### Features
+- **cli:** The runner reports link the screenshot and video artifacts (m82)
 - **floem:** The downstream glue binds the HeadlessHarness (m80)
 - **gpui:** The downstream glue binds the test-support platform (m80)
+
+### Bug Fixes
+- **proto:** The golden bless refuses the write under cargo-nextest (m82)
+- **slint:** The glue lockfile rides the rc.1 member versions (m82)
 
 ### CI/CD
 - The floem and gpui glue jobs run the real harnesses
