@@ -34,6 +34,30 @@
 //! the `compile_fail` doc test below pins the shape: a window without the
 //! gpui dispatch surface cannot bind.
 //!
+//! # The overlay binding is signature-enforced too (m86)
+//!
+//! The §13 route (the 7/7 overlay count's gpui leg): `show_overlay`
+//! hands the plan to the engine's [`guiwright_adapter_gpui::OverlayHost`]
+//! — the mock of the real test-support paint route (`paint_quad` →
+//! `painted_quads`) — and `render_pixels` composites the host's quads
+//! onto the scripted raster. When the real framework API matches the
+//! mock signatures, the binding compiles and routes unchanged; a window
+//! WITHOUT the paint surface cannot bind:
+//!
+//! ```compile_fail
+//! use guiwright_adapter_gpui::OverlayHost;
+//! use guiwright_inspect::overlay::OverlayPlan;
+//!
+//! struct Placeholder;
+//!
+//! fn paint(host: &mut Placeholder, plan: &OverlayPlan) {
+//!     // E0599: `paint_quads` is the overlay host's method — a surface
+//!     // without the painted-quad signature cannot bind the §13 route,
+//!     // which is exactly the contract the mirror pins.
+//!     host.paint_quads(plan);
+//! }
+//! ```
+//!
 //! # The binding is signature-enforced (compile-fail proof)
 //!
 //! ```compile_fail
