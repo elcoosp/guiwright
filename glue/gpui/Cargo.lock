@@ -1224,6 +1224,7 @@ dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "thiserror 2.0.21",
  "twox-hash",
 ]
@@ -1239,6 +1240,7 @@ dependencies = [
  "guiwright-adapter-gpui",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "thiserror 2.0.21",
  "twox-hash",
 ]
