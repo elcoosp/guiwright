@@ -1,7 +1,8 @@
 # Release-prep orchestrator — the local mirror of .github/workflows/release.yml.
 # Proves a tag is publishable BEFORE it is pushed: crates.io metadata
 # strictness, the topo-sorted publish dry-run, and the git-cliff changelog.
-# Run `just release-prep` (bump + changelog + dry-run) or each recipe alone.
+# Run `just release-prep` (bump + changelog + Rust dry-run + TS pack
+# dry-run) or each recipe alone.
 
 default:
     @just --list
@@ -107,14 +108,50 @@ publish-dry-run:
     cargo publish --workspace --dry-run --allow-dirty --locked
     echo "publish dry-run: all 18 workspace crates packaged and verified"
 
-# The full local pre-tag gate: bump (optional — empty keeps the current
-# version), metadata strictness, changelog cut, topo-sorted dry-run.
+# The full local pre-tag gate — one atomic, idempotent command: metadata
+# strictness, the changelog cut, the topo-sorted publish dry-run (all 18
+# crates, verification ON) and the TypeScript client's build + publish
+# dry-run, ending in a READY FOR TAG verdict. Atomicity: the bump (when a
+# new version is requested) and the changelog cut are the only steps that
+# write — every file they touch is snapshotted first and restored if any
+# step fails, so a failed run exits non-zero with the tree exactly as it
+# found it (no half-bumped manifests, no half-cut section). Idempotent:
+# re-running with the same version regenerates byte-identical outputs and
+# exits 0.
 release-prep new_version="":
     #!/bin/sh
     set -eu
-    if [ -n "{{new_version}}" ]; then
-        just bump "{{new_version}}"
+    work=$(mktemp -d)
+    restore() {
+        cp "$work/Cargo.toml" Cargo.toml
+        cp "$work/kit.toml" crates/guiwright-kit/Cargo.toml
+        cp "$work/package.json" clients/typescript/package.json
+        cp "$work/package-lock.json" clients/typescript/package-lock.json
+        cp "$work/CHANGELOG.md" CHANGELOG.md
+        rm -rf "$work"
+        echo "release-prep: FAILED — every written file restored, the tree is as it was"
+    }
+    cp Cargo.toml "$work/Cargo.toml"
+    cp crates/guiwright-kit/Cargo.toml "$work/kit.toml"
+    cp clients/typescript/package.json "$work/package.json"
+    cp clients/typescript/package-lock.json "$work/package-lock.json"
+    cp CHANGELOG.md "$work/CHANGELOG.md"
+    if ! (
+        set -eu
+        if [ -n "{{new_version}}" ]; then
+            just bump "{{new_version}}"
+        fi
+        just check-metadata
+        just changelog
+        just publish-dry-run
+        # The TypeScript client's gate (the release.yml mirror): the
+        # build-check, then the pack dry-run proving the tarball npm
+        # publish ships (the same proof the CI release job runs).
+        (cd clients/typescript && npm run build && npm publish --dry-run --access public)
+    ); then
+        restore
+        exit 1
     fi
-    just check-metadata
-    just changelog
-    just publish-dry-run
+    rm -rf "$work"
+    version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+    echo "READY FOR TAG: v${version} — changelog cut, 18 crates publish-verified, TS client pack-verified"
