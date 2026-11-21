@@ -89,7 +89,8 @@ jobs:
           # system libraries (xkbcommon, wayland) a default build must
           # never require (both contracts live in the crate docs +
           # docs/m3-floem-contributions.md). Their engines are verified by
-          # the normal test job; the glue lands downstream.
+          # the normal test job; the glue is runtime-tested by the
+          # dedicated floem-glue and gpui-glue jobs below (m80).
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -118,6 +119,10 @@ jobs:
       - run: cargo fmt --manifest-path glue/slint/Cargo.toml --all -- --check
       - run: cargo clippy --manifest-path glue/slint/Cargo.toml --all-targets --locked -- -D warnings
       - run: cargo test --manifest-path glue/slint/Cargo.toml --locked
+      # The consumer walkthrough runs end-to-end like the floem/gpui
+      # glue jobs' examples (m80 parity): same TestingBackend stack the
+      # runtime tests above prove.
+      - run: cargo run --manifest-path glue/slint/Cargo.toml --example counter_form --locked
 
   floem-glue:
     # m80 (§4.7, §17 row 6): the floem glue workspace runtime-tests the
