@@ -43,10 +43,12 @@ pub mod clock;
 pub mod contract;
 pub mod frames;
 pub mod input;
+pub mod overlay;
 pub mod run_in;
 
 pub use a11y::{A11yHybrid, ActivationPolicy};
 pub use contract::{GpuiAdapterContract, GpuiCaps};
 pub use frames::{FrameDigest, strided_xxh3};
 pub use input::{GpuiButton, GpuiInputStep, KeyStroke, Modifier, parse_keystrokes, translate};
+pub use overlay::{OverlayHost, PaintedQuad};
 pub use run_in::{Dispatch, RunInPlan};
