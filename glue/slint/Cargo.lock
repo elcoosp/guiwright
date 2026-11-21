@@ -1451,13 +1451,31 @@ dependencies = [
  "accesskit",
  "criterion",
  "guiwright-adapter-slint",
+ "guiwright-cli",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
+ "guiwright-kit",
  "i-slint-backend-testing",
+ "serde_json",
  "slint",
  "slint-build",
+ "tempfile",
  "thiserror 2.0.21",
  "twox-hash",
+]
+
+[[package]]
+name = "guiwright-cli"
+version = "1.0.0"
+dependencies = [
+ "guiwright-proto",
+ "guiwright-viewer",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -1499,6 +1517,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "guiwright-kit"
+version = "1.0.0"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer",
+ "guiwright-core",
+ "guiwright-driver",
+ "guiwright-inspect",
+ "guiwright-macros",
+ "guiwright-shot",
+ "guiwright-trace",
+ "guiwright-viewer",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "guiwright-macros"
+version = "1.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "guiwright-proto"
 version = "1.0.0"
 dependencies = [
@@ -1536,6 +1580,21 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
+ "zip",
+]
+
+[[package]]
+name = "guiwright-viewer"
+version = "1.0.0"
+dependencies = [
+ "guiwright-proto",
+ "guiwright-trace",
+ "lz4_flex",
+ "postcard",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
  "zip",
 ]
 
