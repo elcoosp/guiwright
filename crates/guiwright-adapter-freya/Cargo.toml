@@ -63,6 +63,14 @@ required-features = ["freya"]
 # and those require the `freya` feature (see the [[example]] gate), so the
 # default build still carries no framework stack.
 freya-components = "0.5.3"
+# The m86 video + visual-regression rows drive the kit App's §10 surface
+# over the real TestingRunner pixels (framework-free members, dev-only —
+# they ride the freya-feature build the CI adapter job runs).
+guiwright-kit.workspace = true
+tempfile.workspace = true
+# The video row reads the PNG-sequence fallback's `video.json` manifest
+# (the artifact-validity half of the §10 assertions).
+serde_json.workspace = true
 
 [lints]
 workspace = true
