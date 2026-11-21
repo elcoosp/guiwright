@@ -17,12 +17,14 @@ use accesskit::NodeId;
 use guiwright_adapter_gpui::clock::{GpuiClockStep, plan as clock_plan};
 use guiwright_adapter_gpui::frames::FrameDigest;
 use guiwright_adapter_gpui::input::{GpuiButton, GpuiInputStep, translate};
-use guiwright_adapter_gpui::{A11yHybrid, ActivationPolicy, GpuiAdapterContract, RunInPlan};
+use guiwright_adapter_gpui::overlay;
+use guiwright_adapter_gpui::{A11yHybrid, ActivationPolicy, GpuiAdapterContract, OverlayHost, RunInPlan};
 use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, ClockCmd, ClockState, FrameDeadline, FrameRef,
     FrameStamp, FrameworkAdapter, InputEvent, PumpOutcome, SemAction,
 };
 use guiwright_driver::seams::SeamTask;
+use guiwright_inspect::overlay::OverlayPlan;
 
 use crate::mirror::{
     App, CounterState, Entity, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
@@ -45,6 +47,14 @@ pub struct GpuiDownstreamGlue {
     entity: Entity<CounterState>,
     /// The scripted test-support raster (the `rendered_frame` stand-in).
     pixels: Vec<u8>,
+    /// The §13 overlay binding (m86): the active plan + the mock overlay
+    /// host — the paint route the real test-support surface rides
+    /// (`Window::paint_quad` → `painted_quads`, mirrored per contract.rs).
+    /// `render_pixels` composites the host's quads onto the scripted
+    /// raster, so the overlay lands in the presented pixels AND the
+    /// pump's frame digest (the hash-only adapters' §13 route).
+    overlay_plan: Option<OverlayPlan>,
+    overlay_host: OverlayHost,
     pass_seq: u64,
 }
 
@@ -74,6 +84,8 @@ impl GpuiDownstreamGlue {
             cx: App::new(),
             entity,
             pixels: vec![0; 480 * 240 * 4],
+            overlay_plan: None,
+            overlay_host: OverlayHost::new(),
             pass_seq: 0,
         };
         me.hybrid.apply(&me.window.borrow_mut().a11y_tree_update());
@@ -84,6 +96,12 @@ impl GpuiDownstreamGlue {
     /// reads close over).
     pub fn entity(&self) -> &Entity<CounterState> {
         &self.entity
+    }
+
+    /// The §13 draw-call evidence (the adapters' `take_paint_log` shape):
+    /// one entry per overlay draw since the last drain.
+    pub fn take_overlay_paint_log(&mut self) -> Vec<String> {
+        self.overlay_host.take_paint_log()
     }
 
     /// Wrap one engine input step into `PlatformInput` (the glue's
@@ -150,7 +168,10 @@ impl GpuiDownstreamGlue {
     /// The test-support raster (the `rendered_frame` stand-in): the
     /// restated a11y geometry filled into a 480×240 RGBA8 buffer — the
     /// strided xxh3 over this is the frame hash (§15.5 "no scene digest —
-    /// use the §15.5 strided-pixel xxh3").
+    /// use the §15.5 strided-pixel xxh3"). The §13 overlay composites at
+    /// present time (m86): the host's painted quads blend onto the same
+    /// raster after the app's own paint, so the overlay moves both the
+    /// pixels and the frame digest.
     fn render_pixels(&mut self) {
         let (w, h) = (480_u32, 240_u32);
         for chunk in self.pixels.chunks_exact_mut(4) {
@@ -165,6 +186,9 @@ impl GpuiDownstreamGlue {
             };
             let _ = id;
             fill_rect(&mut self.pixels, w, h, rect, color, border);
+        }
+        if let Some(plan) = self.overlay_plan.as_ref() {
+            overlay::composite(plan, &mut self.pixels, w, h);
         }
     }
 }
@@ -315,6 +339,24 @@ impl FrameworkAdapter for GpuiDownstreamGlue {
             size: (w, h),
             pixels: Some(Arc::from(self.pixels.clone())),
         })
+    }
+
+    /// Inspector overlay (§13, m86): store the plan and paint the host's
+    /// scene (the `paint_quad` route the real test-support window rides)
+    /// — every `render_pixels` composites the plan at present time, and
+    /// the pump's frame digest moves with it. `None` clears the scene
+    /// (the `DisableOverlay` reset).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay_plan = plan.cloned();
+        if let Some(active) = self.overlay_plan.as_ref() {
+            self.overlay_host.paint_quads(active);
+        } else {
+            self.overlay_host.clear();
+        }
+        Ok(())
     }
 
     fn clock(&mut self, cmd: ClockCmd) -> Result<ClockState, AdapterError> {
