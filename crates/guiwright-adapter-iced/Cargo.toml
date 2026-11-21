@@ -61,6 +61,9 @@ iced = { version = "0.14.0", default-features = false, features = [
 guiwright-kit.workspace = true
 guiwright-cli = { path = "../guiwright-cli", version = "1.0.0" }
 tempfile.workspace = true
+# The m86 video row reads the PNG-sequence fallback's `video.json`
+# manifest (the artifact-validity half of the §10 assertions).
+serde_json.workspace = true
 
 # The m76 consumer example builds only with the harness (it drives the
 # real `Emulator` path); the default build skips it.
