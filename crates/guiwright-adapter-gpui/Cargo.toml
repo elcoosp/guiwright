@@ -12,6 +12,9 @@ description = "Guiwright Level-1/hybrid adapter engine for GPUI (architecture §
 [dependencies]
 guiwright-core.workspace = true
 guiwright-driver.workspace = true
+# The §13 overlay plan vocabulary (`OverlayPlan` — the data the overlay
+# host translates into the painted-quad scene, m86).
+guiwright-inspect.workspace = true
 accesskit.workspace = true
 thiserror.workspace = true
 twox-hash.workspace = true
