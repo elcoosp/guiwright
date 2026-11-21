@@ -54,6 +54,27 @@
 //! hashes via [`crate::frames`] (§15.5), `AdapterMeta.framework_version`
 //! reports the GPUI **platform** crate versions (§18 churn mitigation).
 //!
+//! # The canonical binding proof (`examples/downstream-glue/gpui`)
+//!
+//! The binding as **compilable, runnable code**:
+//! `examples/downstream-glue/gpui` (its own workspace, dependency-free)
+//! implements [`FrameworkAdapter`] over a gpui-shaped **mirror** — the
+//! exact surface this contract's table maps, scripted
+//! (`Window::dispatch_event(PlatformInput)`, per-frame
+//! `a11y_tree_update`, `Entity` reads, `VisualTestContext`, the seeded
+//! virtual dispatcher) — through this crate's engine modules:
+//! [`crate::a11y::A11yHybrid`] with immediate activation,
+//! [`crate::input::translate`] dispatch steps, [`crate::clock::plan`]
+//! dispatcher rounds, [`crate::frames::FrameDigest`]'s strided xxh3 and
+//! [`crate::run_in::RunInPlan`] foreground seams. Its integration test
+//! drives a real `Session` end to end (resolve → click → `expect` → seam
+//! → test-support raster screenshot) and the `compile_fail` doc test
+//! pins the dispatch shape (a non-gpui window cannot bind). The mirror
+//! keeps the seams honest: `SetValue` reports `Unsupported` with the
+//! scheduler-blocker evidence below and `framework_version` names the
+//! platform crates. `glue/gpui` remains the REAL-graph proof
+//! (CI-exercised); this example is the anywhere-compilable one.
+//!
 //! # Upstream blockers (m80, file-level evidence)
 //!
 //! * **Fill** — the real `KeyDown` path panics inside zed's test
