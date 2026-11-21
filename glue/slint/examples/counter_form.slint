@@ -23,9 +23,22 @@ export component CounterForm inherits Window {
 
     in-out property <int> count: 0;
     in-out property <string> name: "";
+    // The §14 clock proof (m1): a burst timer the test arms and advances
+    // through `mock_elapsed_time` — stopped at boot so the settle loop's
+    // zero-step pumps and the other tests never see it fire.
+    in-out property <int> burst-count: 0;
+    in-out property <bool> burst-running: false;
 
     callback increment();
     callback decrement();
+
+    Timer {
+        interval: 100ms;
+        running: root.burst-running;
+        triggered => {
+            root.burst-count += 1;
+        }
+    }
 
     VerticalLayout {
         padding: 16px;
@@ -53,6 +66,13 @@ export component CounterForm inherits Window {
                     root.count -= 1;
                 }
             }
+
+            burst-btn := Button {
+                text: "Start burst";
+                clicked => {
+                    root.burst-running = true;
+                }
+            }
         }
 
         name-field := LineEdit {
@@ -64,6 +84,12 @@ export component CounterForm inherits Window {
             text: root.name == "" ? "Welcome, nobody" : "Welcome, " + root.name;
             accessible-role: text;
             accessible-label: root.name == "" ? "Welcome, nobody" : "Welcome, " + root.name;
+        }
+
+        burst-label := Text {
+            text: "Burst: " + root.burst-count;
+            accessible-role: text;
+            accessible-label: "Burst: " + root.burst-count;
         }
     }
 }
