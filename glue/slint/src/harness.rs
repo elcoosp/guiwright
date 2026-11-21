@@ -45,9 +45,12 @@ use guiwright_driver::adapter::{
     FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PointerButton, PumpOutcome,
     SemAction,
 };
+use guiwright_inspect::overlay::OverlayPlan;
 use i_slint_backend_testing::{ElementHandle, ElementRoot};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+
+use crate::overlay::OverlayHost;
 
 /// The mock gap between press and release (§4.4 upstream's
 /// `mock_single_click` timing — inside the 500 ms default click
@@ -95,6 +98,15 @@ pub struct SlintAdapter<C: ComponentHandle> {
     pointer: (f64, f64),
     pass_seq: u64,
     paused: bool,
+    /// The §13 inspector overlay (the §4.4 top-level overlay window,
+    /// m84): shown while the `inspect` domain drives it, composited onto
+    /// the presented frame at capture time.
+    overlay: OverlayHost,
+    /// The §10 frame cache (m85): the pixels `last_frame` serves, keyed
+    /// on the pass sequence so one snapshot per pump serves every
+    /// presented stamp of that pump and any `act`/`render_frame` fold
+    /// invalidates it.
+    frame_cache: Option<(u64, Arc<[u8]>, (u32, u32))>,
 }
 
 impl<C: ComponentHandle + 'static> SlintAdapter<C> {
@@ -119,7 +131,7 @@ impl<C: ComponentHandle + 'static> SlintAdapter<C> {
                     tree_update: false,
                     logical_snapshot: true,
                     input: true,
-                    last_frame: false,
+                    last_frame: true,
                     render_frame: true,
                     clock: true,
                 },
@@ -131,6 +143,8 @@ impl<C: ComponentHandle + 'static> SlintAdapter<C> {
             pointer: (size.0 / 2.0, size.1 / 2.0),
             pass_seq: 0,
             paused: false,
+            overlay: OverlayHost::default(),
+            frame_cache: None,
         };
         adapter
             .app
@@ -719,12 +733,51 @@ impl<C: ComponentHandle + 'static> FrameworkAdapter for SlintAdapter<C> {
         })
     }
 
+    /// Last presented frame (§6.1, m85): the testing backend has no
+    /// presentation loop — pixels materialize on demand through the same
+    /// `take_snapshot` raster path `render_frame` rides — so the cache
+    /// keys on the pass sequence: one snapshot per pump serves every
+    /// presented stamp of that pump, and the next `act`/`render_frame`
+    /// fold re-snapshots. The §13 overlay composites here too, so a
+    /// recording while the `inspect` domain is on shows the overlay.
+    /// `None` when the rasterizer fails (the recorder sees no frame).
+    fn last_frame(&mut self) -> Option<FrameRef> {
+        if let Some((seq, pixels, size)) = &self.frame_cache
+            && *seq == self.pass_seq
+        {
+            return Some(FrameRef {
+                stamp: FrameStamp { seq: *seq, hash: 0 },
+                size: *size,
+                pixels: Some(Arc::clone(pixels)),
+            });
+        }
+        let buffer = self.app.window().take_snapshot().ok()?;
+        let physical = buffer.size();
+        let mut pixels: Vec<u8> = buffer.as_bytes().to_vec();
+        self.overlay.composite(&mut pixels);
+        let pixels: Arc<[u8]> = Arc::from(pixels);
+        let size = (physical.width, physical.height);
+        self.frame_cache = Some((self.pass_seq, Arc::clone(&pixels), size));
+        Some(FrameRef {
+            stamp: FrameStamp {
+                seq: self.pass_seq,
+                hash: 0,
+            },
+            size,
+            pixels: Some(pixels),
+        })
+    }
+
     fn render_frame(&mut self, size: Option<(u32, u32)>) -> Result<FrameRef, AdapterError> {
         if let Some((w, h)) = size {
             self.size = (f64::from(w), f64::from(h));
             self.app
                 .window()
                 .set_size(LogicalSize::new(w as f32, h as f32));
+            // The overlay mirrors the app window's geometry (§4.4): a
+            // resize while the session is on re-mirrors instead of
+            // letting the mirrored rects drift off the frame.
+            self.overlay.mirror(self.size)?;
         }
         let buffer = self
             .app
@@ -732,7 +785,14 @@ impl<C: ComponentHandle + 'static> FrameworkAdapter for SlintAdapter<C> {
             .take_snapshot()
             .map_err(|err| AdapterError::Internal(format!("slint take_snapshot: {err}")))?;
         let physical = buffer.size();
-        let pixels: Arc<[u8]> = Arc::from(buffer.as_bytes());
+        // The §13 present-time composite: the overlay window's snapshot
+        // blends onto the app frame (straight-alpha source-over — the
+        // overlay paints nothing where its plan is empty, §15.4). The
+        // blend works on the byte view; the frame's own copy feeds the
+        // digest afterward.
+        let mut pixels: Vec<u8> = buffer.as_bytes().to_vec();
+        self.overlay.composite(&mut pixels);
+        let pixels: Arc<[u8]> = Arc::from(pixels);
         let hash = {
             use std::hash::Hasher;
             use twox_hash::xxhash3_64::Hasher as Xxh3;
@@ -749,6 +809,31 @@ impl<C: ComponentHandle + 'static> FrameworkAdapter for SlintAdapter<C> {
             size: (physical.width, physical.height),
             pixels: Some(pixels),
         })
+    }
+
+    /// Inspector overlay (§13, m84): the plan composites through the
+    /// §4.4 top-level overlay window — a borderless second `.slint`
+    /// window in the same `TestingBackend` registry, mirroring the app
+    /// window's geometry. `None` clears the session (the window leaves
+    /// the registry).
+    fn show_overlay(&mut self, plan: Option<&OverlayPlan>) -> Result<(), AdapterError> {
+        match plan {
+            Some(plan) => self.overlay.show(plan, self.size),
+            None => {
+                self.overlay.clear();
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<C: ComponentHandle + 'static> SlintAdapter<C> {
+    /// Drain the overlay's paint log (the §13 draw-call evidence): one
+    /// entry per outline/badge the overlay composited since the last
+    /// take; `None` when nothing was drawn (no session, or it was
+    /// cleared).
+    pub fn take_overlay_paint_log(&mut self) -> Option<Vec<String>> {
+        self.overlay.take_paint_log()
     }
 }
 
