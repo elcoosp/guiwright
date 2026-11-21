@@ -81,3 +81,33 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: dist/*.crate
           fail_on_unmatched_files: true
+
+  # The TypeScript client ships in lockstep with the Rust family (§16,
+  # same-version releases): this job rides the release job (needs:
+  # release — the Rust publish dry-run, packaging and GitHub release all
+  # succeeded) and gates the npm artifact the same way: lockfile-pinned
+  # install, the build gate (pack-surface completeness + every shipped
+  # module loads + schema parses), then the publish dry-run that proves
+  # the tarball (the same 11-file pack `npm pack --dry-run` lists).
+  typescript-client:
+    name: typescript client build + publish dry-run
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install (lockfile-pinned)
+        working-directory: clients/typescript
+        run: npm ci
+
+      - name: Build gate (pack surface + module load + schema)
+        working-directory: clients/typescript
+        run: npm run build
+
+      - name: Publish dry-run
+        working-directory: clients/typescript
+        run: npm publish --dry-run --access public
