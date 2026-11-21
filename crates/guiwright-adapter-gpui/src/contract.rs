@@ -54,6 +54,22 @@
 //! hashes via [`crate::frames`] (§15.5), `AdapterMeta.framework_version`
 //! reports the GPUI **platform** crate versions (§18 churn mitigation).
 //!
+//! # The §13 overlay binding (m86 — the 7/7 count's gpui leg)
+//!
+//! The inspector overlay routes through the engine's
+//! [`crate::overlay::OverlayHost`] — the mock of the real test-support
+//! paint route (`Window::paint_quad` → `painted_quads`): `show_overlay`
+//! stores the plan, the host paints the quad scene, and the frame
+//! digest folds it (the pixel-less adapters' §13 route — the
+//! `HeadlessRenderer` pixels blocker stays the documented upstream gap).
+//! The mock-binding proof is the plan's sanctioned fallback for the
+//! upstream blockers: the mirror example (`examples/downstream-glue/
+//! gpui`) drives the §13 pixel-diff + paint-log + `DisableOverlay`
+//! -restore evidence through a real `Session` (`tests/overlay.rs`), and
+//! the `compile_fail` doc test pins the painted-quad signature.
+//! `glue/gpui` wires the identical hook against the real test platform
+//! (the CI leg compiles it where the system deps live).
+
 //! # The canonical binding proof (`examples/downstream-glue/gpui`)
 //!
 //! The binding as **compilable, runnable code**:
