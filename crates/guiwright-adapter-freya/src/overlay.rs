@@ -12,7 +12,8 @@
 //! Every draw records into the adapter's paint log — the §13 draw-call
 //! evidence the pixel-diff tests assert against (M83).
 
-use skia_safe::{Color, Font, FontMgr, FontStyle, ImageInfo, Paint, PaintStyle, Rect, Surface};
+use skia_safe::surfaces;
+use skia_safe::{Color, Font, FontMgr, FontStyle, ImageInfo, Paint, PaintStyle, Rect};
 
 use guiwright_inspect::overlay::{Badge, OverlayPlan, OverlayRect};
 
@@ -73,7 +74,7 @@ pub fn composite(plan: &OverlayPlan, rgba: &mut [u8], width: u32, height: u32) {
         return;
     }
     let info = ImageInfo::new_n32_premul((width as i32, height as i32), None);
-    let Some(mut surface) = Surface::new_raster_n32_premul((width as i32, height as i32)) else {
+    let Some(mut surface) = surfaces::raster_n32_premul((width as i32, height as i32)) else {
         return;
     };
     let row_bytes = (width as usize) * 4;
@@ -107,7 +108,9 @@ pub fn composite(plan: &OverlayPlan, rgba: &mut [u8], width: u32, height: u32) {
         paint_badge(canvas, &typeface, badge);
     }
 
-    canvas.read_pixels(&info, rgba, row_bytes, (0, 0));
+    // A failed read-back leaves the frame pixels untouched (the overlay
+    // silently absent) — the pixel-diff evidence catches it either way.
+    let _ = canvas.read_pixels(&info, rgba, row_bytes, (0, 0));
 }
 
 /// One badge chip: a filled rect + caption, pinned at the node's
