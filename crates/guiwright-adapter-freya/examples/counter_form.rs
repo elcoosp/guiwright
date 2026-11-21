@@ -11,79 +11,120 @@
 
 use std::time::{Duration, Instant};
 
-use freya_components::Input;
+use freya_components::input::Input;
 use freya_testing::prelude::*;
 use guiwright_adapter_freya::runner::{FreyaAdapter, FreyaTestingHarness};
 use guiwright_core::Selector;
 use guiwright_driver::FrameworkAdapter;
 use guiwright_driver::session::Session;
+// freya 0.5: element sizes ride torin's `Size` (`Size::px` — floats no
+// longer convert implicitly).
+use torin::prelude::Size;
 
+#[derive(Clone)]
 struct AppState {
     count: State<i64>,
     name: State<String>,
+    /// The mount gate (§9 quirk): the harness flips this after freya's
+    /// internal boot commit, so the first post-boot diff is the full tree.
+    mounted: State<bool>,
 }
 
-fn counter_form() -> impl IntoElement {
+fn counter_form() -> Element {
     let state = use_consume::<AppState>();
-    let count = state.count.clone();
+    if !*state.mounted.read() {
+        return rect()
+            .width(Size::px(480.))
+            .height(Size::px(320.))
+            .a11y_id(AccessibilityId(0))
+            .into();
+    }
+    let mut count = state.count.clone();
     let name = state.name.clone();
     let name_input = name.clone();
 
     rect()
-        .width(480.)
-        .height(320.)
+        .width(Size::px(480.))
+        .height(Size::px(320.))
+        .a11y_id(AccessibilityId(0))
         .child(
-            Label::new()
+            // freya 0.5 aggregates the first value-carrying child's text
+            // into the container's a11y name — this marker keeps the root
+            // from colliding with the dynamic count/greeting texts (§9).
+            label().text("Guiwright demo").a11y_id(AccessibilityId(100)),
+        )
+        .child(
+            label()
                 .text(format!("Count: {}", count.read()))
-                .a11y_id(AccessibilityId(1)),
+                .a11y_id(AccessibilityId(101)),
         )
         .child(
             rect()
-                .width(140.)
-                .height(40.)
+                .width(Size::px(140.))
+                .height(Size::px(40.))
                 .background(Color::from_rgb(200, 220, 255))
                 .child("Increment")
                 .on_press(move |_| *count.write() += 1)
                 .a11y_role(AccessibilityRole::Button)
-                .a11y_id(AccessibilityId(2)),
+                .a11y_id(AccessibilityId(102)),
         )
         .child(
             rect()
-                .width(140.)
-                .height(40.)
+                .width(Size::px(140.))
+                .height(Size::px(40.))
                 .background(Color::from_rgb(255, 220, 200))
                 .child("Decrement")
                 .on_press(move |_| *count.write() -= 1)
                 .a11y_role(AccessibilityRole::Button)
-                .a11y_id(AccessibilityId(3)),
+                .a11y_id(AccessibilityId(103)),
         )
         .child(
             Input::new(name_input)
                 .placeholder("Type a name")
-                .a11y_id(AccessibilityId(4)),
+                .a11y_id(AccessibilityId(104)),
         )
         .child(
-            Label::new()
+            label()
                 .text(if name.read().is_empty() {
                     "Welcome, nobody".to_string()
                 } else {
                     format!("Welcome, {}", name.read())
                 })
-                .a11y_id(AccessibilityId(5)),
+                .a11y_id(AccessibilityId(105)),
         )
+        .into()
 }
 
 fn main() {
-    let harness = FreyaTestingHarness::boot(counter_form, (480.0, 320.0), |runner| {
-        let count = runner.provide_root_context(|| State::create(0i64));
-        let name = runner.provide_root_context(|| State::create(String::new()));
-        AppState { count, name }
+    let mut harness = FreyaTestingHarness::boot(counter_form, (480.0, 320.0), |runner| {
+        // The context the app consumes IS the AppState (freya 0.5
+        // registers contexts by type — `use_consume::<AppState>()`).
+        runner.provide_root_context(|| AppState {
+            count: State::create(0i64),
+            name: State::create(String::new()),
+            mounted: State::create(false),
+        })
     });
+    // The mount flip lands after freya's internal boot commit and before
+    // the session's first sync — the next diff IS the full tree (§9).
+    let mut mounted = harness.state().mounted.clone();
+    *mounted.write() = true;
     let mut session = Session::new(FreyaAdapter::new(harness));
     session.settle(Instant::now() + Duration::from_secs(2));
+    // freya is Level-1: `.a11y_id(n)` numbers ARE the AccessKit NodeIds —
+    // the §8.1 test-id registry rides an explicit registration.
+    for n in [100u64, 101, 102, 103, 104, 105] {
+        session.register_test_id(
+            guiwright_core::NodeKey::AccessKit {
+                tree: accesskit::TreeId::ROOT,
+                node: accesskit::NodeId(n),
+            },
+            n.to_string(),
+        );
+    }
 
-    let increment = Selector::test_id("2");
-    let name_field = Selector::test_id("4");
+    let increment = Selector::test_id("102");
+    let name_field = Selector::test_id("104");
 
     let resolved = session.resolve(&increment).expect("increment button");
     println!(
