@@ -97,6 +97,10 @@ const SAMPLES: &[(&str, SampleFn)] = &[
         crate::samples::locator_element_screenshot,
     ),
     (
+        "expect_screenshot_retry",
+        crate::samples::expect_screenshot_retry,
+    ),
+    (
         "wire_screenshot_window",
         crate::samples::wire_screenshot_window,
     ),
