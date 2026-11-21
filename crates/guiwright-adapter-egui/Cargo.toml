@@ -29,5 +29,14 @@ wgpu = "30"
 # is the wgpu-ecosystem block_on for sync adapters.
 pollster = "0.4"
 
+[dev-dependencies]
+# The m85 trace/video validation drives the kit App (the §12 recorder +
+# the §10 video surface) and renders the archive through the CLI's
+# `show-trace` — framework-free members, dev-only.
+guiwright-kit.workspace = true
+guiwright-cli = { path = "../guiwright-cli", version = "1.0.0" }
+tempfile.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true
