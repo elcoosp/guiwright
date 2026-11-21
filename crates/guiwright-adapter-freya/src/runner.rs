@@ -29,7 +29,7 @@
 //!   update's node ids — the [`AccessibilityMap`] bridge binds the ids
 //!   the update carries and unbinds the ones that left.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use accesskit::{NodeId, TreeUpdate};
@@ -41,7 +41,10 @@ use guiwright_driver::adapter::{
 
 use crate::buffer::{PendingEvent, SyncEventBuffer};
 use crate::ids::AccessibilityMap;
+use crate::overlay;
 use crate::platform::PlatformEvent;
+
+use guiwright_inspect::overlay::OverlayPlan;
 
 /// The runner-facing seam (§4.3): run one frame (`sync_and_update`),
 /// deliver one translated platform event, commit the accessibility diff,
@@ -76,6 +79,11 @@ pub struct FreyaAdapter<S: TestingSeam> {
     seam: S,
     pass_seq: u64,
     clock: ClockState,
+    /// The active §13 overlay plan (M83): composited onto every rendered
+    /// frame at present time; `None` stops compositing.
+    overlay_plan: Option<OverlayPlan>,
+    /// The §13 draw-call evidence: one entry per overlay draw.
+    overlay_paint_log: Vec<String>,
     /// The latest committed update (the `tree_update` one-shot).
     latest: Option<TreeUpdate>,
     /// Laid-out bounds per accessibility id (the coordinate actions' target).
@@ -111,9 +119,16 @@ impl<S: TestingSeam> FreyaAdapter<S> {
                 paused: false,
             },
             latest: None,
+            overlay_plan: None,
+            overlay_paint_log: Vec::new(),
             bounds: HashMap::new(),
             values: HashMap::new(),
         }
+    }
+
+    /// Drain the overlay paint log (the §13 draw-call evidence).
+    pub fn take_overlay_paint_log(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.overlay_paint_log)
     }
 
     pub fn ids(&self) -> &AccessibilityMap {
@@ -177,7 +192,26 @@ impl<S: TestingSeam> FreyaAdapter<S> {
                 }
             }
         }
-        self.latest = Some(update);
+        // freya 0.5 commits DIFFS: several land between two session pumps
+        // (a frame-quantized click runs press→sync→release→sync), and an
+        // empty diff must not wipe a pending one — merge instead of
+        // replace, later entries winning per node id (the §9 quirk row).
+        match &mut self.latest {
+            Some(pending) => {
+                for (id, node) in update.nodes {
+                    if let Some(slot) = pending.nodes.iter_mut().find(|(pid, _)| *pid == id) {
+                        *slot = (id, node);
+                    } else {
+                        pending.nodes.push((id, node));
+                    }
+                }
+                if update.tree.is_some() {
+                    pending.tree = update.tree;
+                }
+                pending.focus = update.focus;
+            }
+            None => self.latest = Some(update),
+        }
     }
 
     /// One frame-quantized click at a node's laid-out center (§4.3:
@@ -386,7 +420,16 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
         let image = guiwright_shot::codec::decode_png(&png)
             .map_err(|err| AdapterError::Internal(format!("freya snapshot decode: {err}")))?;
         let (width, height) = (image.width, image.height);
-        let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(image.rgba);
+        let mut rgba: Vec<u8> = image.rgba.into();
+        // §13 present-time composition (M83): the overlay paints into the
+        // frame the runner just rasterized — same engine, no extra pass.
+        if let Some(plan) = &self.overlay_plan {
+            overlay::composite(plan, &mut rgba, width, height);
+            for entry in overlay::paint_log(plan) {
+                self.overlay_paint_log.push(entry);
+            }
+        }
+        let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(rgba);
         let hash = {
             use std::hash::Hasher;
             use twox_hash::xxhash3_64::Hasher as Xxh3;
@@ -410,6 +453,17 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
         // hash rides the §10 pixel digest of the last render call.
         None
     }
+
+    /// Inspector overlay (§13, M83): store the plan — every
+    /// `render_frame` composites it at present time (the runner's own
+    /// Skia engine paints the outline + badges into the frame pixels).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay_plan = plan.cloned();
+        Ok(())
+    }
 }
 
 /// The **real** seam: `freya_testing::TestingRunner` owned wholesale, its
@@ -418,9 +472,8 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
 pub struct FreyaTestingHarness<T> {
     runner: TestingRunner,
     state: T,
-    /// The ids the last committed update carried (the removal diff source).
-    tracked: HashSet<u64>,
-    /// Ids that left the tree at the last step (drained by `removed_ids`).
+    /// Ids that left the tree at the last step (drained by `removed_ids`
+    /// — always empty on freya 0.5 diffs, see `sync_and_update`).
     last_removed: Vec<u64>,
     size: (f64, f64),
 }
@@ -429,21 +482,23 @@ impl<T: 'static> FreyaTestingHarness<T> {
     /// Boot a real testing runner: physical viewport `size`, scale factor
     /// 1.0 (logical px == physical px, the §9 adapter-owns-scale rule
     /// degenerates), the hook providing the app's root contexts.
+    ///
+    /// freya 0.5 moved `AppComponent` and `Runner` out of the testing
+    /// prelude — they live on `freya_core::{element, runner}` now.
     pub fn boot(
-        app: impl Into<freya_testing::prelude::AppComponent>,
+        app: impl Into<freya_core::element::AppComponent>,
         size: (f64, f64),
-        hook: impl FnOnce(&mut freya_testing::prelude::Runner) -> T,
+        hook: impl FnOnce(&mut freya_core::runner::Runner) -> T,
     ) -> Self {
         let (runner, state) = TestingRunner::new(
             app,
-            freya_testing::prelude::Size2D::new(size.0, size.1),
+            torin::prelude::Size2D::new(size.0 as f32, size.1 as f32),
             hook,
             1.0,
         );
         Self {
             runner,
             state,
-            tracked: HashSet::new(),
             last_removed: Vec::new(),
             size,
         }
@@ -460,25 +515,27 @@ impl<T: 'static> FreyaTestingHarness<T> {
     }
 }
 
-/// Map the mirror key vocabulary onto the real `keyboard_types::Key`.
+/// Map the mirror key vocabulary onto the real `keyboard_types::Key`
+/// (freya 0.5 rides keyboard_types: named keys live under `Key::Named`).
 fn real_key(key: &str) -> freya_testing::prelude::Key {
+    use freya_testing::prelude::NamedKey;
     type Key = freya_testing::prelude::Key;
     match key {
-        "enter" | "return" => Key::Enter,
-        "tab" => Key::Tab,
-        "escape" => Key::Escape,
-        "backspace" => Key::Backspace,
-        "delete" => Key::Delete,
-        "home" => Key::Home,
-        "end" => Key::End,
-        "left" => Key::ArrowLeft,
-        "right" => Key::ArrowRight,
-        "up" => Key::ArrowUp,
-        "down" => Key::ArrowDown,
-        "shift" => Key::Shift,
-        "ctrl" => Key::Control,
-        "alt" => Key::Alt,
-        "meta" => Key::Meta,
+        "enter" | "return" => Key::Named(NamedKey::Enter),
+        "tab" => Key::Named(NamedKey::Tab),
+        "escape" => Key::Named(NamedKey::Escape),
+        "backspace" => Key::Named(NamedKey::Backspace),
+        "delete" => Key::Named(NamedKey::Delete),
+        "home" => Key::Named(NamedKey::Home),
+        "end" => Key::Named(NamedKey::End),
+        "left" => Key::Named(NamedKey::ArrowLeft),
+        "right" => Key::Named(NamedKey::ArrowRight),
+        "up" => Key::Named(NamedKey::ArrowUp),
+        "down" => Key::Named(NamedKey::ArrowDown),
+        "shift" => Key::Named(NamedKey::Shift),
+        "ctrl" => Key::Named(NamedKey::Control),
+        "alt" => Key::Named(NamedKey::Alt),
+        "meta" => Key::Named(NamedKey::Meta),
         other => Key::Character(other.into()),
     }
 }
@@ -499,21 +556,36 @@ fn real_modifiers(modifiers: &[String]) -> freya_testing::prelude::Modifiers {
     out
 }
 
+impl<T: 'static> std::fmt::Debug for FreyaTestingHarness<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FreyaTestingHarness")
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: 'static> TestingSeam for FreyaTestingHarness<T> {
     fn sync_and_update(&mut self) -> TreeUpdate {
         let update = self.runner.sync_and_update();
-        let current: HashSet<u64> = update.nodes.iter().map(|(id, _)| id.0).collect();
-        let removed: Vec<u64> = self.tracked.difference(&current).copied().collect();
-        self.tracked = current;
-        self.last_removed = removed;
+        // freya 0.5 commits DIFFS, not full trees: an update carries only
+        // the added/updated nodes and NO removal markers, so nothing can
+        // be inferred to have left the tree here — the consumer tree
+        // handles removals through re-emitted parent children lists, and
+        // the id bridge keeps its bindings (the §9 quirk row; a stale
+        // binding surfaces at action time, loud).
+        self.last_removed = Vec::new();
         update
     }
 
     fn send_event(&mut self, event: PlatformEvent) -> Result<(), AdapterError> {
+        // freya 0.5: `CursorPoint` / `Size2D` live on `torin::prelude`
+        // (the testing prelude stopped re-exporting them); the event
+        // names and `PlatformEvent` stay on `freya_testing::prelude`.
         use freya_testing::prelude::{
-            Code, CursorPoint, KeyboardEventName, Modifiers, MouseEventName, TouchPhase,
-            WheelEventName, WheelSource,
+            Code, KeyboardEventName, Modifiers, MouseEventName, TouchPhase, WheelEventName,
+            WheelSource,
         };
+        use torin::prelude::CursorPoint;
         let real = match event {
             PlatformEvent::MouseMoved { x, y } => freya_testing::prelude::PlatformEvent::Mouse {
                 name: MouseEventName::MouseMove,
@@ -582,7 +654,10 @@ impl<T: 'static> TestingSeam for FreyaTestingHarness<T> {
             .runner
             .send_accessibility_action(accesskit::ActionRequest {
                 action: accesskit_action,
-                target: NodeId(freya_id),
+                // accesskit 0.25 split the target into tree + node: the
+                // runner's committed tree is the AccessKit root (§4.3).
+                target_tree: accesskit::TreeId::ROOT,
+                target_node: NodeId(freya_id),
                 data: None,
             });
         Ok(format!(
@@ -632,7 +707,7 @@ mod tests {
             nodes: vec![],
             tree: None,
             tree_id: accesskit::TreeId::ROOT,
-            focus: accesskit::NodeId::ROOT,
+            focus: accesskit::NodeId(0),
         }
     }
 
