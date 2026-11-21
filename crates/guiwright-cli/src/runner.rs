@@ -331,7 +331,8 @@ pub async fn run(
 /// One scenario with its retry loop.
 async fn run_case(target: &ConnectTarget, case: &Case) -> ScenarioRecord {
     let case_started = Instant::now();
-    let (attempts, error) = run_with_retries(case.retries, || run_attempt(target, case)).await;
+    let (attempts, error, artifacts) =
+        run_with_retries(case.retries, || run_attempt(target, case)).await;
     let status = match (&error, attempts) {
         (None, 1) => ScenarioStatus::Passed,
         (None, _) => ScenarioStatus::Flaky,
@@ -344,46 +345,85 @@ async fn run_case(target: &ConnectTarget, case: &Case) -> ScenarioRecord {
         attempts,
         duration_ms: case_started.elapsed().as_millis() as u64,
         error,
+        artifacts,
     }
 }
 
 /// The retry loop, generic over the attempt future so the flaky/pass
-/// classification is unit-testable without a live session.
-async fn run_with_retries<F, Fut>(retries: u32, mut attempt: F) -> (u32, Option<String>)
+/// classification is unit-testable without a live session. Artifacts
+/// accumulate across every attempt, failures included (a scenario that
+/// screenshotted before its failing step still shows the file).
+async fn run_with_retries<F, Fut>(
+    retries: u32,
+    mut attempt: F,
+) -> (u32, Option<String>, Vec<String>)
 where
     F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
+    Fut: std::future::Future<Output = (Result<(), String>, Vec<String>)>,
 {
     let total = retries + 1;
     let mut last_error = None;
+    let mut artifacts = Vec::new();
     for attempt_no in 1..=total {
-        match attempt().await {
-            Ok(()) => return (attempt_no, None),
+        let (outcome, mut found) = attempt().await;
+        artifacts.append(&mut found);
+        match outcome {
+            Ok(()) => return (attempt_no, None, artifacts),
             Err(err) => last_error = Some(err),
         }
     }
-    (total, last_error)
+    (total, last_error, artifacts)
 }
 
 /// One attempt: connect → handshake → steps → bye. The first error line
-/// fails the attempt; the remaining steps do not run.
-async fn run_attempt(target: &ConnectTarget, case: &Case) -> Result<(), String> {
-    let mut repl = crate::repl::Repl::connect(target)
-        .await
-        .map_err(|err| format!("cannot connect to {target:?}: {err}"))?;
+/// fails the attempt; the remaining steps do not run. Artifact paths
+/// written by steps before the failure still ride home (`shot:` / `video:`
+/// Ok lines, m82) — the attempt result pairs the outcome with whatever the
+/// steps emitted.
+async fn run_attempt(target: &ConnectTarget, case: &Case) -> (Result<(), String>, Vec<String>) {
+    let mut repl = match crate::repl::Repl::connect(target).await {
+        Ok(repl) => repl,
+        Err(err) => {
+            return (
+                Err(format!("cannot connect to {target:?}: {err}")),
+                Vec::new(),
+            );
+        }
+    };
     repl.set_timeout_ms(case.timeout_ms);
+    let mut artifacts = Vec::new();
     for step in &case.steps {
         let outcome = repl.step(step).await;
         for line in &outcome.lines {
-            if let crate::repl::Line::Err(message) = line {
-                return Err(message.clone());
+            match line {
+                crate::repl::Line::Ok(text) => {
+                    if let Some(path) = artifact_from_line(text) {
+                        artifacts.push(path);
+                    }
+                }
+                crate::repl::Line::Err(message) => return (Err(message.clone()), artifacts),
+                crate::repl::Line::Info(_) | crate::repl::Line::Warn(_) => {}
             }
         }
     }
     // The runner owns the session lifecycle: close cleanly. A failed Bye
     // races the disconnect — the session ends either way.
     let _ = repl.step("bye").await;
-    Ok(())
+    (Ok(()), artifacts)
+}
+
+/// The artifact path an artifact-emitting Ok line reports (§10 capture):
+/// `screenshot` answers `shot: <path> (<w>×<h>, frame <n>)` and `video
+/// stop` answers `video: <path> (<n> frames, …)`. Non-file lines of the
+/// same family (`video: recording started`) carry no ` (` trailer and
+/// harvest nothing — the runner only links paths its steps actually wrote.
+pub fn artifact_from_line(text: &str) -> Option<String> {
+    let rest = text
+        .strip_prefix("shot: ")
+        .or_else(|| text.strip_prefix("video: "))?;
+    let end = rest.find(" (")?;
+    let path = rest[..end].trim();
+    (!path.is_empty()).then(|| path.to_owned())
 }
 
 /// Write the file reports (`--report json|junit|html`) under `out_dir`.
@@ -445,52 +485,82 @@ mod tests {
     async fn retry_loop_classifies_pass_flaky_and_fail() {
         // Pass first try.
         let mut calls = 0;
-        let (attempts, error) = run_with_retries(2, || {
+        let (attempts, error, artifacts) = run_with_retries(2, || {
             calls += 1;
             async move {
                 assert_eq!(calls, 1);
-                Ok::<(), String>(())
+                (Ok::<(), String>(()), Vec::new())
             }
         })
         .await;
-        assert_eq!((attempts, error), (1, None));
+        assert_eq!((attempts, error.as_deref()), (1, None));
+        assert!(
+            artifacts.is_empty(),
+            "the green first try wrote: {artifacts:?}"
+        );
 
         // Flaky: fails once, passes on the retry.
         let mut calls = 0;
-        let (attempts, error) = run_with_retries(2, || {
+        let (attempts, error, artifacts) = run_with_retries(2, || {
             calls += 1;
             let first = calls == 1;
             async move {
                 if first {
-                    Err("transient".into())
+                    (Err("transient".into()), vec!["before.png".into()])
                 } else {
-                    Ok(())
+                    (Ok(()), vec!["after.png".into()])
                 }
             }
         })
         .await;
         assert_eq!(attempts, 2);
         assert_eq!(error, None);
+        // Artifacts from both attempts ride home, attempt order preserved.
+        assert_eq!(artifacts, vec!["before.png", "after.png"]);
 
         // Failing: every attempt runs, the last error surfaces.
         let mut calls = 0;
-        let (attempts, error) = run_with_retries(2, || {
+        let (attempts, error, artifacts) = run_with_retries(2, || {
             calls += 1;
-            async move { Err(format!("boom {calls}")) }
+            async move { (Err(format!("boom {calls}")), Vec::new()) }
         })
         .await;
         assert_eq!(attempts, 3);
         assert_eq!(error.as_deref(), Some("boom 3"));
+        assert!(
+            artifacts.is_empty(),
+            "the failed attempts wrote: {artifacts:?}"
+        );
 
         // Zero retries runs exactly one attempt.
-        let mut calls = 0;
-        let (attempts, error) = run_with_retries(0, || {
-            calls += 1;
-            async move { Err("nope".into()) }
+        let (attempts, error, _) = run_with_retries(0, || async move {
+            (Err::<(), String>("nope".into()), Vec::new())
         })
         .await;
         assert_eq!(attempts, 1);
         assert_eq!(error.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn artifact_from_line_reads_the_capture_shapes() {
+        // `screenshot` (§10): the shot line carries the written path.
+        assert_eq!(
+            artifact_from_line("shot: /tmp/shots/window.png (320×240, frame 3)").as_deref(),
+            Some("/tmp/shots/window.png")
+        );
+        // `video stop` (§10): the file line carries the written path.
+        assert_eq!(
+            artifact_from_line("video: /tmp/clips/run.webm (30 frames, 0 dropped, 1200ms)")
+                .as_deref(),
+            Some("/tmp/clips/run.webm")
+        );
+        // Same-family status lines name no file.
+        assert_eq!(artifact_from_line("video: recording started"), None);
+        assert_eq!(artifact_from_line("pong"), None);
+        assert_eq!(artifact_from_line("timeout = 5 ms"), None);
+        // Degenerate shapes harvest nothing.
+        assert_eq!(artifact_from_line("shot: "), None);
+        assert_eq!(artifact_from_line("video:  (no path)"), None);
     }
 
     #[test]
@@ -577,6 +647,7 @@ steps = ["ping"]
                 attempts: 1,
                 duration_ms: 5,
                 error: None,
+                artifacts: Vec::new(),
             }],
         };
         let dir = tempfile::tempdir().expect("tmpdir");
