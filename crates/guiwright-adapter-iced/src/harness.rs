@@ -110,6 +110,11 @@ pub trait SimulatorSeam {
     }
 }
 
+/// One presented frame's pixels (§10): the RGBA raster, its viewport size
+/// and the §15.5 pixel digest — the tuple the shared screenshot pass
+/// returns and the readback cache stores beside its pass sequence.
+type PixelFrame = (std::sync::Arc<[u8]>, (u32, u32), u64);
+
 /// The iced adapter (§6.1 trait implementation over the engine).
 pub struct IcedAdapter<S: SimulatorSeam> {
     meta: AdapterMeta,
@@ -124,7 +129,7 @@ pub struct IcedAdapter<S: SimulatorSeam> {
     /// rendered at — the video recorder's per-stamp readback hits the
     /// cache within one pump and re-renders only across passes (the
     /// tiny-skia pass is CPU-only and side-effect-free, §15.4).
-    last_frame_cache: Option<(u64, std::sync::Arc<[u8]>, (u32, u32), u64)>,
+    last_frame_cache: Option<(u64, PixelFrame)>,
     /// The §14 virtual-time ledger (M84): the Emulator's determinism
     /// machinery is the framework's clock primitive.
     clock_ledger: Option<Duration>,
@@ -317,12 +322,12 @@ impl<S: SimulatorSeam + 'static> FrameworkAdapter for IcedAdapter<S> {
     }
 
     /// The §10 `last_frame` readback (m86): the most recent presented
-    /// frame's pixels, without disturbing app state (§6.2 "last_frame
-    /// w/o re-render" — the Emulator's side-effect-free screenshot pass,
+    /// frame's pixels, without disturbing app state (§6.2 `last_frame`
+    /// w/o re-render — the Emulator's side-effect-free screenshot pass,
     /// cached per pass). The video recorder reads this per frame stamp
     /// (§10 "the trace recorder doubles as video").
     fn last_frame(&mut self) -> Option<FrameRef> {
-        if let Some((seq, pixels, size, hash)) = self.last_frame_cache.as_ref() {
+        if let Some((seq, (pixels, size, hash))) = self.last_frame_cache.as_ref() {
             if *seq == self.pass_seq {
                 return Some(FrameRef {
                     stamp: FrameStamp {
@@ -352,16 +357,15 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
     /// `last_frame`). The pixel digest is the §15.5 strided-surface
     /// xxh3 — the same pinned hashing stack every adapter's frame path
     /// rides.
-    fn screenshot_pass_cached(
-        &mut self,
-    ) -> Result<(std::sync::Arc<[u8]>, (u32, u32), u64), AdapterError> {
-        if let Some((seq, pixels, size, hash)) = self.last_frame_cache.as_ref() {
+    fn screenshot_pass_cached(&mut self) -> Result<PixelFrame, AdapterError> {
+        if let Some((seq, (pixels, size, hash))) = self.last_frame_cache.as_ref() {
             if *seq == self.pass_seq {
                 return Ok((std::sync::Arc::clone(pixels), *size, *hash));
             }
         }
         let (width, height, rgba) = self.sim.screenshot()?;
         let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(rgba);
+        let size = (width, height);
         let hash = {
             use std::hash::Hasher;
             use twox_hash::xxhash3_64::Hasher as Xxh3;
@@ -369,13 +373,9 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
             hasher.write(&pixels);
             hasher.finish()
         };
-        self.last_frame_cache = Some((
-            self.pass_seq,
-            std::sync::Arc::clone(&pixels),
-            (width, height),
-            hash,
-        ));
-        Ok((pixels, (width, height), hash))
+        let cached: PixelFrame = (std::sync::Arc::clone(&pixels), size, hash);
+        self.last_frame_cache = Some((self.pass_seq, cached));
+        Ok((pixels, size, hash))
     }
 }
 
