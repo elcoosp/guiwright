@@ -7,7 +7,7 @@
 //! registry as the app window. The overlay mirrors the app window's
 //! geometry (the §9 window-relative rects land 1:1 in logical px at the
 //! testing backend's scale factor 1), draws the hover outline + role/
-//! TestId badges as real slint elements, and is captured through the same
+//! `TestId` badges as real slint elements, and is captured through the same
 //! `Window::take_snapshot` raster path the app window uses. Compositing
 //! blends that snapshot onto the presented frame at capture time with
 //! straight-alpha source-over — the software renderer's snapshot keeps a
@@ -103,6 +103,7 @@ fn badge_width(text: &str) -> f64 {
 
 /// The §13 draw-call evidence for one plan (the freya log format — the
 /// pixel-diff tests assert the paint, this log names it).
+#[must_use]
 pub fn paint_log(plan: &OverlayPlan) -> Vec<String> {
     let mut log = Vec::new();
     if let Some(rect) = &plan.hover {
@@ -320,17 +321,17 @@ mod tests {
     #[test]
     fn composite_over_blends_by_alpha() {
         // Fully transparent overlay: the frame survives byte-for-byte.
-        let mut base = vec![64u8, 64, 64, 255, 64, 64, 64, 255];
+        let mut base = [64u8, 64, 64, 255, 64, 64, 64, 255];
         composite_over(&[0, 0, 0, 0, 0, 0, 0, 0], &mut base);
-        assert_eq!(base, vec![64u8, 64, 64, 255, 64, 64, 64, 255]);
+        assert_eq!(base, [64u8, 64, 64, 255, 64, 64, 64, 255]);
 
         // Opaque overlay pixel: replaces the pixel wholesale.
-        let mut base = vec![64u8, 64, 64, 255, 64, 64, 64, 255];
+        let mut base = [64u8, 64, 64, 255, 64, 64, 64, 255];
         composite_over(&[10, 20, 30, 255], &mut base[4..]);
         assert_eq!(&base[4..8], &[10, 20, 30, 255]);
 
         // Half-transparent overlay pixel: the midpoint mix.
-        let mut base = vec![64u8, 64, 64, 255];
+        let mut base = [64u8, 64, 64, 255];
         composite_over(&[0, 0, 0, 128], &mut base);
         assert_eq!(base[0], 31, "64 * (255-128) / 255 = 31");
         assert_eq!(base[3], 255, "the presented frame stays opaque");
