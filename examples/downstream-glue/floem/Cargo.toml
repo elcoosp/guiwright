@@ -29,6 +29,9 @@ description = "Downstream floem glue reference example (architecture §4.7): Fra
 guiwright-adapter-floem = { path = "../../../crates/guiwright-adapter-floem" }
 guiwright-driver = { path = "../../../crates/guiwright-driver" }
 guiwright-core = { path = "../../../crates/guiwright-core" }
+# The §13 overlay plan vocabulary (`OverlayPlan` — the data the engine's
+# overlay host translates into PaintOps on the present path, m86).
+guiwright-inspect = { path = "../../../crates/guiwright-inspect" }
 accesskit = "0.25.2"
 # The frame digest (§15.5 "hash = xxh3 of a scene/pixel digest") — the
 # same pinned hashing stack the real glue rides.
