@@ -107,13 +107,42 @@ impl BaselineStore {
     }
 
     /// The full §10 flow for one kit screenshot assertion
-    /// (`App::screenshot` / `Locator::screenshot`, §10).
+    /// (`App::screenshot` / `Locator::screenshot`, §10) — the failing
+    /// form: a mismatch is the error (artifacts already written next to
+    /// the baseline). The waitable form lives in [`Self::check_snapshot`].
     ///
     /// * missing baseline: write it when blessing, else fail;
     /// * present baseline: diff within tolerance budget (§10);
     ///   mismatch → artifacts + error; bless → rewrite;
     /// * `BlessMode::Force` → always rewrite (and report `Blessed`).
     pub fn assert_snapshot(
+        &self,
+        name: &str,
+        renderer: &str,
+        actual: &Image,
+        tolerance: EffectiveTolerance,
+        bless: BlessMode,
+    ) -> Result<SnapshotOutcome, ShotError> {
+        match self.check_snapshot(name, renderer, actual, tolerance, bless)? {
+            // The mismatch report IS the §10 error message (the artifact
+            // links ride inside it) — `Config` keeps the single-shot
+            // contract byte-identical.
+            SnapshotOutcome::Mismatched { report } => Err(ShotError::Config(report)),
+            outcome => Ok(outcome),
+        }
+    }
+
+    /// The waitable form of [`Self::assert_snapshot`] (§16 retry): a
+    /// mismatch is an **outcome** — artifacts are written next to the
+    /// baseline and [`SnapshotOutcome::Mismatched`] comes back carrying
+    /// the full report, so a retry loop can keep polling presented
+    /// frames instead of failing. Only configuration and capture
+    /// failures error (missing baseline without bless, size mismatch,
+    /// IO, codec) — no amount of waiting fixes those. The bless flow is
+    /// unchanged: `Failing`/`Force` rewrite the baseline exactly where
+    /// [`Self::assert_snapshot`] would, which short-circuits a retry on
+    /// the poll that matches the bless condition.
+    pub fn check_snapshot(
         &self,
         name: &str,
         renderer: &str,
@@ -163,7 +192,9 @@ impl BaselineStore {
             });
         }
 
-        // Failing run: emit `.new.png` + `.diff.png` (§10), then fail.
+        // Failing run: emit `.new.png` + `.diff.png` (§10), then report
+        // the mismatch as the outcome (the retry loop keeps polling;
+        // [`Self::assert_snapshot`] turns this into the failing error).
         let (new_path, diff_path) = self.artifact_paths(name, renderer);
         Self::write(&new_path, actual)?;
         let diff_render = diff_image(&baseline, &report, tolerance.threshold);
@@ -172,12 +203,14 @@ impl BaselineStore {
             Self::write(&path, actual)?;
             return Ok(SnapshotOutcome::Blessed { forced: false });
         }
-        Err(ShotError::Config(format!(
-            "screenshot `{name}` mismatch: {} — artifacts: {} + {}",
-            report.summarize(tolerance.threshold, tolerance.max_failed_pixels),
-            new_path.display(),
-            diff_path.display()
-        )))
+        Ok(SnapshotOutcome::Mismatched {
+            report: format!(
+                "screenshot `{name}` mismatch: {} — artifacts: {} + {}",
+                report.summarize(tolerance.threshold, tolerance.max_failed_pixels),
+                new_path.display(),
+                diff_path.display()
+            ),
+        })
     }
 
     fn write(path: &Path, image: &Image) -> Result<(), ShotError> {
@@ -309,6 +342,44 @@ mod tests {
             tmp.join("screenshots/dash/linux-x86_64-tiny-skia.diff.png")
                 .exists()
         );
+    }
+
+    #[test]
+    fn check_snapshot_reports_the_mismatch_instead_of_erroring() {
+        // The waitable form (§16 retry): same artifacts, same report —
+        // but the mismatch comes back as the `Mismatched` outcome so a
+        // retry loop can keep polling presented frames.
+        let tmp = tempfile_dir();
+        let st = store(&tmp);
+        st.assert_snapshot(
+            "wait",
+            "r",
+            &Image::solid(8, 8, [0, 0, 0, 255]),
+            tolerance(),
+            BlessMode::Failing,
+        )
+        .expect("seed");
+        let mut actual = Image::solid(8, 8, [0, 0, 0, 255]);
+        actual.rgba[0..4].copy_from_slice(&[255, 255, 255, 255]);
+        let outcome = st
+            .check_snapshot("wait", "r", &actual, tolerance(), BlessMode::Off)
+            .expect("mismatch is an outcome, not an error");
+        let SnapshotOutcome::Mismatched { report } = outcome else {
+            panic!("expected the mismatch outcome, got {outcome:?}");
+        };
+        assert!(report.contains("mismatch"), "{report}");
+        assert!(report.contains(".new.png"), "artifact link, got: {report}");
+        assert!(report.contains(".diff.png"), "artifact link, got: {report}");
+        assert!(
+            tmp.join("screenshots/wait/linux-x86_64-r.new.png").exists(),
+            "artifacts still land next to the baseline"
+        );
+        // The failing form maps the same report onto the same error the
+        // single-shot contract has always produced (byte-identical).
+        let err = st
+            .assert_snapshot("wait", "r", &actual, tolerance(), BlessMode::Off)
+            .expect_err("the single-shot form still fails");
+        assert!(err.to_string().contains("mismatch"), "{err}");
     }
 
     #[test]
