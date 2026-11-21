@@ -695,23 +695,10 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
             .pixels
             .ok_or_else(|| KitError::NoPixels(app.session.adapter().meta().name.to_string()))?;
         // Physical px → the crop window, clamped into the frame (§9: the
-        // bounds are already physical; the frame is the window's buffer).
-        // The clamp pins the value into `[0, max]` before the conversion
-        // (the §10/§15 guarded-conversion pattern): the float→i64 step
-        // keeps the sign domain (clamped ≥ 0), and the `u32::try_from`
-        // proves the range instead of truncating — `unwrap_or(max)` is
-        // the unreachable arm, kept honest by the clamp.
-        let clamp = |v: f64, max: u32| {
-            u32::try_from(v.round().clamp(0.0, f64::from(max)) as i64).unwrap_or(max)
-        };
-        let (x0, y0) = (clamp(rect.x0, frame.size.0), clamp(rect.y0, frame.size.1));
-        let (x1, y1) = (clamp(rect.x1, frame.size.0), clamp(rect.y1, frame.size.1));
-        let image = Image {
-            width: frame.size.0,
-            height: frame.size.1,
-            rgba: pixels.to_vec(),
-        };
-        let element = guiwright_shot::crop(&image, x0, y0, x1, y1)?;
+        // bounds are already physical; the frame is the window's buffer)
+        // — the shared §10 crop helper (the retry waiter's poll rides
+        // the same one, [`App::poll_element_snapshot`]).
+        let ((x0, y0, x1, y1), element) = crop_element(rect, frame.size.0, frame.size.1, &pixels)?;
 
         let root = app
             .baseline_root
@@ -1174,6 +1161,50 @@ impl<A: FrameworkAdapter> App<A> {
         Ok(outcome)
     }
 
+    /// One snapshot/diff poll for the §16 screenshot retry waiter — the
+    /// `Locator::screenshot` pipeline (resolve → render → crop → diff)
+    /// in its waitable form: `Ok(Mismatched)` means "keep polling" (the
+    /// artifacts are already written next to the baseline, §10), while
+    /// `Matched`/`Blessed` satisfy the pixel budget. `Err` is fail-fast:
+    /// strict-mode resolution, a bounds-less node, an adapter without a
+    /// pixel path, a missing baseline without bless — no amount of
+    /// waiting fixes those. The resolve rides the caller's window scope
+    /// (the set/act/clear rendezvous the `expect` waiter drives), and
+    /// the crop is the same [`crop_element`] helper the single-shot
+    /// uses, so the two surfaces crop byte-identically.
+    pub(crate) fn poll_element_snapshot(
+        &mut self,
+        selector: &Selector,
+        name: &str,
+        store: &guiwright_shot::baseline::BaselineStore,
+        tolerance: guiwright_shot::config::EffectiveTolerance,
+        bless: BlessMode,
+    ) -> Result<SnapshotOutcome, KitError> {
+        let resolved = self.session.resolve(selector)?;
+        let Some(rect) = resolved.bounds else {
+            return Err(KitError::Core(CoreError::other(format!(
+                "{} has no bounds — nothing to crop (§10)",
+                selector.render()
+            ))));
+        };
+        let frame = self.session.adapter_mut().render_frame(None)?;
+        let Some(pixels) = frame.pixels.as_deref() else {
+            return Err(KitError::NoPixels(
+                self.session.adapter().meta().name.to_string(),
+            ));
+        };
+        let (_, element) = crop_element(rect, frame.size.0, frame.size.1, pixels)?;
+        store
+            .check_snapshot(
+                name,
+                self.session.adapter().meta().framework,
+                &element,
+                tolerance,
+                bless,
+            )
+            .map_err(KitError::Shot)
+    }
+
     /// Stop the trace and return the archive path (§12
     /// `app.trace().stop()`; `None` when tracing was not enabled).
     pub fn finish(&mut self) -> Option<PathBuf> {
@@ -1628,6 +1659,40 @@ fn drag_center(
     Ok((rect.x0.midpoint(rect.x1), rect.y0.midpoint(rect.y1)))
 }
 
+/// The clamped §10 crop window in physical px (`x0, y0, x1, y1`) — the
+/// trace event's coordinates.
+type CropWindow = (u32, u32, u32, u32);
+
+/// The §10 element crop: the window frame's pixels clipped to the
+/// resolved node's rect — never a re-render. Returns the clamped crop
+/// window (the trace event's coordinates) and the element image. The
+/// clamp pins every coordinate into `[0, max]` before the conversion
+/// (the §10/§15 guarded-conversion pattern): the float→i64 step keeps
+/// the sign domain (clamped ≥ 0), and the `u32::try_from` proves the
+/// range instead of truncating — `unwrap_or(max)` is the unreachable
+/// arm, kept honest by the clamp. Shared by [`Locator::screenshot`] and
+/// the §16 retry waiter's poll ([`App::poll_element_snapshot`]) — the
+/// two surfaces crop byte-identically by construction.
+fn crop_element(
+    rect: accesskit::Rect,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+) -> Result<(CropWindow, Image), KitError> {
+    let clamp = |v: f64, max: u32| {
+        u32::try_from(v.round().clamp(0.0, f64::from(max)) as i64).unwrap_or(max)
+    };
+    let (x0, y0) = (clamp(rect.x0, width), clamp(rect.y0, height));
+    let (x1, y1) = (clamp(rect.x1, width), clamp(rect.y1, height));
+    let image = Image {
+        width,
+        height,
+        rgba: pixels.to_vec(),
+    };
+    let element = guiwright_shot::crop(&image, x0, y0, x1, y1)?;
+    Ok(((x0, y0, x1, y1), element))
+}
+
 /// `expect(app.get_by_text("Welcome, Ada")).to_be_visible()` (§16
 /// retry-until-timeout assertions). Free function, architecture shape:
 /// it consumes the locator and returns the pending assertion. A
@@ -1640,24 +1705,47 @@ pub fn expect<A: FrameworkAdapter>(locator: Locator<'_, A>) -> core_expect::Pend
         window,
     } = locator;
     core_expect::Pending {
-        builder: app.session.expect(selector).with_window(window),
+        app,
+        selector,
+        window,
+        timeout: guiwright_core::expect::DEFAULT_TIMEOUT,
+        negated: false,
     }
 }
 
 /// Tiny namespace so the kit's expect reads like the architecture's
 /// `expect(locator).to_*` while delegating to the session builder.
 pub(crate) mod core_expect {
-    use super::FrameworkAdapter;
+    use std::time::Duration;
+
     use guiwright_core::CoreError;
     use guiwright_core::selector::TextMatch;
 
+    use super::{App, FrameworkAdapter, SnapshotOutcome};
+    use guiwright_driver::session::ExpectBuilder;
+    use guiwright_shot::baseline::BlessMode;
+
+    /// The pending `expect(locator)` assertion (§16). Carries the
+    /// locator's app/selector/window plus the two builder modifiers
+    /// (`with_timeout`, `not`) so every terminal `to_*` builds the
+    /// session's [`ExpectBuilder`] on demand — and so the pixel-domain
+    /// assertion (`to_have_screenshot`) can drive the app-level §10
+    /// baseline store the session builder's check-list waiter cannot
+    /// reach.
     pub struct Pending<'a, A: FrameworkAdapter> {
-        pub builder: guiwright_driver::session::ExpectBuilder<'a, A>,
+        pub(crate) app: &'a mut App<A>,
+        pub(crate) selector: super::Selector,
+        pub(crate) window: Option<String>,
+        pub(crate) timeout: Duration,
+        pub(crate) negated: bool,
     }
 
     impl<A: FrameworkAdapter> std::fmt::Debug for Pending<'_, A> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("Pending").finish_non_exhaustive()
+            f.debug_struct("Pending")
+                .field("selector", &self.selector.render())
+                .field("negated", &self.negated)
+                .finish_non_exhaustive()
         }
     }
 
@@ -1666,51 +1754,63 @@ pub(crate) mod core_expect {
     // assertion is single-shot, so `self` moves into the check (the
     // workspace lint table carries the `wrong_self_convention` carve-out).
     impl<A: FrameworkAdapter> Pending<'_, A> {
+        /// The session builder for this assertion's tree-domain checks:
+        /// the stored selector/window/timeout/negation replayed onto a
+        /// fresh builder (the terminal method's `self` moves into it).
+        fn builder(&mut self) -> ExpectBuilder<'_, A> {
+            let builder = self
+                .app
+                .session
+                .expect(self.selector.clone())
+                .with_timeout(self.timeout)
+                .with_window(self.window.clone());
+            if self.negated { builder.not() } else { builder }
+        }
+
         /// Override the timeout for this assertion (the session builder's
         /// deadline — default 5 s, Playwright parity).
-        pub fn with_timeout(self, timeout: std::time::Duration) -> Self {
-            Self {
-                builder: self.builder.with_timeout(timeout),
-            }
+        pub fn with_timeout(mut self, timeout: Duration) -> Self {
+            self.timeout = timeout;
+            self
         }
         /// The negation modifier (§16 assertions row, M24):
         /// `expect(locator).not().to_be_visible()` — the terminal
         /// assertion is inverted through the core `NotWaiter` decorator:
         /// satisfied exactly while the positive condition does not hold
-        /// (absent, hidden, disabled, a count that differs), completing
-        /// event-driven when the world changes. Strict-mode violations
-        /// and fail-fast checks keep failing (Playwright parity), and
-        /// the timeout header names the inversion. A window-pinned
-        /// locator keeps aiming through the modifier. Set-once: calling
-        /// it again changes nothing.
-        pub fn not(self) -> Self {
-            Self {
-                builder: self.builder.not(),
-            }
+        /// (absent, hidden, disabled, a count that differs — or, for the
+        /// screenshot waiter, a pixel budget that does not hold),
+        /// completing event-driven when the world changes. Strict-mode
+        /// violations and fail-fast checks keep failing (Playwright
+        /// parity), and the timeout header names the inversion. A
+        /// window-pinned locator keeps aiming through the modifier.
+        /// Set-once: calling it again changes nothing.
+        pub fn not(mut self) -> Self {
+            self.negated = true;
+            self
         }
-        pub fn to_be_visible(self) -> Result<(), CoreError> {
-            self.builder.to_be_visible()
+        pub fn to_be_visible(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_visible()
         }
-        pub fn to_be_hidden(self) -> Result<(), CoreError> {
-            self.builder.to_be_hidden()
+        pub fn to_be_hidden(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_hidden()
         }
-        pub fn to_be_enabled(self) -> Result<(), CoreError> {
-            self.builder.to_be_enabled()
+        pub fn to_be_enabled(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_enabled()
         }
-        pub fn to_be_disabled(self) -> Result<(), CoreError> {
-            self.builder.to_be_disabled()
+        pub fn to_be_disabled(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_disabled()
         }
-        pub fn to_be_focused(self) -> Result<(), CoreError> {
-            self.builder.to_be_focused()
+        pub fn to_be_focused(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_focused()
         }
-        pub fn to_be_checked(self) -> Result<(), CoreError> {
-            self.builder.to_be_checked()
+        pub fn to_be_checked(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_checked()
         }
-        pub fn to_be_unchecked(self) -> Result<(), CoreError> {
-            self.builder.to_be_unchecked()
+        pub fn to_be_unchecked(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_unchecked()
         }
-        pub fn to_be_checked_mixed(self) -> Result<(), CoreError> {
-            self.builder.to_be_checked_mixed()
+        pub fn to_be_checked_mixed(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_checked_mixed()
         }
         /// `expect(locator).toBeEditable()` (§16 assertions row, M28): the
         /// consumer's effective read-only state reports editable — the
@@ -1719,8 +1819,8 @@ pub(crate) mod core_expect {
         /// that has not flipped yet stays Pending), the timeout error
         /// names the assertion, the locator and the state the last
         /// evaluation found. Composes with [`Self::not`].
-        pub fn to_be_editable(self) -> Result<(), CoreError> {
-            self.builder.to_be_editable()
+        pub fn to_be_editable(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_editable()
         }
         /// `expect(locator).to_be_readonly()` (§16 assertions row, M28) —
         /// the editable check's negated pair as a direct assertion: the
@@ -1728,14 +1828,14 @@ pub(crate) mod core_expect {
         /// read-only exactly as Playwright's
         /// `expect(button).not().toBeEditable()` does. Composes with
         /// [`Self::not`].
-        pub fn to_be_readonly(self) -> Result<(), CoreError> {
-            self.builder.to_be_readonly()
+        pub fn to_be_readonly(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_readonly()
         }
-        pub fn to_have_text(self, text: impl Into<TextMatch>) -> Result<(), CoreError> {
-            self.builder.to_have_text(text)
+        pub fn to_have_text(mut self, text: impl Into<TextMatch>) -> Result<(), CoreError> {
+            self.builder().to_have_text(text)
         }
-        pub fn to_have_value(self, value: impl Into<TextMatch>) -> Result<(), CoreError> {
-            self.builder.to_have_value(value)
+        pub fn to_have_value(mut self, value: impl Into<TextMatch>) -> Result<(), CoreError> {
+            self.builder().to_have_value(value)
         }
         /// `expect(locator).toHaveRole(role)` (§16 assertions row, M38) —
         /// the identity family's role row: the node's AccessKit role
@@ -1743,8 +1843,8 @@ pub(crate) mod core_expect {
         /// can restate the role, Playwright parity); the timeout error
         /// names the assertion, the locator and the role the last
         /// evaluation found. Composes with [`Self::not`].
-        pub fn to_have_role(self, role: accesskit::Role) -> Result<(), CoreError> {
-            self.builder.to_have_role(role)
+        pub fn to_have_role(mut self, role: accesskit::Role) -> Result<(), CoreError> {
+            self.builder().to_have_role(role)
         }
         /// `expect(locator).toHaveAccessibleName(name)` (§16 assertions
         /// row, M38) — the identity family's name row: the node's
@@ -1753,8 +1853,11 @@ pub(crate) mod core_expect {
         /// *value* never satisfies a name assertion. The mismatch is
         /// waitable; a missing name stays Pending (labels arrive with
         /// the node's restatement). Composes with [`Self::not`].
-        pub fn to_have_accessible_name(self, name: impl Into<TextMatch>) -> Result<(), CoreError> {
-            self.builder.to_have_accessible_name(name)
+        pub fn to_have_accessible_name(
+            mut self,
+            name: impl Into<TextMatch>,
+        ) -> Result<(), CoreError> {
+            self.builder().to_have_accessible_name(name)
         }
         /// `expect(locator).toHaveAccessibleDescription(description)` (§16
         /// assertions row, M38) — the identity family's description row:
@@ -1763,18 +1866,18 @@ pub(crate) mod core_expect {
         /// (descriptions arrive with the node's restatement). Composes
         /// with [`Self::not`].
         pub fn to_have_accessible_description(
-            self,
+            mut self,
             description: impl Into<TextMatch>,
         ) -> Result<(), CoreError> {
-            self.builder.to_have_accessible_description(description)
+            self.builder().to_have_accessible_description(description)
         }
         /// `expect(locator).toHaveCount(count)` (§16 assertions row, M22) —
         /// the selector-level assertion: how many nodes match, strict mode
         /// never consulted. The mismatch is waitable (nodes stream in and
         /// out, Playwright parity); the timeout error names the expected
         /// count, the locator and the count the last evaluation found.
-        pub fn to_have_count(self, expected: usize) -> Result<(), CoreError> {
-            self.builder.to_have_count(expected)
+        pub fn to_have_count(mut self, expected: usize) -> Result<(), CoreError> {
+            self.builder().to_have_count(expected)
         }
         /// `expect(locator).to_have_count_greater_than(min)` (§16
         /// assertions row, M25) — the M22 record's reserved widening on
@@ -1782,15 +1885,118 @@ pub(crate) mod core_expect {
         /// match, the mismatch waitable, the timeout error naming the
         /// comparator (`count > 99 — …`) and the count the last
         /// evaluation found (`found 4`). Composes with [`Self::not`].
-        pub fn to_have_count_greater_than(self, min: usize) -> Result<(), CoreError> {
-            self.builder.to_have_count_greater_than(min)
+        pub fn to_have_count_greater_than(mut self, min: usize) -> Result<(), CoreError> {
+            self.builder().to_have_count_greater_than(min)
         }
         /// `expect(locator).to_have_count_less_than(max)` (§16
         /// assertions row, M25) — the mirror comparator: satisfied while
         /// *fewer* than `max` nodes match, same waiter, same waitable
         /// mismatch, same error shape. Composes with [`Self::not`].
-        pub fn to_have_count_less_than(self, max: usize) -> Result<(), CoreError> {
-            self.builder.to_have_count_less_than(max)
+        pub fn to_have_count_less_than(mut self, max: usize) -> Result<(), CoreError> {
+            self.builder().to_have_count_less_than(max)
+        }
+
+        /// `expect(locator).to_have_screenshot(name, bless)` — the §16
+        /// retry waiter over the §10 baseline flow (Playwright
+        /// `toHaveScreenshot` parity, the single-shot
+        /// [`Locator::screenshot`] with the `to_have_text` retry
+        /// semantics): poll resolve → render → crop → diff on every
+        /// presented frame until the pixel budget is satisfied or the
+        /// `expect` timeout expires. Each mismatching poll writes the
+        /// §10 artifacts (`.new.png` + `.diff.png` next to the baseline),
+        /// and the timeout error's header carries the LAST attempt's
+        /// report — the artifact links ride the failure the same way
+        /// they ride the single-shot error.
+        ///
+        /// Zero-polling where it can be (§15.3): the first evaluation
+        /// runs before any pump — a first-frame match never pumps at all
+        /// — and every later poll follows a pump, so a still app is never
+        /// re-diffed into a busy loop by anything but the shared
+        /// deadline. Fail-fast where waiting cannot help: strict-mode
+        /// resolution, a bounds-less node, an adapter without a pixel
+        /// path, a missing baseline without bless. `not()` inverts the
+        /// terminal condition (the m24 semantics over pixels): satisfied
+        /// exactly while the budget does NOT hold; the bless flow rides
+        /// the store unchanged (a `Failing`/`Force` bless rewrites the
+        /// baseline on the poll that mismatches, which short-circuits
+        /// the retry — bless is a baseline-churn escape hatch, not an
+        /// assertion mode).
+        pub fn to_have_screenshot(self, name: &str, bless: BlessMode) -> Result<(), CoreError> {
+            let Pending {
+                app,
+                selector,
+                window,
+                timeout,
+                negated,
+            } = self;
+            let recorded = selector.clone();
+            let deadline = std::time::Instant::now() + timeout;
+            // The scope resolves at act time (the M17 discipline): the
+            // tree is the source of truth, so a window closed between aim
+            // and assert fails here instead of resolving across windows.
+            let scope = match &window {
+                None => None,
+                Some(handle) => app.session.window_scope(handle)?,
+            };
+            app.session.set_resolve_scope(scope);
+            let header = if negated {
+                format!("not (screenshot `{name}` — {})", recorded.render())
+            } else {
+                format!("screenshot `{name}` — {}", recorded.render())
+            };
+            let tolerance = app.config.screenshots.effective();
+            let root = app
+                .baseline_root
+                .clone()
+                .unwrap_or_else(|| app.context.baseline_dir());
+            let store = guiwright_shot::baseline::BaselineStore::new(root);
+            // The M17 stuck-on suffix: the LAST poll's report rides the
+            // timeout header (minus the prefix the header already
+            // carries) so the failure deep-links the artifacts. Empty
+            // until a poll leaves the budget unsatisfied (the negated
+            // form's "still matching" case).
+            let mut stuck;
+            let result = loop {
+                match app.poll_element_snapshot(&selector, name, &store, tolerance, bless) {
+                    Ok(SnapshotOutcome::Mismatched { report }) => {
+                        if negated {
+                            // The positive form failing IS the
+                            // inversion's satisfied state (the m24
+                            // semantics over pixels).
+                            break Ok(());
+                        }
+                        let prefix = format!("screenshot `{name}` mismatch: ");
+                        stuck = report.strip_prefix(&prefix).unwrap_or(&report).to_string();
+                    }
+                    Ok(SnapshotOutcome::Matched { .. } | SnapshotOutcome::Blessed { .. }) => {
+                        if negated {
+                            stuck = "still matching (pixel budget satisfied)".to_string();
+                        } else {
+                            break Ok(());
+                        }
+                    }
+                    Err(err) => {
+                        app.session.clear_resolve_scope();
+                        return Err(CoreError::other(err.to_string()));
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    let last = app.session.tree().summary();
+                    let operation = if stuck.is_empty() {
+                        header
+                    } else {
+                        format!("{header} ({stuck})")
+                    };
+                    break Err(CoreError::Timeout {
+                        operation,
+                        timeout,
+                        last: Box::new(last),
+                    });
+                }
+                app.session.pump();
+            };
+            app.session.clear_resolve_scope();
+            result
         }
     }
 }
