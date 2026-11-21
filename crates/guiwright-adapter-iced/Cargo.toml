@@ -48,8 +48,19 @@ iced = { version = "0.14.0", default-features = false, features = [
     "tiny-skia",
     "wayland",
     "x11",
+    # The ticker test's `subscription::time::every` lives on the smol
+    # backend (iced_futures' thread-pool time module is a stub), so the
+    # dev build carries smol for the m76 timer proof + the m85 trace row.
+    "smol",
     "thread-pool",
 ] }
+# The m85 trace validation drives the kit App's §12 recorder over the real
+# Emulator session and renders the archive through the CLI's `show-trace`
+# (framework-free members, dev-only — they ride the iced-feature build the
+# CI adapter job runs).
+guiwright-kit.workspace = true
+guiwright-cli = { path = "../guiwright-cli", version = "1.0.0" }
+tempfile.workspace = true
 
 # The m76 consumer example builds only with the harness (it drives the
 # real `Emulator` path); the default build skips it.
