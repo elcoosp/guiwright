@@ -19,10 +19,11 @@
 //! [`AdapterError`]: guiwright_driver::adapter::AdapterError
 
 use std::hash::Hasher;
+use std::time::Duration;
 
 use accesskit::{NodeId, Role};
 use guiwright_driver::adapter::{
-    ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline,
+    ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline, FrameRef,
     FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PumpOutcome, SemAction,
 };
 use twox_hash::xxhash3_64::Hasher as Xxh3;
@@ -31,6 +32,10 @@ use crate::actions::{WidgetOp, route};
 use crate::input::{InputOp, PointerOp, translate};
 use crate::logical::{LogicalTree, WidgetReport};
 use crate::policy::{Mode, may_run_pass};
+
+/// The frame step the §14 fast-forward advances in (the §14 pacing
+/// default; the Emulator's Zen drain settles each step).
+const FRAME_MS: u64 = 16;
 
 /// Frame digest (§10): xxh3 over the report's structural summary — the
 /// cheap visual-change signal when the backend produces no pixels.
@@ -87,6 +92,22 @@ pub trait SimulatorSeam {
     /// instructions, §9).
     fn pointer(&mut self, op: &PointerOp) -> Result<String, AdapterError>;
     fn screen_size(&self) -> (f64, f64);
+    /// Install/clear the §13 overlay plan (M83: the wrapper program
+    /// composites it inside the app's own view build). Default: no
+    /// overlay surface — the honest Unsupported row.
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        let _ = plan;
+        Err(AdapterError::Unsupported("inspect overlay (§13)"))
+    }
+    /// One headless render pass (§10/§11): the Emulator's `tiny-skia`
+    /// screenshot — real pixels at the boot viewport. Default: no pixel
+    /// path.
+    fn screenshot(&mut self) -> Result<(u32, u32, Vec<u8>), AdapterError> {
+        Err(AdapterError::Unsupported("render_frame"))
+    }
 }
 
 /// The iced adapter (§6.1 trait implementation over the engine).
@@ -98,12 +119,17 @@ pub struct IcedAdapter<S: SimulatorSeam> {
     sim: S,
     pass_seq: u64,
     last_frame_hash: u64,
+    /// The §14 virtual-time ledger (M84): the Emulator's determinism
+    /// machinery is the framework's clock primitive.
+    clock_ledger: Option<Duration>,
+    clock_paused: bool,
 }
 
 impl<S: SimulatorSeam> IcedAdapter<S> {
     /// Capability row for iced (§6.2): no AccessKit tree (Level-2), input
-    /// through the real pipeline, frames via the backend's screenshot
-    /// path, clock best-effort via Emulator modes.
+    /// through the real pipeline, frames via the Emulator's headless
+    /// screenshot (§10/§11 — the same pass the instructions ride),
+    /// clock best-effort via Emulator modes.
     pub fn new(report: ReportFn, sim: S, registry: crate::registry::RoleRegistry) -> Self {
         Self {
             meta: AdapterMeta {
@@ -115,8 +141,8 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
                     logical_snapshot: true,
                     input: true,
                     last_frame: false,
-                    render_frame: false,
-                    clock: false,
+                    render_frame: true,
+                    clock: true,
                 },
             },
             engine: LogicalTree::with_registry("iced", registry),
@@ -125,6 +151,8 @@ impl<S: SimulatorSeam> IcedAdapter<S> {
             sim,
             pass_seq: 0,
             last_frame_hash: 0,
+            clock_ledger: None,
+            clock_paused: false,
         }
     }
 
@@ -218,11 +246,72 @@ impl<S: SimulatorSeam + 'static> FrameworkAdapter for IcedAdapter<S> {
         }
     }
 
+    /// Virtual clock (§14, M84): the binding rides the Emulator's own
+    /// determinism machinery — `Mode::Zen` settles every spawned task and
+    /// every due subscription tick. `iced_test` exposes no virtual timer
+    /// (subscriptions fire on real time), so `fast_forward` advances the
+    /// ledger in frame-sized steps, draining the runtime each step — the
+    /// due timers land, the app state advances. The §14 iced row is
+    /// documented best-effort determinism (§14 "per-framework injection
+    /// table").
     fn clock(&mut self, cmd: ClockCmd) -> Result<ClockState, AdapterError> {
-        // §14: iced embedded clock is best-effort (Emulator determinism
-        // modes) — the M1 row stays Unsupported until the CI pass binds it.
-        let _ = cmd;
-        Err(AdapterError::Unsupported("clock (iced: Emulator modes)"))
+        match cmd {
+            ClockCmd::InstallVirtual => self.clock_ledger = Some(Duration::ZERO),
+            ClockCmd::Probe => {}
+            ClockCmd::FastForward(dt) | ClockCmd::RunFor(dt) => {
+                let ms = dt.as_millis() as u64;
+                for _ in 0..ms.div_ceil(FRAME_MS) {
+                    std::thread::sleep(Duration::from_millis(FRAME_MS));
+                    self.sim.run_one_pass();
+                }
+                self.clock_ledger = Some(self.clock_ledger.unwrap_or_default().saturating_add(dt));
+            }
+            ClockCmd::Pause => self.clock_paused = true,
+            ClockCmd::Resume => self.clock_paused = false,
+            ClockCmd::SetTime(t) => self.clock_ledger = Some(t),
+        }
+        Ok(ClockState {
+            virtual_time: self.clock_ledger,
+            paused: self.clock_paused,
+        })
+    }
+
+    /// Inspector overlay (§13, M83): the plan rides the seam into the
+    /// wrapper program — the next view build composites it (the
+    /// Emulator's own pass paints it, no extra pass, §15.4).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.sim.show_overlay(plan)
+    }
+
+    /// Render on demand (§10/§11, M83): the Emulator's headless
+    /// `tiny-skia` screenshot — one build+draw of the current view, the
+    /// overlay composited when the inspect session is on.
+    fn render_frame(&mut self, size: Option<(u32, u32)>) -> Result<FrameRef, AdapterError> {
+        // The Emulator rasterizes at its boot viewport (the headless
+        // window size is fixed at construction — §4.6).
+        let _ = size;
+        let (width, height, rgba) = self.sim.screenshot()?;
+        let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(rgba);
+        let hash = {
+            use std::hash::Hasher;
+            use std::time::Duration;
+            use twox_hash::xxhash3_64::Hasher as Xxh3;
+            let mut hasher = Xxh3::default();
+            hasher.write(&pixels);
+            hasher.finish()
+        };
+        self.pass_seq += 1;
+        Ok(FrameRef {
+            stamp: FrameStamp {
+                seq: self.pass_seq,
+                hash,
+            },
+            size: (width, height),
+            pixels: Some(pixels),
+        })
     }
 }
 
@@ -314,8 +403,8 @@ mod tests {
         assert!(!caps.tree_update, "Level-2: no AccessKit tree");
         assert!(caps.logical_snapshot);
         assert!(caps.input);
-        assert!(!caps.render_frame, "unsupported row is explicit");
-        assert!(!caps.clock, "best-effort row is explicit");
+        assert!(caps.render_frame, "the Emulator screenshot path (§11)");
+        assert!(caps.clock, "the §14 determinism-drain binding (M84)");
     }
 
     #[test]
