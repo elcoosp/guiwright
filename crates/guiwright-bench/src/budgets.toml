@@ -199,6 +199,15 @@ m0_measurable = true
 sample = "locator_element_screenshot"
 
 [[budget]]
+id = "expect_screenshot_retry"
+name = "Expect screenshot retry waiter (satisfied poll)"
+p50_us = 1500
+p95_us = 6000
+notes = "§16 screenshot retry over the §10 flow: resolve consistency pump + one frame render + crop_element + waitable check_snapshot diff on the first-frame-match path (each mismatching retry poll adds one pump and the artifact writes, bounded by the assert timeout, not this budget)"
+m0_measurable = true
+sample = "expect_screenshot_retry"
+
+[[budget]]
 id = "wire_screenshot_window"
 name = "Wire screenshot (window frame render + PNG encode)"
 p50_us = 5000
