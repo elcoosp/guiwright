@@ -85,6 +85,12 @@ struct ItemFacts {
 
 type Rect = [f64; 4];
 
+/// The §10 frame cache row (m85): the pixels `last_frame` serves — the
+/// pass sequence it was snapshotted at, the bytes, and the physical size.
+/// One snapshot per pump serves every presented stamp of that pump; any
+/// `act`/`render_frame` fold advances the sequence and invalidates it.
+type FrameCache = (u64, Arc<[u8]>, (u32, u32));
+
 /// The slint adapter (§6.1): Level-2 — the engine folds real
 /// `ElementHandle` introspection into synthesized AccessKit diffs; input
 /// rides the real `Window::dispatch_event` pipeline; pixels come from the
@@ -102,11 +108,8 @@ pub struct SlintAdapter<C: ComponentHandle> {
     /// m84): shown while the `inspect` domain drives it, composited onto
     /// the presented frame at capture time.
     overlay: OverlayHost,
-    /// The §10 frame cache (m85): the pixels `last_frame` serves, keyed
-    /// on the pass sequence so one snapshot per pump serves every
-    /// presented stamp of that pump and any `act`/`render_frame` fold
-    /// invalidates it.
-    frame_cache: Option<(u64, Arc<[u8]>, (u32, u32))>,
+    /// The §10 frame cache (m85) — see [`FrameCache`].
+    frame_cache: Option<FrameCache>,
 }
 
 impl<C: ComponentHandle + 'static> SlintAdapter<C> {
@@ -817,12 +820,11 @@ impl<C: ComponentHandle + 'static> FrameworkAdapter for SlintAdapter<C> {
     /// window's geometry. `None` clears the session (the window leaves
     /// the registry).
     fn show_overlay(&mut self, plan: Option<&OverlayPlan>) -> Result<(), AdapterError> {
-        match plan {
-            Some(plan) => self.overlay.show(plan, self.size),
-            None => {
-                self.overlay.clear();
-                Ok(())
-            }
+        if let Some(plan) = plan {
+            self.overlay.show(plan, self.size)
+        } else {
+            self.overlay.clear();
+            Ok(())
         }
     }
 }
