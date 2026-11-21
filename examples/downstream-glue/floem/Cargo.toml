@@ -1,0 +1,41 @@
+# The downstream-glue floem reference example (architecture §4.7, §17 row 6).
+#
+# Its own workspace root, like the repo's `glue/floem` workspace: the real
+# floem graph (the git revision + its Linux deps) must never enter the main
+# workspace (§5.3 "the default workspace build must never require"), and a
+# system-dep-free reference has to compile anywhere. This crate carries NO
+# framework graph at all: the floem API surface the binding touches is
+# **mirrored** (`src/mirror.rs`) with the exact names and signatures the
+# real `glue/floem` harness rides (`TestRoot`, `HeadlessHarness`,
+# `ViewId::get_visual_rect`, `Event` payloads), so the engine calls compile
+# and run identically against the mirrored types — the canonical
+# dependency-free binding proof the `guiwright-adapter-floem` contract
+# points to.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "guiwright-downstream-glue-floem"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elcoosp/guiwright"
+description = "Downstream floem glue reference example (architecture §4.7): FrameworkAdapter over the floem-shaped mirror — TestRoot boot, dispatch_event input with real hit-testing, ViewId::get_visual_rect geometry, engine tiny-skia PaintState pixels — driving a counter app through Session"
+
+[dependencies]
+guiwright-adapter-floem = { path = "../../../crates/guiwright-adapter-floem" }
+guiwright-driver = { path = "../../../crates/guiwright-driver" }
+guiwright-core = { path = "../../../crates/guiwright-core" }
+accesskit = "0.25.2"
+# The frame digest (§15.5 "hash = xxh3 of a scene/pixel digest") — the
+# same pinned hashing stack the real glue rides.
+twox-hash = { version = "2.1.5", default-features = false, features = [
+    "std",
+    "xxhash3_64",
+] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
