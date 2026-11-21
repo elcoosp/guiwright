@@ -18,6 +18,11 @@
 //!   `Window::take_snapshot` renders headless pixels, and
 //!   `mock_elapsed_time` advances the first-class virtual clock — all
 //!   behind the [`FrameworkAdapter`] trait the session drives.
+//! * [`overlay`] — the §13 inspector overlay as the documented
+//!   **top-level overlay window** (§4.4): a borderless second `.slint`
+//!   window in the same `TestingBackend` registry, compositing the
+//!   hover outline + role/TestId badges onto the presented frame at
+//!   capture time (m84).
 //!
 //! # Consumer walkthrough
 //!
@@ -28,9 +33,11 @@
 //! The runtime tests (`tests/slint_embedded.rs`) drive the real
 //! `counter_form.slint` app — stock `Button` + `LineEdit` + `Text` —
 //! through [`Session`]: resolve by role/name with real bounds, click
-//! increments, fill types, snapshots stay stable.
+//! increments, fill types, snapshots stay stable; the overlay tests
+//! (`tests/slint_overlay.rs`) prove the §13 window composites.
 //!
 //! [`FrameworkAdapter`]: guiwright_driver::adapter::FrameworkAdapter
 //! [`Session`]: guiwright_driver::session::Session
 
 pub mod harness;
+pub mod overlay;
