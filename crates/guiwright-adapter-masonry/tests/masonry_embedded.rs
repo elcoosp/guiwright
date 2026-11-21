@@ -187,7 +187,13 @@ fn dynamic_widget_edit_is_observed() {
 /// static span dedups (the §10 compression contract — this app has no
 /// callbacks, so every presented frame is byte-identical), and the stop
 /// finalizes a valid artifact: non-zero size, at least the first
-/// presented frame encoded, a wall-clock duration.
+/// presented frame encoded, a wall-clock duration. The §6.2 dual
+/// behavior (the `pixels_render_headlessly` + egui video-row rule):
+/// probe the pixel path FIRST — a GPU host (CI linux rides lavapipe,
+/// macOS/Windows have real GPUs) records real frames; a GPU-less host
+/// finalizes the honest empty artifact (the cached probe failure —
+/// never a silent partial frame). Both branches assert their contract;
+/// no host skips the row.
 #[test]
 fn video_records_presented_pixels() {
     use guiwright_kit::App;
@@ -196,13 +202,10 @@ fn video_records_presented_pixels() {
     let adapter = MasonryAdapter::<Flex>::new_with_size(counter_app(), 400.0, 300.0);
     let mut app = App::launch("masonry_video", adapter);
 
-    // The §6.2 dual behavior (the `pixels_render_headlessly` rule): the
-    // vello raster needs a GPU or lavapipe — a GPU-less host skips to
-    // the honest row instead of panicking inside the framework harness.
-    if !app.session().adapter().gpu_available() {
-        eprintln!("gpu-less host: the vello video row rides the CI leg");
-        return;
-    }
+    // The pixel probe (the sibling rows' rule): the first pixel demand
+    // answers the adapter's honest `Unsupported` on a GPU-less host and
+    // caches the probe — the branch is decided once, up front.
+    let gpu_host = app.session().adapter_mut().render_frame(None).is_ok();
 
     app.video().start_in(dir.path(), 25).expect("video starts");
     app.session().pump();
@@ -213,6 +216,26 @@ fn video_records_presented_pixels() {
         .click()
         .expect("click pumps the harness");
     let summary = app.video().stop().expect("video stops");
+
+    if !gpu_host {
+        // GPU-less host: the recorder still runs, `last_frame` answers
+        // None per stamp (no pixels were ever claimed), and the stop
+        // reports the honest zero-frame row — zero accepted frames
+        // finalize nothing (the artifact is created by the first
+        // frame), never a silent partial recording.
+        assert_eq!(summary.frames, 0, "no pixels were claimed: {summary:?}");
+        assert_eq!(summary.dropped, 0, "nothing was deduped: {summary:?}");
+        assert_eq!(
+            summary.duration_ms, 0,
+            "no accepted frames carry no span: {summary:?}"
+        );
+        assert!(
+            !summary.path.exists(),
+            "zero frames finalize no artifact: {}",
+            summary.path.display()
+        );
+        return;
+    }
 
     assert!(
         summary.frames >= 1,
