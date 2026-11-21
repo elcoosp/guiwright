@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-egui"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "egui",
@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-floem"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-freya"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "freya-components",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-gpui"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2036,7 +2036,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-iced"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-masonry"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.31.0",
@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-adapter-slint"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2079,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-bench"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "criterion",
@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-cli"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2121,7 +2121,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-core"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.39.2",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-driver"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.39.2",
@@ -2152,7 +2152,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-inspect"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-kit"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.39.2",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-macros"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2192,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-proto"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-shot"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "png 0.18.1",
  "serde",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-trace"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "guiwright-shot",
  "lz4_flex",
@@ -2235,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "guiwright-viewer"
-version = "1.0.0-rc.1"
+version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
