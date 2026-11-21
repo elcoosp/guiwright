@@ -55,9 +55,9 @@ fn counter_form() -> Element {
             .a11y_id(AccessibilityId(0))
             .into();
     }
-    let mut count = state.count.clone();
-    let name = state.name.clone();
-    let name_input = name.clone();
+    let mut count = state.count;
+    let name = state.name;
+    let name_input = name;
 
     rect()
         .width(Size::px(480.))
@@ -123,7 +123,7 @@ fn counter_session() -> Session<FreyaAdapter<FreyaTestingHarness<AppState>>> {
     });
     // The mount flip lands after freya's internal boot commit and before
     // the session's first sync — the next diff IS the full tree (§9).
-    let mut mounted = harness.state().mounted.clone();
+    let mut mounted = harness.state().mounted;
     *mounted.write() = true;
     let adapter = FreyaAdapter::new(harness);
     let mut session = Session::new(adapter);
@@ -311,7 +311,7 @@ fn run_in_mutates_app_state_end_to_end() {
             let state = ctx
                 .downcast_mut::<AppState>()
                 .ok_or("wrong runner context type")?;
-            let mut count = state.count.clone();
+            let mut count = state.count;
             *count.write() = 42;
             Ok("count set to 42".to_string())
         }))
@@ -333,12 +333,12 @@ fn probe_mount_update() {
             mounted: State::create(false),
         })
     });
-    let mut mounted = harness.state().mounted.clone();
+    let mut mounted = harness.state().mounted;
     *mounted.write() = true;
     let u1 = guiwright_adapter_freya::runner::TestingSeam::sync_and_update(&mut harness);
     eprintln!("MOUNT nodes={}", u1.nodes.len());
     for (id, node) in &u1.nodes {
-        let kids: Vec<i64> = node.children().iter().map(|c| c.0 as i64).collect();
+        let kids: Vec<u64> = node.children().iter().map(|c| c.0).collect();
         eprintln!("  id={} role={:?} kids={:?}", id.0, node.role(), kids);
     }
     let u2 = guiwright_adapter_freya::runner::TestingSeam::sync_and_update(&mut harness);
@@ -369,8 +369,8 @@ fn register_app_test_ids(
 }
 
 /// The §10 recorder over real freya pixels (m86): the pump's frames flow
-/// through `last_frame` into the recorder — the TestingRunner's software
-/// Skia raster is the pixel path (§6.2 "last_frame ✅ post_render_callback"),
+/// through `last_frame` into the recorder — the `TestingRunner`'s software
+/// Skia raster is the pixel path (§6.2 "`last_frame` ✅ `post_render_callback`"),
 /// the fill repaint records, and the stop finalizes a valid artifact:
 /// non-zero size, ≥2 distinct frames around the repaint, a wall-clock
 /// duration, and a real container (ffmpeg EBML when the binary is
@@ -378,8 +378,8 @@ fn register_app_test_ids(
 ///
 /// The recorder's hash-equality dedup rides the pump's frame stamps;
 /// freya's stamps carry the pass sequence as their digest (runner.rs —
-/// "TestingRunner renders deterministically; the pixel digest rides
-/// render_frame"), so no static-span dedup is asserted here — every pump
+/// "`TestingRunner` renders deterministically; the pixel digest rides
+/// `render_frame`"), so no static-span dedup is asserted here — every pump
 /// presents exactly one stamp and the two pumps around the repaint are
 /// the two distinct frames.
 #[test]
@@ -394,7 +394,7 @@ fn video_records_presented_pixels() {
             mounted: State::create(false),
         })
     });
-    let mut mounted = harness.state().mounted.clone();
+    let mut mounted = harness.state().mounted;
     *mounted.write() = true;
     let adapter = FreyaAdapter::new(harness);
     let mut app = App::launch("freya_video", adapter);
@@ -457,7 +457,7 @@ fn is_valid_video(path: &std::path::Path) {
 /// settled app blesses an element baseline (`BlessMode::Failing` — the
 /// `GUIWRIGHT_BLESS=1` form), and the unchanged re-render diffs clean
 /// (`BlessMode::Off`) — the §10 bless → diff round trip end to end, from
-/// the TestingRunner's software-Skia raster through the crop-aware
+/// the `TestingRunner`'s software-Skia raster through the crop-aware
 /// element screenshot into the per-platform baseline store.
 #[test]
 fn screenshot_baseline_bless_and_diff_roundtrip() {
@@ -473,7 +473,7 @@ fn screenshot_baseline_bless_and_diff_roundtrip() {
                 mounted: State::create(false),
             })
         });
-        let mut mounted = harness.state().mounted.clone();
+        let mut mounted = harness.state().mounted;
         *mounted.write() = true;
         FreyaAdapter::new(harness)
     };
