@@ -4,7 +4,14 @@
 //! tree indexes (§13). This module is the **framework-free plan**: the
 //! adapter composites it onto the app's scene at present time (egui:
 //! painter layer after the pass; masonry/freya: overlay layer; iced:
-//! `Operation`-returned rects; slint: top-level overlay window).
+//! `Operation`-returned rects). The slint mapping is a **top-level
+//! overlay window** (architecture §4.4): slint's software renderer has
+//! no in-scene composition slot, so the plan's [`OverlayRect`]s and
+//! [`Badge`]s render in a borderless second `.slint` component window —
+//! registered in the same `TestingBackend` thread-local window registry as
+//! the app window, mirroring its geometry so the window-relative rects
+//! land 1:1, repainting on the same `mock_elapsed_time` ticks, and
+//! captured through the same `Window::take_snapshot` raster path.
 
 use std::fmt::Write;
 
