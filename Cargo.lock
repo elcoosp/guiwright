@@ -1480,9 +1480,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "freya-animation"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "048f55b6274e6bae4c79df7bca7d3f87ed5c47cafdf195d9d93bf18f369b1827"
+checksum = "48766fa693eddf594d01de1dd80e8a523cb8259bfd81ecd59a83cdc63b5ef9f9"
 dependencies = [
  "easer",
  "freya-core",
@@ -1490,9 +1490,9 @@ dependencies = [
 
 [[package]]
 name = "freya-clipboard"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd6e0a9515e88170f7f48e9a3f7e91a025682165963eb89a49ba6aed8fe1b42f"
+checksum = "45021bb90b147b0593586cd92bd13158f75a2ac45ff0b9f96652c641b261074e"
 dependencies = [
  "copypasta",
  "freya-core",
@@ -1502,9 +1502,9 @@ dependencies = [
 
 [[package]]
 name = "freya-components"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875a6e9904729c5ee4274e60cba6046fe4cda65555df353ec2c97e1c4e9dbc3e"
+checksum = "43cb2b10185f0e72aa3ceb43b4c6a99830aefbbbcc4e1bfc6b777139431f2b68"
 dependencies = [
  "accesskit 0.25.2",
  "anyhow",
@@ -1525,9 +1525,9 @@ dependencies = [
 
 [[package]]
 name = "freya-core"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e479472988048d830ae71ef3d75aa74f08cb6e3c9f7cba9bffe99403f9e3d277"
+checksum = "b7cae10a52ca76e01c1442ce125688fcb49551302a1172b4048d5cb35c78673a"
 dependencies = [
  "accesskit 0.25.2",
  "async-io",
@@ -1558,9 +1558,9 @@ dependencies = [
 
 [[package]]
 name = "freya-edit"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c6374458488cdb791f4c812199a325a2fde61abb54a2a9abb396f2743ab6df2"
+checksum = "1d97a6a7d836dbe01c4489f396132ddaaf279a6da134c7c08d9294a43b4eee38"
 dependencies = [
  "bitflags 2.13.2",
  "freya-clipboard",
@@ -1573,18 +1573,18 @@ dependencies = [
 
 [[package]]
 name = "freya-engine"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cf37427c8e1f8ab1e03f23a234c2cdd7ada8b9acb08b7ee4ccfe2784ee05cf3"
+checksum = "ad809ce53cae2c0374eb998468d1d2265fd992762a6ae5e629b69013259e7fd6"
 dependencies = [
  "freya-skia-safe",
 ]
 
 [[package]]
 name = "freya-sdk"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beeea43698c94b6eb33aedcfdd35b3b02d4a056e2ea5f7367650191c18cc84bc"
+checksum = "7aa7831fec6f16117c2c6c39e92f0825900ff06fa8269d7ed20753ba0821fdf1"
 dependencies = [
  "freya-core",
 ]
@@ -1632,9 +1632,9 @@ dependencies = [
 
 [[package]]
 name = "freya-testing"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "063624c2fa3fc4de9ae20635f0402f37f745bdeeedca3ffca7b978e148eaf16b"
+checksum = "cca1f28c0e62e9b62115a99d5e57ba9237abb23267c76f8ba65e5b5b3d4252da"
 dependencies = [
  "accesskit 0.25.2",
  "freya-clipboard",
@@ -2011,11 +2011,16 @@ version = "1.0.0-rc.1"
 dependencies = [
  "accesskit 0.25.2",
  "freya-components",
+ "freya-core",
+ "freya-skia-safe",
  "freya-testing",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "guiwright-shot",
  "thiserror 2.0.21",
+ "torin",
+ "twox-hash",
 ]
 
 [[package]]
@@ -2036,9 +2041,11 @@ dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "iced",
  "iced_renderer",
  "iced_test",
+ "iced_widget",
  "thiserror 2.0.21",
  "twox-hash",
 ]
@@ -3749,9 +3756,9 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pathgraph"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6c673641dc8ac9ccb3e4fc4455decf861501360e74016d7283d81ff3a61a5e8"
+checksum = "71b41d6feb507896833d25e63899b94da178fc6b69dc5b3b6ca9841b999a4742"
 
 [[package]]
 name = "peniko"
@@ -4032,9 +4039,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "ragnarok"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f80d626435fd86ccb3305cbb1480440a2d964e7461052d89a13dcd4406657b99"
+checksum = "9a5c4a21e657a813c2a731b1f943a029e3d7efaed541159224b2f4736ff1237e"
 dependencies = [
  "euclid",
  "hashbrown 0.16.1",
@@ -4813,9 +4820,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-cache"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb22a2a3e78036c21710d43e64b346c755c402313e0a5b00a0bd8dd931bf7abb"
+checksum = "0776c71dc3039c4ad02532eab6e217ce274c7736813d72cd250aa5834eadfa89"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
@@ -4823,9 +4830,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-diff"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebd16d55dc11c09069eeff1d7d9a904d21946cb3fb41fa25ca76a5366d467448"
+checksum = "9103ce612cf271228eb6fcf14f7476bb7d18496bd5f4cea6b8eda2889cd1cab3"
 dependencies = [
  "hashbrown 0.16.1",
  "rustc-hash 2.1.3",
@@ -4833,9 +4840,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-notify"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef61a8c1cd4f6f789e0459bc67a51ea74df0acbe62b2ff78137f26d6d55acb1d"
+checksum = "140d131acbfeda8e31d8945ff617ad7421e65a84b0325ddf847d5e0a7c4f0b5a"
 
 [[package]]
 name = "tiny-skia"
@@ -5007,9 +5014,9 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "torin"
-version = "0.5.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59dbe918e14912dc33da7b49f0310ed2c39f868629d7a7a332c518e507eb0b87"
+checksum = "75a44638fc6fc6024be8a5adb6a81e855483371a1d80ee0b91dc0bdcf0bc01bd"
 dependencies = [
  "euclid",
  "hashbrown 0.16.1",
