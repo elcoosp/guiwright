@@ -29,6 +29,10 @@ description = "Guiwright Floem harness glue (architecture §4.7, m80): Framework
 [dependencies]
 guiwright-adapter-floem = { path = "../../crates/guiwright-adapter-floem" }
 guiwright-driver = { path = "../../crates/guiwright-driver" }
+# The §13 overlay plan vocabulary (`show_overlay` hands one in — the
+# engine's overlay host translates it into PaintOps on the present path,
+# m86).
+guiwright-inspect = { path = "../../crates/guiwright-inspect" }
 accesskit = "0.25.2"
 thiserror = "2.0.21"
 # The frame digest (§10 "hash = xxh3 of a scene/pixel digest") — the same
