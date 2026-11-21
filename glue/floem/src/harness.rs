@@ -53,11 +53,12 @@ use floem::view::{AnyView, ViewId};
 use guiwright_adapter_floem::clock::{FloemClockStep, plan as clock_plan};
 use guiwright_adapter_floem::input::{FloemEvent, translate};
 use guiwright_adapter_floem::paint::{Color, PaintOp, PaintState};
-use guiwright_adapter_floem::{FloemLogicalTree, TestIdRegistry, ViewReport};
+use guiwright_adapter_floem::{FloemLogicalTree, OverlayHost, TestIdRegistry, ViewReport};
 use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, ClockCmd, ClockState, FrameDeadline, FrameRef,
     FrameStamp, FrameworkAdapter, InputEvent, LogicalTreeDiff, PumpOutcome, SemAction,
 };
+use guiwright_inspect::overlay::OverlayPlan;
 use ui_events::keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey};
 
 /// The mock gap between press and release of the double-click pair
@@ -147,6 +148,13 @@ pub struct FloemAdapter {
     facts: HashMap<u64, ItemFacts>,
     /// The app-declared fact source (see [`SemReader`]).
     readers: ReaderMap,
+    /// The §13 overlay binding (m86): the active plan + the engine's
+    /// overlay host — the present-path hook the real floem surface
+    /// routes (`WindowHandle` post-paint → PaintOps, mirrored per
+    /// contract.rs). `render_frame` extends its scene with the host's
+    /// ops, so the overlay composites onto the presented pixels.
+    overlay_plan: Option<OverlayPlan>,
+    overlay_host: OverlayHost,
     pointer: (f64, f64),
     pass_seq: u64,
     virtual_ms: u64,
@@ -193,6 +201,8 @@ impl FloemAdapter {
             size,
             facts: HashMap::new(),
             readers: reader_map,
+            overlay_plan: None,
+            overlay_host: OverlayHost::new(),
             pointer: (size.0 / 2.0, size.1 / 2.0),
             pass_seq: 0,
             virtual_ms: 0,
@@ -811,7 +821,13 @@ impl FrameworkAdapter for FloemAdapter {
         // reads (geometry, order and content all real).
         let report = self.walk_view();
         self.engine.rebuild(&report);
-        let ops = paint_ops(&report);
+        // One scene, app + overlay (§13 present-time composition, m86):
+        // the overlay host's ops paint after the app's own, so the
+        // outline + badges land on top of the presented pixels.
+        let mut ops = paint_ops(&report);
+        if let Some(plan) = self.overlay_plan.as_ref() {
+            ops.extend(self.overlay_host.present(plan));
+        }
         self.paint.paint(&ops);
         let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(self.paint.rgba());
         let hash = self.paint.strided_hash();
@@ -824,6 +840,21 @@ impl FrameworkAdapter for FloemAdapter {
             size: (width, height),
             pixels: Some(pixels),
         })
+    }
+
+    /// Inspector overlay (§13, m86): store the plan — every
+    /// `render_frame` composites it on the present path (the tiny-skia
+    /// surface paints the host's ops into the same frame); `None`
+    /// clears the scene (the `DisableOverlay` reset).
+    fn show_overlay(
+        &mut self,
+        plan: Option<&OverlayPlan>,
+    ) -> Result<(), AdapterError> {
+        self.overlay_plan = plan.cloned();
+        if self.overlay_plan.is_none() {
+            self.overlay_host.clear();
+        }
+        Ok(())
     }
 }
 
