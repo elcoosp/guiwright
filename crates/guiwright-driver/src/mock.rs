@@ -31,6 +31,10 @@ pub struct MockAdapter {
     action_results: VecDeque<Result<(u64, String), AdapterError>>,
     /// Scripted pixels for `render_frame` (M1 capture pipeline tests, §10).
     pixels: Option<(u32, u32, std::sync::Arc<[u8]>)>,
+    /// The queued pixel steps (`with_frame_pixel_steps`): every render
+    /// advances one step, the last sticks — the settling-animation form
+    /// the §16 screenshot retry's tests drive.
+    pixel_steps: VecDeque<std::sync::Arc<[u8]>>,
     clock: ClockState,
     /// Number of pumps before the adapter reports no repaint requested
     /// (quiescence model). Zero = settled immediately.
@@ -122,6 +126,7 @@ impl MockAdapter {
             actions: Vec::new(),
             action_results: VecDeque::new(),
             pixels: None,
+            pixel_steps: VecDeque::new(),
             clock: ClockState {
                 virtual_time: None,
                 paused: false,
@@ -258,6 +263,26 @@ impl MockAdapter {
         self.meta.caps.render_frame = true;
         self.meta.caps.last_frame = true;
         self.pixels = Some((width, height, rgba.into()));
+        self
+    }
+
+    /// Script a **pixel sequence** for `render_frame`: every render
+    /// advances one step, the last step sticks — the scripted form of an
+    /// animation that settles. Pumps never render, so `wait_for_settle`
+    /// leaves the sequence intact and the §16 screenshot retry's
+    /// successive on-demand renders see the animation progress (the
+    /// first render still mid-animation, later renders settled). An
+    /// empty sequence is a no-op. Also flips the capability row like
+    /// [`Self::with_frame_pixels`].
+    pub fn with_frame_pixel_steps(mut self, width: u32, height: u32, steps: Vec<Vec<u8>>) -> Self {
+        let mut steps = steps.into_iter();
+        let Some(first) = steps.next() else {
+            return self;
+        };
+        self.meta.caps.render_frame = true;
+        self.meta.caps.last_frame = true;
+        self.pixels = Some((width, height, first.into()));
+        self.pixel_steps = steps.map(|rgba| rgba.into()).collect();
         self
     }
 
@@ -436,6 +461,14 @@ impl FrameworkAdapter for MockAdapter {
         &mut self,
         size: Option<(u32, u32)>,
     ) -> Result<crate::adapter::FrameRef, AdapterError> {
+        // The pixel-step animation advances one step per render (the
+        // settling-animation script): each on-demand render sees the
+        // next frame of the sequence, the last one sticks.
+        if let Some(next) = self.pixel_steps.pop_front()
+            && let Some(current) = self.pixels.as_mut()
+        {
+            current.2 = next;
+        }
         let (w, h, pixels) = self.pixels.as_ref().ok_or(AdapterError::Unsupported(
             "render_frame (script pixels via with_frame_pixels)",
         ))?;
