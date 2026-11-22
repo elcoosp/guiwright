@@ -235,6 +235,14 @@ pub struct LiveFeed<C: ClientConn> {
 }
 
 impl<C: ClientConn> LiveFeed<C> {
+    /// Override the label the live emitter bakes into the scrubber (the
+    /// `attach` agent string is the default; a caller that knows the
+    /// test's name — the CLI's `--test` flag — names the capture after
+    /// it, the same `TraceMeta.test` rule the archive path rides).
+    pub fn set_test(&mut self, test: impl Into<String>) {
+        self.timeline.set_test(test);
+    }
+
     /// Wrap a connected (not yet handshaked) client.
     pub fn new(client: C) -> Self {
         Self {
