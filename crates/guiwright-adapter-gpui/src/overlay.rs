@@ -216,8 +216,18 @@ fn outline_edges(x0: f64, y0: f64, x1: f64, y1: f64) -> [PaintedQuad; 4] {
 pub fn composite(plan: &OverlayPlan, pixels: &mut [u8], width: u32, height: u32) {
     let mut host = OverlayHost::new();
     let quads = host.paint_quads(plan);
+    composite_quads(&quads, pixels, width, height);
+}
+
+/// Rasterize a **real painted-quad scene** into an RGBA8 surface — the
+/// driver-side half of the glue's test-support capture (§4.5): the
+/// quads are the framework's own scene readback (`Window::painted_quads`
+/// at the pinned zed revision), the raster is ours (the same
+/// source-over blend the overlay composites with). Quads land in paint
+/// order; a solid root quad underneath gives the frame its base.
+pub fn composite_quads(quads: &[PaintedQuad], pixels: &mut [u8], width: u32, height: u32) {
     for quad in quads {
-        blend_quad(pixels, width, height, &quad);
+        blend_quad(pixels, width, height, quad);
     }
 }
 
@@ -282,6 +292,7 @@ fn blend_channel(src: u8, dst: u8, alpha: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frames::FrameDigest;
     use guiwright_inspect::overlay::{Badge, OverlayRect};
 
     fn hover_plan() -> OverlayPlan {
@@ -359,5 +370,94 @@ mod tests {
             .filter(|(a, b)| a != b)
             .count();
         assert!(diff > 0, "the overlay painted onto the scene: {diff} bytes");
+    }
+
+    /// The real-scene raster (§4.5 capture): quads land in paint order,
+    /// later quads composite over earlier ones, and the produced pixels
+    /// carry a strided digest that moves with the scene.
+    #[test]
+    fn composite_quads_rasterizes_a_real_scene_in_paint_order() {
+        let width = 64_u32;
+        let height = 32_u32;
+        let mut pixels = vec![0_u8; (width * height * 4) as usize];
+
+        // An empty scene rasterizes nothing: the buffer stays cleared.
+        composite_quads(&[], &mut pixels, width, height);
+        assert!(
+            pixels.iter().all(|b| *b == 0),
+            "no quads → no painted pixels"
+        );
+
+        // Paint order: the later (red) quad covers the earlier (blue)
+        // one where they overlap.
+        let scene = vec![
+            PaintedQuad {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 64.0,
+                y1: 32.0,
+                color: [40, 60, 90, 255],
+                radius: 0.0,
+            },
+            PaintedQuad {
+                x0: 8.0,
+                y0: 8.0,
+                x1: 40.0,
+                y1: 24.0,
+                color: [200, 30, 30, 255],
+                radius: 0.0,
+            },
+        ];
+        composite_quads(&scene, &mut pixels, width, height);
+        let inside = |x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * width + x) * 4) as usize;
+            pixels[i..i + 4].try_into().expect("pixel")
+        };
+        assert_eq!(inside(4, 4), [40, 60, 90, 255], "the base quad shows");
+        assert_eq!(inside(16, 16), [200, 30, 30, 255], "the top quad wins");
+        assert_eq!(inside(63, 31), [40, 60, 90, 255], "opaque base fills");
+
+        // The digest signal the glue rides: content-sensitive, stable.
+        let digest = FrameDigest::of(&pixels).value();
+        let mut repainted = vec![0_u8; pixels.len()];
+        composite_quads(&scene, &mut repainted, width, height);
+        assert_eq!(FrameDigest::of(&repainted).value(), digest, "deterministic");
+        let moved = vec![PaintedQuad {
+            x1: 41.0,
+            ..scene[1]
+        }];
+        let mut moved_pixels = vec![0_u8; pixels.len()];
+        composite_quads(&moved, &mut moved_pixels, width, height);
+        assert_ne!(
+            FrameDigest::of(&moved_pixels).value(),
+            digest,
+            "a moved quad moves the digest"
+        );
+    }
+
+    /// Rounded corners cut like the paint path does (the chip shape the
+    /// overlay paints survives the real-scene raster).
+    #[test]
+    fn composite_quads_cuts_rounded_corners() {
+        let width = 20_u32;
+        let height = 20_u32;
+        let mut pixels = vec![0_u8; (width * height * 4) as usize];
+        let quads = [PaintedQuad {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 20.0,
+            y1: 20.0,
+            color: [9, 9, 9, 255],
+            radius: 10.0,
+        }];
+        composite_quads(&quads, &mut pixels, width, height);
+        // The exact corner pixel is outside the rounded corner; the
+        // center is inside.
+        assert_eq!(&pixels[0..4], &[0, 0, 0, 0], "corner cut");
+        assert_eq!(
+            &pixels[((10 * width + 10) * 4) as usize..][..4],
+            &[9, 9, 9, 255],
+            "center painted"
+        );
     }
 }
