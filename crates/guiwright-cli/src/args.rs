@@ -18,6 +18,16 @@ pub enum Command {
         out: Option<PathBuf>,
         open: bool,
     },
+    /// `guiwright live-html <target> [--out <path>] [--duration-ms N]
+    /// [--test NAME]` — the §12 live-mode emitter (m87): attach the live
+    /// feed to a running session over any door and emit the scrubber
+    /// HTML mid-session, stamped `gwtrace/v1 (live)`.
+    LiveHtml {
+        target: ConnectTarget,
+        out: Option<PathBuf>,
+        duration_ms: Option<u64>,
+        test: Option<String>,
+    },
     /// `guiwright bless <dir> [--dry-run]` — the §10 bless flow as a CLI.
     Bless { dir: PathBuf, dry_run: bool },
     /// `guiwright install-deps [--run]` — the §11 CI provisioning printer.
@@ -76,6 +86,12 @@ COMMANDS:
     show-trace <archive>  Render a gwtrace/v1 zip into trace.html (§12).
         [--out <path>]    Output path (default: next to the archive).
         [--open]          Open the rendered file with the platform opener.
+    live-html <target>    Attach to a RUNNING session over any door and
+        [--out <path>]    emit the live scrubber HTML mid-session (§12
+        [--duration-ms N] live mode, m87; stamped gwtrace/v1 (live);
+        [--test NAME]     default out: guiwright-live.html, window:
+                          1000ms, ending early once the session goes
+                          quiet).
     bless <dir>           Promote .new.png artifacts onto their baselines
         [--dry-run]       (§10 GUIWRIGHT_BLESS flow, for CI artifacts).
     install-deps          Print the §11 CI provisioning commands for the
@@ -115,11 +131,92 @@ pub fn parse_args(argv: &[String]) -> Result<Command, CliError> {
         ))),
         "repl" => parse_repl_args(&argv[1..]),
         "show-trace" => parse_show_trace_args(&argv[1..]),
+        "live-html" => parse_live_html_args(&argv[1..]),
         "bless" => parse_bless_args(&argv[1..]),
         "install-deps" => parse_install_deps_args(&argv[1..]),
         "test" => parse_test_args(&argv[1..]),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
+}
+
+/// `guiwright live-html <target> [--out <path>] [--duration-ms N]
+/// [--test NAME]` — the target takes the same forms the REPL's does
+/// (`uds://`, `tcp://`, `ws://`, bare path/addr).
+fn parse_live_html_args(rest: &[String]) -> Result<Command, CliError> {
+    let mut target = None;
+    let mut rest: &[String] = rest;
+    while target.is_none() {
+        let Some(flag) = rest.first() else {
+            break;
+        };
+        match flag.as_str() {
+            "--uds" => {
+                let value = rest
+                    .get(1)
+                    .ok_or(CliError::Usage("--uds needs a socket path"))?;
+                target = Some(ConnectTarget::Uds(PathBuf::from(value)));
+                rest = &rest[2..];
+            }
+            "--tcp" => {
+                let value = rest
+                    .get(1)
+                    .ok_or(CliError::Usage("--tcp needs a host:port address"))?;
+                target = Some(ConnectTarget::Tcp(value.clone()));
+                rest = &rest[2..];
+            }
+            "--ws" => {
+                let value = rest
+                    .get(1)
+                    .ok_or(CliError::Usage("--ws needs a ws://host:port address"))?;
+                target = Some(ConnectTarget::Ws(value.clone()));
+                rest = &rest[2..];
+            }
+            other => {
+                // Bare target: uds:///…, tcp://…, ws://…, /path or host:port.
+                target =
+                    Some(ConnectTarget::parse(other).map_err(|_| {
+                        CliError::BadValue(format!("cannot parse target `{other}`"))
+                    })?);
+                rest = &rest[1..];
+            }
+        }
+    }
+    let target = target.ok_or(CliError::Usage("live-html needs a session target"))?;
+    let mut out = None;
+    let mut duration_ms = None;
+    let mut test = None;
+    while let Some(flag) = rest.first() {
+        match flag.as_str() {
+            "--out" => {
+                let value = rest.get(1).ok_or(CliError::Usage("--out needs a path"))?;
+                out = Some(PathBuf::from(value));
+                rest = &rest[2..];
+            }
+            "--duration-ms" => {
+                let value = rest
+                    .get(1)
+                    .ok_or(CliError::Usage("--duration-ms needs a number"))?;
+                duration_ms = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| CliError::BadValue(format!("--duration-ms {value}")))?,
+                );
+                rest = &rest[2..];
+            }
+            "--test" => {
+                let value = rest.get(1).ok_or(CliError::Usage("--test needs a name"))?;
+                test = Some(value.clone());
+                rest = &rest[2..];
+            }
+            other => return Err(CliError::UnknownCommand(other.to_string())),
+        }
+    }
+    Ok(Command::LiveHtml {
+        target,
+        out,
+        duration_ms,
+        test,
+    })
 }
 
 fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
@@ -444,6 +541,44 @@ mod tests {
             }
         );
         assert!(parse_args(&args(&["show-trace"])).is_err());
+    }
+
+    #[test]
+    fn live_html_parses_target_and_flags() {
+        let cmd = parse_args(&args(&[
+            "live-html",
+            "uds:///tmp/live.sock",
+            "--out",
+            "capture.html",
+            "--duration-ms",
+            "500",
+            "--test",
+            "live-demo",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::LiveHtml {
+                target: ConnectTarget::Uds(PathBuf::from("/tmp/live.sock")),
+                out: Some(PathBuf::from("capture.html")),
+                duration_ms: Some(500),
+                test: Some("live-demo".into()),
+            }
+        );
+        // The flagged target forms parse the same way the REPL's do.
+        let cmd = parse_args(&args(&["live-html", "--tcp", "127.0.0.1:9000"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::LiveHtml {
+                target: ConnectTarget::Tcp("127.0.0.1:9000".into()),
+                out: None,
+                duration_ms: None,
+                test: None,
+            }
+        );
+        // No target, bad duration: the documented usage errors.
+        assert!(parse_args(&args(&["live-html"])).is_err());
+        assert!(parse_args(&args(&["live-html", "--duration-ms", "abc"])).is_err());
     }
 
     #[test]
