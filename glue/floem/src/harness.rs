@@ -950,10 +950,7 @@ impl FrameworkAdapter for FloemAdapter {
     /// `render_frame` composites it on the present path (the tiny-skia
     /// surface paints the host's ops into the same frame); `None`
     /// clears the scene (the `DisableOverlay` reset).
-    fn show_overlay(
-        &mut self,
-        plan: Option<&OverlayPlan>,
-    ) -> Result<(), AdapterError> {
+    fn show_overlay(&mut self, plan: Option<&OverlayPlan>) -> Result<(), AdapterError> {
         self.overlay_plan = plan.cloned();
         if self.overlay_plan.is_none() {
             self.overlay_host.clear();
