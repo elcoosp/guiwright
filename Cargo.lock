@@ -2129,6 +2129,7 @@ dependencies = [
  "guiwright-shot",
  "guiwright-trace",
  "guiwright-viewer",
+ "iced_renderer",
  "iced_test",
  "iced_widget",
  "postcard",
