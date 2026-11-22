@@ -8,6 +8,9 @@
 //!   (§13 "a REPL attaches to a live session for ad-hoc locators/eval").
 //! * [`show_trace`] — `guiwright show-trace`: renders a `gwtrace/v1` zip
 //!   into the viewer's self-contained `trace.html` (§12 deep links).
+//! * [`live_html`] — `guiwright live-html`: attaches the M18 live feed to
+//!   a running session over any door and emits the scrubber HTML
+//!   mid-session, stamped `gwtrace/v1 (live)` (§12 live mode, m87).
 //! * [`bless`] — `guiwright bless`: promotes `.new.png` screenshot
 //!   artifacts onto their baselines (the §10 `GUIWRIGHT_BLESS` flow as an
 //!   explicit command, for CI-artifact blessing outside a test run).
@@ -30,6 +33,7 @@
 pub mod args;
 pub mod bless;
 pub mod deps;
+pub mod live_html;
 pub mod repl;
 pub mod report;
 pub mod runner;
@@ -40,6 +44,7 @@ pub mod spec;
 pub use args::{CliError, Command, help_text, parse_args};
 pub use bless::{BlessReport, bless_dir};
 pub use deps::{install_deps_command, platform_deps};
+pub use live_html::{DEFAULT_CAPTURE_MS, LiveHtmlError, live_html};
 pub use repl::{Line, Repl, StepOutcome};
 pub use runner::{RunOutcome, RunnerError, TestOptions};
 pub use session::{ConnectTarget, Connection, TargetParseError};
