@@ -2,7 +2,9 @@
 # Proves a tag is publishable BEFORE it is pushed: crates.io metadata
 # strictness, the topo-sorted publish dry-run, and the git-cliff changelog.
 # Run `just release-prep` (bump + changelog + Rust dry-run + TS pack
-# dry-run) or each recipe alone.
+# dry-run) or each recipe alone. `just release-tag` then cuts and pushes
+# the v1.0.0 tag — the trigger the Release workflow's real publish steps
+# (crates.io, npm, the GitHub Release) are gated on.
 
 default:
     @just --list
@@ -155,3 +157,40 @@ release-prep new_version="":
     rm -rf "$work"
     version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
     echo "READY FOR TAG: v${version} — changelog cut, 18 crates publish-verified, TS client pack-verified"
+
+# Cut and push the release tag (the §18 trigger): the Release workflow
+# runs on `refs/tags/v*.*.*` and its real publish steps (the topo-ordered
+# crates.io publish, the npm publish, the GitHub Release) are gated on
+# the tag ref — a `workflow_dispatch` run keeps them skipped (rehearsal).
+# Validation before the tag lands: the tree is clean and committed (the
+# changelog cuts from COMMITTED history), the workspace version agrees
+# with the tag (single source of truth), the tag does not already exist,
+# and the release-prep verdict is fresh. Requires `just release-prep` to
+# have run green for this exact version; the tag itself is annotated so
+# `git-cliff --latest` resolves the section boundary deterministically.
+release-tag expected_version="1.0.0":
+    #!/bin/sh
+    set -eu
+    tag="v{{expected_version}}"
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "release-tag: the working tree is dirty — commit the milestone work first"
+        echo "  (git-cliff cuts the release section from COMMITTED history only)"
+        exit 1
+    fi
+    workspace_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+    if [ "$workspace_version" != "{{expected_version}}" ]; then
+        echo "release-tag: workspace version $workspace_version != $tag — run 'just bump {{expected_version}}' first"
+        exit 1
+    fi
+    git fetch --tags --quiet
+    if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+        echo "release-tag: tag $tag already exists"
+        exit 1
+    fi
+    if ! grep -qm1 "^## \[\`{{expected_version}}\`\]" CHANGELOG.md; then
+        echo "release-tag: no '{{expected_version}}' section in CHANGELOG.md — run 'just release-prep' first"
+        exit 1
+    fi
+    git tag -a "$tag" -m "guiwright {{expected_version}}"
+    git push origin "$tag"
+    echo "PUBLISHED TRIGGER: $tag pushed — Release workflow now publishes 18 crates to crates.io, the TS client to npm, and cuts the GitHub Release"
