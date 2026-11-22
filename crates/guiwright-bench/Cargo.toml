@@ -36,6 +36,14 @@ criterion.workspace = true
 guiwright-adapter-iced = { path = "../guiwright-adapter-iced" }
 iced_test = "0.14.0"
 iced_widget = "0.14.0"
+# iced_test names no renderer backend of its own (the adapter carries the
+# same note on its optional deps): with only default features
+# `iced_renderer` builds the null renderer and the zero-bounds
+# compile_error! fires — workspace builds unify the backend through the
+# adapter's dev-deps, but the standalone bench build (the CI bench-guard
+# smoke on tree_service) has no such neighbor, so the CPU backend rides
+# here and keeps the bench dev-dep graph self-contained, no GPU (§11).
+iced_renderer = { version = "0.14.0", features = ["tiny-skia", "wayland", "x11"] }
 
 [[bench]]
 name = "tree_service"
