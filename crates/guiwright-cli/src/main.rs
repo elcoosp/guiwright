@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use guiwright_cli::{Command, bless_dir, install_deps_command, parse_args, show_trace};
+use guiwright_cli::{Command, install_deps_command, parse_args, show_trace};
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -88,34 +88,13 @@ fn run(argv: &[String]) -> i32 {
                 1
             }
         },
-        Command::Bless { dir, dry_run } => match bless_dir(&dir, dry_run) {
-            Ok(reports) => {
-                if reports.is_empty() {
-                    println!(
-                        "nothing to bless — no .new.png artifacts under {}",
-                        dir.display()
-                    );
-                }
-                for report in &reports {
-                    let action = if report.applied {
-                        "blessed"
-                    } else {
-                        "would bless"
-                    };
-                    let diff = if report.diff_removed {
-                        " (diff removed)"
-                    } else {
-                        ""
-                    };
-                    println!("{action}: {}{diff}", report.name);
-                }
-                0
-            }
-            Err(err) => {
-                eprintln!("error: {err}");
-                1
-            }
-        },
+        Command::LiveHtml {
+            target,
+            out,
+            duration_ms,
+            test,
+        } => run_live_html(&target, out, duration_ms, test),
+        Command::Bless { dir, dry_run } => run_bless(&dir, dry_run),
         Command::InstallDeps { run } => match install_deps_command(run) {
             Ok(_) => 0,
             Err(err) => {
@@ -123,6 +102,39 @@ fn run(argv: &[String]) -> i32 {
                 1
             }
         },
+    }
+}
+
+/// The `guiwright bless` front-end (§10): promote `.new.png` artifacts
+/// onto their baselines, one printed row per artifact.
+fn run_bless(dir: &std::path::Path, dry_run: bool) -> i32 {
+    match guiwright_cli::bless_dir(dir, dry_run) {
+        Ok(reports) => {
+            if reports.is_empty() {
+                println!(
+                    "nothing to bless — no .new.png artifacts under {}",
+                    dir.display()
+                );
+            }
+            for report in &reports {
+                let action = if report.applied {
+                    "blessed"
+                } else {
+                    "would bless"
+                };
+                let diff = if report.diff_removed {
+                    " (diff removed)"
+                } else {
+                    ""
+                };
+                println!("{action}: {}{diff}", report.name);
+            }
+            0
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            1
+        }
     }
 }
 
@@ -188,6 +200,39 @@ fn run_repl(target: guiwright_cli::session::ConnectTarget) -> i32 {
         Ok(rt) => rt.block_on(repl_loop(target)),
         Err(err) => {
             eprintln!("error: tokio runtime: {err}");
+            1
+        }
+    }
+}
+
+/// The `guiwright live-html` front-end (§12 live mode, m87): one
+/// current-thread runtime over the feed's await points (the capture is
+/// IO-bound — the same shape the REPL's front-end rides).
+fn run_live_html(
+    target: &guiwright_cli::ConnectTarget,
+    out: Option<std::path::PathBuf>,
+    duration_ms: Option<u64>,
+    test: Option<String>,
+) -> i32 {
+    let rt = match current_thread_runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("error: tokio runtime: {err}");
+            return 1;
+        }
+    };
+    match rt.block_on(guiwright_cli::live_html::live_html(
+        target,
+        out,
+        duration_ms.unwrap_or(guiwright_cli::DEFAULT_CAPTURE_MS),
+        test,
+    )) {
+        Ok(path) => {
+            println!("{}", path.display());
+            0
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
             1
         }
     }
