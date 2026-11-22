@@ -1073,6 +1073,32 @@ export class GwpClient {
     if (resp.kind !== "pong") throw new Error(`expected Pong, got ${resp.kind}`);
   }
 
+  /**
+   * `inspect.start_recording` — start the remote interaction → kit-code
+   * recorder (§13, M4): every applied Action on the session is recorded
+   * against its minimal stable selector until `inspectStopRecording()`.
+   * Refuses while a recording is already active (clean `GwpRejected`).
+   */
+  async inspectStartRecording(): Promise<void> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "inspect", cmd: { kind: "start_recording" } });
+    if (resp.kind !== "pong") throw new Error(`expected Pong, got ${resp.kind}`);
+  }
+
+  /**
+   * `inspect.stop_recording` — stop the recorder and fetch the generated
+   * kit code (§13): the §13 cost model's lines for every recorded action,
+   * plus the strict-mode warnings collected while recording (ambiguous
+   * selectors become warnings, not broken tests). Refuses when nothing
+   * is being recorded (clean `GwpRejected`).
+   */
+  async inspectStopRecording(): Promise<{ code: string; warnings: string[] }> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "inspect", cmd: { kind: "stop_recording" } });
+    if (resp.kind !== "codegen") throw new Error(`expected Codegen, got ${resp.kind}`);
+    return { code: resp.code, warnings: resp.warnings };
+  }
+
   // --- raw input & gestures (§9, M7) -----------------------------------------
 
   /**
