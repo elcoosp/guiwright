@@ -1,8 +1,10 @@
 name: Release
 
 # git-cliff driven releases: pushing a `v*.*.*` tag regenerates the
-# changelog, packages the crates and publishes a GitHub Release whose
-# notes come from git-cliff (§15.7-adjacent release flow).
+# changelog, packages the crates, publishes the Rust family to crates.io
+# and the TypeScript client to npm, and cuts a GitHub Release whose notes
+# come from git-cliff (§18). `workflow_dispatch` is the rehearsal path:
+# every gate runs, every publish step is skipped (the dry-runs only).
 
 on:
   push:
@@ -23,7 +25,7 @@ env:
 
 jobs:
   release:
-    name: changelog + package + publish release
+    name: changelog + package + publish crates + GitHub release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -49,9 +51,9 @@ jobs:
       # against the LOCAL members, so this proves packaging, metadata and
       # the version graph for all 18 crates in dependency order before
       # any release artifact is cut. (Per-crate dry-runs against the
-      # crates.io index only resolve once the rc.1 family's first
-      # publish lands; a real token-driven publish then walks the same
-      # order the justfile's `topo` carries.)
+      # crates.io index only resolve once the family's first publish
+      # lands; the real token-driven publish below walks the same order
+      # the justfile's `topo` carries.)
       - name: Publish dry-run (workspace, verification on)
         run: cargo publish --workspace --dry-run --locked
 
@@ -75,22 +77,46 @@ jobs:
             git push
           fi
 
+      # The actual publish (§18): tag pushes only — a workflow_dispatch
+      # rehearsal stops at the dry-run above. The per-crate loop walks
+      # the justfile `topo` order because crates.io answers the first
+      # publish of a family member with `unknown dependency` until its
+      # deps land; `cargo publish --workspace` orders the graph the same
+      # way, but the explicit list keeps the failure surface nameable (a
+      # half-published family reports the exact crate that failed). The
+      # token is the crates.io automation secret CARGO_REGISTRY_TOKEN.
+      - name: Publish crates to crates.io (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for crate in guiwright-core guiwright-macros guiwright-shot guiwright-inspect guiwright-proto guiwright-trace guiwright-driver guiwright-adapter-egui guiwright-adapter-floem guiwright-adapter-freya guiwright-adapter-gpui guiwright-adapter-iced guiwright-adapter-masonry guiwright-adapter-slint guiwright-viewer guiwright-cli guiwright-kit guiwright-bench; do
+            echo "publishing $crate"
+            cargo publish -p "$crate" --locked
+          done
+
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v4
         with:
           body_path: RELEASE_NOTES.md
-          files: dist/*.crate
+          # The packaged .crate files (the published source artifacts) and
+          # the regenerated CHANGELOG.md ride the release assets.
+          files: |
+            dist/*.crate
+            CHANGELOG.md
           fail_on_unmatched_files: true
 
   # The TypeScript client ships in lockstep with the Rust family (§16,
   # same-version releases): this job rides the release job (needs:
-  # release — the Rust publish dry-run, packaging and GitHub release all
-  # succeeded) and gates the npm artifact the same way: lockfile-pinned
-  # install, the build gate (pack-surface completeness + every shipped
-  # module loads + schema parses), then the publish dry-run that proves
-  # the tarball (the same 11-file pack `npm pack --dry-run` lists).
+  # release — the Rust test suite, dry-run, packaging, crates.io publish
+  # and GitHub release all succeeded) and gates the npm artifact the same
+  # way: lockfile-pinned install, the build gate (pack-surface
+  # completeness + every shipped module loads + schema parses), then the
+  # real npm publish on tag pushes (the same 11-file pack `npm pack
+  # --dry-run` lists; a workflow_dispatch rehearsal keeps the dry-run).
   typescript-client:
-    name: typescript client build + publish dry-run
+    name: typescript client build + npm publish
     needs: release
     runs-on: ubuntu-latest
     steps:
@@ -99,6 +125,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          # The auth token below is consumed through the default registry.
+          registry-url: https://registry.npmjs.org
 
       - name: Install (lockfile-pinned)
         working-directory: clients/typescript
@@ -108,6 +136,14 @@ jobs:
         working-directory: clients/typescript
         run: npm run build
 
-      - name: Publish dry-run
+      - name: Publish dry-run (rehearsal)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         working-directory: clients/typescript
         run: npm publish --dry-run --access public
+
+      - name: Publish to npm (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: clients/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
