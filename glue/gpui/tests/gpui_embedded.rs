@@ -235,3 +235,36 @@ fn scene_digest_reflects_painted_content() {
         .hash;
     assert_ne!(before, after, "the painted scene digest follows content");
 }
+
+/// The m87 capture (§4.5): `render_frame` returns REAL pixels from the
+/// test-support painted-quad scene — the raster at the requested size,
+/// painted surfaces on it, and the §15.5 strided digest over the bytes
+/// (the hash-only row ended).
+#[test]
+fn render_frame_rasterizes_the_painted_scene() {
+    let mut session = counter_session();
+
+    let frame = session
+        .adapter_mut()
+        .render_frame(Some((240, 180)))
+        .expect("headless render");
+    assert_eq!(frame.size, (240, 180), "raster at the requested size");
+    let pixels = frame.pixels.expect("the capture produced pixels");
+    assert!(!pixels.is_empty());
+    // Not a blank canvas: the app paints a real base + buttons + field
+    // + count bar (the m87 real-background app), so painted pixels
+    // exist and nothing is fully transparent.
+    assert!(
+        pixels.as_chunks::<4>().0.iter().any(|px| px[3] != 0),
+        "the snapshot has painted pixels"
+    );
+    assert!(
+        pixels.as_chunks::<4>().0.iter().any(|px| *px != [0, 0, 0, 0]),
+        "the raster carries real scene content"
+    );
+
+    // The viewport-sized readback matches the window's logical size.
+    let sized = session.adapter_mut().render_frame(None).expect("render");
+    assert_eq!(sized.size, (480, 320), "the viewport raster");
+    assert!(sized.pixels.expect("pixels").len() >= 480 * 320 * 4);
+}
