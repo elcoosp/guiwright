@@ -8,7 +8,7 @@
 //! ride gpui's own `role(accesskit::Role)` DSL.
 
 use accesskit_gpui as accesskit;
-use gpui::{Context, FocusHandle, KeyDownEvent, Render, Window, div, prelude::*};
+use gpui::{Context, FocusHandle, KeyDownEvent, Render, Window, div, prelude::*, px, rgb};
 
 /// The app state: real gpui entity fields, mutated only by real event
 /// listeners (§5.1 — the adapter never touches widgets off-thread).
@@ -61,8 +61,14 @@ impl Render for CounterForm {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let count_label = format!("Count: {}", self.count);
         let greeting = format!("Welcome, {}", self.name);
+        // Real painted surfaces (m87): the capture's scene is the quad
+        // scene the render pipeline paints, so the app carries real
+        // backgrounds — a base, the two buttons, the field — and a bar
+        // whose width tracks the count (the repaint the §10 video rows
+        // record: a click moves real pixels, not just text).
         div()
             .size_full()
+            .bg(rgb(0xf8fafc))
             .flex()
             .flex_col()
             .items_center()
@@ -71,6 +77,8 @@ impl Render for CounterForm {
                     .id("increment")
                     .role(accesskit::Role::Button)
                     .debug_selector(|| "increment".into())
+                    .bg(rgb(0x2563eb))
+                    .rounded(px(6.0))
                     .on_click(cx.listener(|this, _event, _window, _cx| {
                         this.count += 1;
                     }))
@@ -81,6 +89,8 @@ impl Render for CounterForm {
                     .id("decrement")
                     .role(accesskit::Role::Button)
                     .debug_selector(|| "decrement".into())
+                    .bg(rgb(0x64748b))
+                    .rounded(px(6.0))
                     .on_click(cx.listener(|this, _event, _window, _cx| {
                         this.count -= 1;
                     }))
@@ -91,6 +101,8 @@ impl Render for CounterForm {
                     .id("name-input")
                     .role(accesskit::Role::TextInput)
                     .debug_selector(|| "name-input".into())
+                    .bg(rgb(0xe2e8f0))
+                    .rounded(px(4.0))
                     .track_focus(&self.name_input_focus)
                     .on_click(cx.listener(|this, _event, window, cx| {
                         window.focus(&this.name_input_focus, cx);
@@ -106,6 +118,15 @@ impl Render for CounterForm {
                     .role(accesskit::Role::Label)
                     .debug_selector(|| "count-label".into())
                     .child(count_label),
+            )
+            .child(
+                div()
+                    .id("count-bar")
+                    .debug_selector(|| "count-bar".into())
+                    .w(px(24.0 + 12.0 * self.count.clamp(0, 24) as f32))
+                    .h(px(8.0))
+                    .rounded(px(2.0))
+                    .bg(rgb(0x0f766e)),
             )
             .child(
                 div()
