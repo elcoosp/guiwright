@@ -28,12 +28,20 @@
 //!   (`platform/test/window.rs` overrides nothing), so
 //!   `ActivationPolicy::Immediate` can only be modeled, not forced;
 //!   the synthesized-diff fallback is the honest row.
-//! * **Pixels** — `last_frame` is a hash-only [`FrameRef`]: the digest
-//!   covers the framework-recorded element geometry + the folded tree
-//!   (§15.5's visual-change signal). `render_frame` is the documented
-//!   upstream gap: `Window::render_to_image` bails without a
-//!   `HeadlessRenderer` and `TestPlatform::new` ships no factory
-//!   (`platform/test/platform.rs` passes `None`).
+//! * **Pixels** — the test-support painted-quad scene (m87): one real
+//!   draw per fold (`Window::draw` — the same call the framework's own
+//!   visual tests make), the readback `Window::painted_quads()` (§4.5
+//!   "the quads in the most recently rendered frame's scene"), each quad
+//!   clipped to its content mask, divided out of the window scale and
+//!   rasterized driver-side (the engine's source-over quad raster — the
+//!   §4.7-style driver-side half: scene data real, raster deterministic
+//!   CPU). `last_frame` serves the most recent presented raster from a
+//!   per-pass cache; `render_frame` re-rasters on demand — the §10
+//!   video + baseline rows ride real pixels. The glyph row (text
+//!   primitives) waits on an upstream `PlatformHeadlessRenderer` over
+//!   lavapipe: `TestPlatform::new` ships no factory (`platform/test/
+//!   platform.rs` passes `None`), so `Window::render_to_image` stays the
+//!   documented upstream gap (§4.5).
 //! * **Clock** — the test-support dispatcher plan: each
 //!   [`GpuiClockStep::DispatchRound`] is
 //!   `TestDispatcher::advance_clock` + `run_until_parked` (§5.1's
@@ -54,6 +62,7 @@ use gpui::{
 use guiwright_adapter_gpui::clock::{GpuiClockStep, plan as clock_plan};
 use guiwright_adapter_gpui::frames::FrameDigest;
 use guiwright_adapter_gpui::input::{GpuiButton, GpuiInputStep, KeyStroke, Modifier, translate};
+use guiwright_adapter_gpui::overlay::{PaintedQuad, composite_quads};
 use guiwright_adapter_gpui::{A11yHybrid, ActivationPolicy, OverlayHost};
 use guiwright_driver::adapter::{
     ActionOutcome, AdapterError, AdapterMeta, Caps, ClockCmd, ClockState, FrameDeadline, FrameRef,
@@ -168,6 +177,148 @@ pub fn counter_bindings(entity: &gpui::Entity<CounterForm>) -> Vec<SemBinding> {
     ]
 }
 
+/// One rasterized frame (§10): the RGBA raster, its pixel size and the
+/// §15.5 strided-surface digest — the unit the `last_frame` readback
+/// cache stores (the m86 pixel row: iced and freya ride the same shape).
+#[derive(Clone, Debug)]
+struct SceneFrame {
+    pixels: std::sync::Arc<[u8]>,
+    size: (u32, u32),
+    hash: u64,
+}
+
+/// The §10 `last_frame` readback cache (m87): the most recent presented
+/// frame's raster, keyed by the `pass_seq` that presented it. Served
+/// without re-rendering; invalidated when a newer pass lands.
+#[derive(Clone, Debug)]
+struct FrameCache {
+    seq: u64,
+    frame: SceneFrame,
+}
+
+impl FrameCache {
+    /// The cached `FrameRef` (an `Arc` clone — no pixel copy, §15.4).
+    fn frame_ref(&self) -> FrameRef {
+        FrameRef {
+            stamp: FrameStamp {
+                seq: self.seq,
+                hash: self.frame.hash,
+            },
+            size: self.frame.size,
+            pixels: Some(std::sync::Arc::clone(&self.frame.pixels)),
+        }
+    }
+}
+
+/// One scene capture: the real painted-quad readback (logical px) plus
+/// the viewport it was taken at — the raster sizes from it.
+#[derive(Debug)]
+struct SceneCapture {
+    quads: Vec<PaintedQuad>,
+    viewport: (f64, f64),
+}
+
+/// One real scene quad → the engine's quad record (§4.5 capture, m87):
+/// scaled pixels divide out the window scale, the solid background
+/// rounds through the §10 pixel ramp, and the rect clips to the content
+/// mask the GPU path clips to (`painted_quads` bounds are *not*
+/// pre-clipped — the API doc's own caveat; a mask-less quad carries the
+/// full viewport). A fully transparent quad paints nothing on the GPU —
+/// the capture skips it the same way.
+fn capture_quad(quad: &gpui::Quad, scale: f32) -> Option<PaintedQuad> {
+    let solid = quad.background.as_solid()?;
+    let rgba = solid.to_rgb();
+    let alpha = rgba.a.clamp(0.0, 1.0) * 255.0;
+    if alpha.round() == 0.0 {
+        return None;
+    }
+    let mask = quad.content_mask.bounds;
+    let (mx0, my0) = (
+        mask.origin.x.0 / scale,
+        mask.origin.y.0 / scale,
+    );
+    let (mx1, my1) = (
+        (mask.origin.x.0 + mask.size.width.0) / scale,
+        (mask.origin.y.0 + mask.size.height.0) / scale,
+    );
+    let (qx0, qy0) = (
+        quad.bounds.origin.x.0 / scale,
+        quad.bounds.origin.y.0 / scale,
+    );
+    let (qx1, qy1) = (
+        qx0 + quad.bounds.size.width.0 / scale,
+        qy0 + quad.bounds.size.height.0 / scale,
+    );
+    let (x0, y0, x1, y1) = (
+        qx0.max(mx0),
+        qy0.max(my0),
+        qx1.min(mx1),
+        qy1.min(my1),
+    );
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(PaintedQuad {
+        x0,
+        y0,
+        x1,
+        y1,
+        color: rgba_bytes(rgba),
+        radius: quad.corner_radii.top_left.0 / scale,
+    })
+}
+
+/// The f32 channels → the §10 pixel ramp (round-then-clamp, the same
+/// guarded conversion every adapter's quantization rides).
+fn rgba_bytes(rgba: gpui::Rgba) -> [u8; 4] {
+    let channel = |value: f32| -> u8 {
+        (value.clamp(0.0, 1.0) * 255.0).round().max(0.0).min(255.0) as u8
+    };
+    [channel(rgba.r), channel(rgba.g), channel(rgba.b), channel(rgba.a)]
+}
+
+/// Rasterize one scene capture into a [`SceneFrame`] (§4.5 m87): the
+/// quad list is the framework's readback, the surface is the engine's
+/// source-over quad raster. Unsized captures present at the viewport;
+/// a size override scales the logical coordinates onto the new surface
+/// (the floem `PaintState::new` resize shape — same ops, new surface).
+fn rasterize(capture: &SceneCapture, size: Option<(u32, u32)>) -> SceneFrame {
+    let (width, height) = size.unwrap_or_else(|| {
+        (
+            (capture.viewport.0.round() as u32).max(1),
+            (capture.viewport.1.round() as u32).max(1),
+        )
+    });
+    let (sx, sy) = if capture.viewport.0 > 0.0 && capture.viewport.1 > 0.0 {
+        (
+            f64::from(width) / capture.viewport.0,
+            f64::from(height) / capture.viewport.1,
+        )
+    } else {
+        (1.0, 1.0)
+    };
+    let scaled: Vec<PaintedQuad> = capture
+        .quads
+        .iter()
+        .map(|quad| PaintedQuad {
+            x0: quad.x0 * sx,
+            y0: quad.y0 * sy,
+            x1: quad.x1 * sx,
+            y1: quad.y1 * sy,
+            color: quad.color,
+            radius: quad.radius * sx.min(sy) as f32,
+        })
+        .collect();
+    let mut pixels = vec![0_u8; width as usize * height as usize * 4];
+    composite_quads(&scaled, &mut pixels, width, height);
+    let hash = FrameDigest::of(&pixels).value();
+    SceneFrame {
+        pixels: std::sync::Arc::from(pixels),
+        size: (width, height),
+        hash,
+    }
+}
+
 /// The facts one fold collects from the app before any window update
 /// runs (borrows of the app state never span a `update_window` call).
 struct AppFacts {
@@ -191,14 +342,16 @@ pub struct GpuiAdapter {
     /// bindings are boot-declared, so identity is boot-stable).
     nodes: Vec<NodeId>,
     /// The §13 overlay binding (m86): the active plan + the engine's
-    /// overlay host — the paint route the real test-support surface
-    /// rides (`Window::paint_quad` → `painted_quads`, mirrored per
-    /// contract.rs). The host's quads join the §15.5 scene digest the
-    /// fold pass rides, so the overlay registers as a visual change on
-    /// the hash-only path (the pixels blocker stays the documented
-    /// upstream gap).
+    /// overlay host — the present-time composite the real test-support
+    /// capture routes (the host's quads land after the app's own in the
+    /// same raster, so the overlay composites onto the presented pixels,
+    /// §13). The host's draw log stays the §13 evidence surface.
     overlay_plan: Option<guiwright_inspect::overlay::OverlayPlan>,
     overlay_host: OverlayHost,
+    /// The §10 `last_frame` readback cache (m87): the most recent
+    /// presented frame's raster — the pixel row the video recorder and
+    /// the screenshot baselines read (§6.2 gpui column, m87).
+    frame_cache: Option<FrameCache>,
     size: (f64, f64),
     pointer: Point<Pixels>,
     pass_seq: u64,
@@ -231,13 +384,14 @@ impl GpuiAdapter {
                 // The test-platform row of the §6.2 hybrid: no a11y
                 // tree flows (the platform never activates it), the
                 // synthesized-diff fallback covers resolve; pixels are
-                // the render_to_image gap below.
+                // the m87 painted-quad capture (real scene readback,
+                // driver-side raster).
                 caps: Caps {
                     tree_update: false,
                     logical_snapshot: true,
                     input: true,
                     last_frame: true,
-                    render_frame: false,
+                    render_frame: true,
                     clock: true,
                 },
             },
@@ -249,6 +403,7 @@ impl GpuiAdapter {
             nodes,
             overlay_plan: None,
             overlay_host: OverlayHost::new(),
+            frame_cache: None,
             size: window_size,
             pointer: point(px64(window_size.0 / 2.0), px64(window_size.1 / 2.0)),
             pass_seq: 0,
@@ -308,35 +463,53 @@ impl GpuiAdapter {
         }
     }
 
-    /// One fold: draw the real scene (the test window's render
-    /// pipeline), digest the framework-recorded geometry + the folded
-    /// tree (§15.5's visual-change signal), and refresh the diff the
-    /// session reads.
+    /// One fold: refresh the diff the session reads, then one real draw
+    /// (`Window::draw` — the framework's own render pipeline) whose
+    /// painted-quad scene the capture rasterizes (§4.5, m87). The
+    /// presented frame's seq is the fold's pass; the raster joins the
+    /// §10 readback cache (`last_frame` serves it without a re-render).
     fn fold_pass(&mut self) -> Result<u64, AdapterError> {
         self.logical_snapshot();
-        let facts = self.app_facts();
-        let mut digest_input = Vec::new();
-        for (index, binding) in self.bindings.iter().enumerate() {
-            let bounds = self.bounds_of(binding.test_id)?;
-            digest_input.extend_from_slice(binding.test_id.as_bytes());
-            for value in bounds {
-                digest_input.extend_from_slice(&value.to_bits().to_le_bytes());
-            }
-            if let Some(text) = &facts.texts[index] {
-                digest_input.extend_from_slice(text.as_bytes());
-            }
-            if let Some(value) = &facts.values[index] {
-                digest_input.extend_from_slice(value.as_bytes());
-            }
+        let capture = self.capture_scene()?;
+        let frame = rasterize(&capture, None);
+        let hash = frame.hash;
+        self.pass_seq += 1;
+        self.frame_cache = Some(FrameCache {
+            seq: self.pass_seq,
+            frame,
+        });
+        Ok(hash)
+    }
+
+    /// One real draw + the painted-quad readback (§4.5, m87):
+    /// `Window::draw` re-runs the framework's render pipeline and
+    /// assigns the frame the readback serves; quads land in paint order,
+    /// clipped to their content masks and divided out of the window
+    /// scale. The §13 overlay composites at present time — the host's
+    /// quads land after the app's own (the m86 route, now in the
+    /// raster).
+    fn capture_scene(&mut self) -> Result<SceneCapture, AdapterError> {
+        let mut quads: Vec<PaintedQuad> = Vec::new();
+        let mut scale = 1.0_f32;
+        let mut viewport = self.size;
+        self.cx
+            .update_window(self.window, |_view, window, app| {
+                window.draw(app).clear(app);
+                scale = window.scale_factor();
+                let size = window.viewport_size();
+                viewport = (size.width.to_f64(), size.height.to_f64());
+                for quad in window.painted_quads() {
+                    if let Some(captured) = capture_quad(&quad, scale) {
+                        quads.push(captured);
+                    }
+                }
+            })
+            .map_err(|err| AdapterError::Internal(format!("gpui capture: {err}")))?;
+        if let Some(plan) = self.overlay_plan.clone() {
+            self.overlay_host.clear();
+            quads.extend(self.overlay_host.paint_quads(&plan));
         }
-        // The §13 overlay layer joins the scene digest (m86): the
-        // host's painted quads are part of the presented frame, so
-        // "wait for visual change" sees the overlay on the hash-only
-        // path too.
-        if self.overlay_plan.is_some() {
-            digest_input.extend_from_slice(&self.overlay_host.scene_digest().to_le_bytes());
-        }
-        Ok(FrameDigest::of(&digest_input).value())
+        Ok(SceneCapture { quads, viewport })
     }
 
     /// Dispatch one `PlatformInput` through the canonical seam.
@@ -433,7 +606,6 @@ impl FrameworkAdapter for GpuiAdapter {
         // real render pipeline (§5.1's frame-boundary marshalling).
         self.cx.run_until_parked();
         let mut digest = self.fold_pass().unwrap_or(0);
-        self.pass_seq += 1;
         outcome.frames.push(FrameStamp {
             seq: self.pass_seq,
             hash: digest,
@@ -441,7 +613,6 @@ impl FrameworkAdapter for GpuiAdapter {
         while !deadline.expired() {
             self.cx.run_until_parked();
             let next = self.fold_pass().unwrap_or(0);
-            self.pass_seq += 1;
             outcome.frames.push(FrameStamp {
                 seq: self.pass_seq,
                 hash: next,
@@ -719,45 +890,67 @@ impl FrameworkAdapter for GpuiAdapter {
         })
     }
 
-    /// Hash-only `FrameRef` (§15.5): the digest covers the
-    /// framework-recorded geometry + the folded tree. Pixels ride
-    /// `render_to_image`, which is the documented upstream gap below.
+    /// The §10 `last_frame` readback (m87): the most recent presented
+    /// frame's pixels, without disturbing app state — the pixel row the
+    /// video recorder and the screenshot baselines ride (§6.2 gpui
+    /// column, m87). Served from the per-pass cache when it is fresh.
     fn last_frame(&mut self) -> Option<FrameRef> {
-        let hash = self.fold_pass().ok()?;
+        if let Some(cache) = self.frame_cache.as_ref()
+            && cache.seq == self.pass_seq
+        {
+            return Some(cache.frame_ref());
+        }
+        let capture = self.capture_scene().ok()?;
+        let frame = rasterize(&capture, None);
         self.pass_seq += 1;
+        self.frame_cache = Some(FrameCache {
+            seq: self.pass_seq,
+            frame: frame.clone(),
+        });
         Some(FrameRef {
             stamp: FrameStamp {
                 seq: self.pass_seq,
-                hash,
+                hash: frame.hash,
             },
-            size: (self.size.0 as u32, self.size.1 as u32),
-            pixels: None,
+            size: frame.size,
+            pixels: Some(frame.pixels),
         })
     }
 
+    /// Render on demand (m87): one fresh draw + readback, rasterized at
+    /// the requested pixel size (the scene's logical coordinates scale
+    /// to the override — the floem `PaintState::new` resize shape) or at
+    /// the viewport when unsized.
     fn render_frame(&mut self, size: Option<(u32, u32)>) -> Result<FrameRef, AdapterError> {
-        let _ = size;
-        Err(AdapterError::Unsupported(
-            "render_frame (gpui headless pixels need a HeadlessRenderer: \
-             Window::render_to_image bails without one and \
-             TestPlatform::new ships no factory — \
-             platform/test/platform.rs passes None)",
-        ))
+        let capture = self.capture_scene()?;
+        let frame = rasterize(&capture, size);
+        self.pass_seq += 1;
+        self.frame_cache = Some(FrameCache {
+            seq: self.pass_seq,
+            frame: frame.clone(),
+        });
+        Ok(FrameRef {
+            stamp: FrameStamp {
+                seq: self.pass_seq,
+                hash: frame.hash,
+            },
+            size: frame.size,
+            pixels: Some(frame.pixels),
+        })
     }
 
-    /// Inspector overlay (§13, m86): store the plan and paint the
-    /// host's scene (the `paint_quad` route the real test-support
-    /// window rides) — the fold pass folds the scene digest, so the
-    /// overlay moves the frame stamp. `None` clears the scene (the
-    /// `DisableOverlay` reset).
+    /// Inspector overlay (§13, m86 → m87): store the plan — every
+    /// capture composites the host's quads fresh on the present path
+    /// (over the app's own painted scene), so stale scenes never
+    /// accumulate and the overlay lands in the presented pixels. `None`
+    /// clears the scene (the `DisableOverlay` reset); the host's draw
+    /// log stays the §13 evidence surface.
     fn show_overlay(
         &mut self,
         plan: Option<&guiwright_inspect::overlay::OverlayPlan>,
     ) -> Result<(), AdapterError> {
         self.overlay_plan = plan.cloned();
-        if let Some(active) = self.overlay_plan.as_ref() {
-            self.overlay_host.paint_quads(active);
-        } else {
+        if self.overlay_plan.is_none() {
             self.overlay_host.clear();
         }
         Ok(())
