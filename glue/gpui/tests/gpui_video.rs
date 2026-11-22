@@ -48,7 +48,9 @@ fn video_records_presented_pixels() {
         "finalized at {}",
         summary.path.display()
     );
-    let size = std::fs::metadata(&summary.path).expect("artifact exists").len();
+    let size = std::fs::metadata(&summary.path)
+        .expect("artifact exists")
+        .len();
     assert!(size > 0, "the artifact is not empty ({size} bytes)");
     assert!(
         summary.duration_ms >= 40,

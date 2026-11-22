@@ -233,10 +233,7 @@ fn capture_quad(quad: &gpui::Quad, scale: f32) -> Option<PaintedQuad> {
         return None;
     }
     let mask = quad.content_mask.bounds;
-    let (mx0, my0) = (
-        mask.origin.x.0 / scale,
-        mask.origin.y.0 / scale,
-    );
+    let (mx0, my0) = (mask.origin.x.0 / scale, mask.origin.y.0 / scale);
     let (mx1, my1) = (
         (mask.origin.x.0 + mask.size.width.0) / scale,
         (mask.origin.y.0 + mask.size.height.0) / scale,
@@ -249,12 +246,7 @@ fn capture_quad(quad: &gpui::Quad, scale: f32) -> Option<PaintedQuad> {
         qx0 + quad.bounds.size.width.0 / scale,
         qy0 + quad.bounds.size.height.0 / scale,
     );
-    let (x0, y0, x1, y1) = (
-        qx0.max(mx0),
-        qy0.max(my0),
-        qx1.min(mx1),
-        qy1.min(my1),
-    );
+    let (x0, y0, x1, y1) = (qx0.max(mx0), qy0.max(my0), qx1.min(mx1), qy1.min(my1));
     if x1 <= x0 || y1 <= y0 {
         return None;
     }
@@ -271,10 +263,14 @@ fn capture_quad(quad: &gpui::Quad, scale: f32) -> Option<PaintedQuad> {
 /// The f32 channels → the §10 pixel ramp (round-then-clamp, the same
 /// guarded conversion every adapter's quantization rides).
 fn rgba_bytes(rgba: gpui::Rgba) -> [u8; 4] {
-    let channel = |value: f32| -> u8 {
-        (value.clamp(0.0, 1.0) * 255.0).round().max(0.0).min(255.0) as u8
-    };
-    [channel(rgba.r), channel(rgba.g), channel(rgba.b), channel(rgba.a)]
+    let channel =
+        |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round().max(0.0).min(255.0) as u8 };
+    [
+        channel(rgba.r),
+        channel(rgba.g),
+        channel(rgba.b),
+        channel(rgba.a),
+    ]
 }
 
 /// Rasterize one scene capture into a [`SceneFrame`] (§4.5 m87): the

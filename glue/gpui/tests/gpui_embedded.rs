@@ -259,7 +259,11 @@ fn render_frame_rasterizes_the_painted_scene() {
         "the snapshot has painted pixels"
     );
     assert!(
-        pixels.as_chunks::<4>().0.iter().any(|px| *px != [0, 0, 0, 0]),
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|px| *px != [0, 0, 0, 0]),
         "the raster carries real scene content"
     );
 
