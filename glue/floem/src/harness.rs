@@ -31,7 +31,10 @@
 //!   real laid-out view geometry into [`PaintOp`]s (§4.7 contribution
 //!   2's driver-side half; the upstream patch routing floem's display
 //!   list would make it bit-identical to the GPU scene, and the frame
-//!   digest is the §15.5 strided xxh3).
+//!   digest is the §15.5 strided xxh3). `last_frame` serves the most
+//!   recent presented raster from a per-pass readback cache and
+//!   `render_frame` re-rasters on demand — the §10 video + baseline
+//!   rows ride real pixels (m87, the m86 iced/freya shape).
 //! * **Clock** — the harness-timer plan ([`guiwright_adapter_floem::clock`]):
 //!   each tick drains the harness's update queue at a virtual deadline.
 //!
@@ -65,6 +68,39 @@ use ui_events::keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKe
 /// (floem tracks click counts from the event's own `count`, so no gap is
 /// needed — the constant documents the single-tap pacing instead).
 const CLICK_GAP_MS: u64 = 0;
+
+/// One rasterized frame (§10): the RGBA raster, its pixel size and the
+/// §15.5 strided-surface digest — the unit the `last_frame` readback
+/// cache stores (the m86 pixel row: iced and freya ride the same shape).
+#[derive(Clone, Debug)]
+struct RasterFrame {
+    pixels: std::sync::Arc<[u8]>,
+    size: (u32, u32),
+    hash: u64,
+}
+
+/// The §10 `last_frame` readback cache (m87): the most recent presented
+/// frame's raster, keyed by the `pass_seq` that presented it. Served
+/// without re-rendering; invalidated when a newer pass lands.
+#[derive(Clone, Debug)]
+struct FrameCache {
+    seq: u64,
+    frame: RasterFrame,
+}
+
+impl FrameCache {
+    /// The cached `FrameRef` (an `Arc` clone — no pixel copy, §15.4).
+    fn frame_ref(&self) -> FrameRef {
+        FrameRef {
+            stamp: FrameStamp {
+                seq: self.seq,
+                hash: self.frame.hash,
+            },
+            size: self.frame.size,
+            pixels: Some(std::sync::Arc::clone(&self.frame.pixels)),
+        }
+    }
+}
 
 /// Facts the latest introspection pass recorded per view handle — the
 /// action-time geometry (`act` resolves a minted `NodeId` back to the
@@ -155,6 +191,10 @@ pub struct FloemAdapter {
     /// ops, so the overlay composites onto the presented pixels.
     overlay_plan: Option<OverlayPlan>,
     overlay_host: OverlayHost,
+    /// The §10 `last_frame` readback cache (m87): the most recent
+    /// presented frame's raster — the pixel row the video recorder and
+    /// the screenshot baselines read (§6.2 floem column, m87).
+    frame_cache: Option<FrameCache>,
     pointer: (f64, f64),
     pass_seq: u64,
     virtual_ms: u64,
@@ -203,6 +243,7 @@ impl FloemAdapter {
             readers: reader_map,
             overlay_plan: None,
             overlay_host: OverlayHost::new(),
+            frame_cache: None,
             pointer: (size.0 / 2.0, size.1 / 2.0),
             pass_seq: 0,
             virtual_ms: 0,
@@ -667,6 +708,17 @@ impl FrameworkAdapter for FloemAdapter {
             }
             digest = next;
         }
+        // Prime the §10 readback cache (m87): the presented frame's
+        // raster rides the pump's final pass, so the video recorder and
+        // the screenshot reads serve pixels without a re-render
+        // (§15.4 "never disturb the app under test").
+        let (width, height) = (self.size.0 as u32, self.size.1 as u32);
+        if let Ok(frame) = self.raster(width, height) {
+            self.frame_cache = Some(FrameCache {
+                seq: self.pass_seq,
+                frame,
+            });
+        }
         outcome
     }
 
@@ -811,8 +863,11 @@ impl FrameworkAdapter for FloemAdapter {
         })
     }
 
-    fn render_frame(&mut self, size: Option<(u32, u32)>) -> Result<FrameRef, AdapterError> {
-        let (width, height) = size.unwrap_or((self.size.0 as u32, self.size.1 as u32));
+    /// One tiny-skia raster of the walked view geometry (§4.7
+    /// contribution 2's driver-side half): fresh fold, one scene (app +
+    /// overlay), one surface paint. Shared by `render_frame`,
+    /// `last_frame` and the pump's cache priming.
+    fn raster(&mut self, width: u32, height: u32) -> Result<RasterFrame, AdapterError> {
         if (self.paint.width(), self.paint.height()) != (width, height) {
             self.paint = PaintState::new(width, height)
                 .map_err(|err| AdapterError::Internal(format!("floem paint state: {err}")))?;
@@ -831,14 +886,63 @@ impl FrameworkAdapter for FloemAdapter {
         self.paint.paint(&ops);
         let pixels: std::sync::Arc<[u8]> = std::sync::Arc::from(self.paint.rgba());
         let hash = self.paint.strided_hash();
+        Ok(RasterFrame {
+            pixels,
+            size: (width, height),
+            hash,
+        })
+    }
+
+    fn render_frame(&mut self, size: Option<(u32, u32)>) -> Result<FrameRef, AdapterError> {
+        let (width, height) = size.unwrap_or((self.size.0 as u32, self.size.1 as u32));
+        // The per-pass cache serves an unsized re-read at the current
+        // pass (§10 "prefer last_frame — no re-render"); anything else
+        // (a size override, a newer pass) re-rasters (the shared helper).
+        if let Some(cache) = self.frame_cache.as_ref()
+            && cache.seq == self.pass_seq
+            && cache.frame.size == (width, height)
+        {
+            return Ok(cache.frame_ref());
+        }
+        let frame = self.raster(width, height)?;
         self.pass_seq += 1;
+        self.frame_cache = Some(FrameCache {
+            seq: self.pass_seq,
+            frame: frame.clone(),
+        });
         Ok(FrameRef {
             stamp: FrameStamp {
                 seq: self.pass_seq,
-                hash,
+                hash: frame.hash,
             },
-            size: (width, height),
-            pixels: Some(pixels),
+            size: frame.size,
+            pixels: Some(frame.pixels),
+        })
+    }
+
+    /// The §10 `last_frame` readback (m87): the most recent presented
+    /// frame's pixels, without disturbing app state — the pixel row the
+    /// video recorder and the screenshot baselines ride (§6.2 floem
+    /// column, m87).
+    fn last_frame(&mut self) -> Option<FrameRef> {
+        if let Some(cache) = self.frame_cache.as_ref()
+            && cache.seq == self.pass_seq
+        {
+            return Some(cache.frame_ref());
+        }
+        let (width, height) = (self.size.0 as u32, self.size.1 as u32);
+        let frame = self.raster(width, height).ok()?;
+        self.frame_cache = Some(FrameCache {
+            seq: self.pass_seq,
+            frame: frame.clone(),
+        });
+        Some(FrameRef {
+            stamp: FrameStamp {
+                seq: self.pass_seq,
+                hash: frame.hash,
+            },
+            size: frame.size,
+            pixels: Some(frame.pixels),
         })
     }
 
