@@ -2274,3 +2274,66 @@ async fn repl_scroll_into_view_row_applies() {
 
     handle.shutdown();
 }
+
+// The m11 record's named CLI milestone (docs/m11-full-tree-snapshot.md §5,
+// the m13 note standing): *"The REPL prints text; a `--json` output mode
+// for machine consumers rides the CLI's output-formatting milestones."*
+// The machine-readable mode: every step renders as **one JSON document**
+// — the lines carry their kind word (`ok`/`info`/`warn`/`err`) and raw
+// text beside the rendered form's `error: ` prefix, the exit flag rides
+// the document, and a dump's rows stay machine-readable end to end over
+// the real UDS session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_json_output_mode_is_machine_readable() {
+    let path = socket_path("repl-json.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches over uds");
+
+    // A dump step: one JSON document, `ok` lines with raw text, no exit.
+    let doc = repl.step("snapshot full").await.to_json_string();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&doc).expect("each step answers one JSON document");
+    assert_eq!(parsed["exit"], serde_json::Value::Bool(false));
+    let lines = parsed["lines"].as_array().expect("lines ride the document");
+    assert!(!lines.is_empty(), "{parsed:?}");
+    assert!(
+        lines
+            .iter()
+            .all(|l| l["kind"].is_string() && l["text"].is_string()),
+        "every line carries kind + text: {parsed:?}"
+    );
+    assert_eq!(lines[0]["kind"], "ok", "{parsed:?}");
+    let text = lines[0]["text"].as_str().expect("raw text");
+    assert!(
+        text.contains("windows") || text.contains("nodes"),
+        "the dump's summary row stays machine-readable: {text}"
+    );
+
+    // A failed step: the kind word is `err` and the text is the raw
+    // message (no `error: ` prefix — the front-end's text-mode decoration
+    // stays out of the machine document).
+    let doc = repl.step("get role button Ghost").await.to_json_string();
+    let parsed: serde_json::Value = serde_json::from_str(&doc).expect("one JSON document");
+    let lines = parsed["lines"].as_array().expect("lines array");
+    assert_eq!(lines[0]["kind"], "err", "{parsed:?}");
+    assert!(
+        !lines[0]["text"]
+            .as_str()
+            .expect("raw text")
+            .starts_with("error: "),
+        "the prefix stays text-mode only: {parsed:?}"
+    );
+
+    // The exit flag rides the document (`bye`).
+    let doc = repl.step("bye").await.to_json_string();
+    let parsed: serde_json::Value = serde_json::from_str(&doc).expect("one JSON document");
+    assert_eq!(parsed["exit"], serde_json::Value::Bool(true));
+
+    handle.shutdown();
+}
