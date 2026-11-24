@@ -320,6 +320,12 @@ function encodeSemAction(enc: Encoder, action: SemAction): void {
     case "uncheck":
       enc.u32(SemActionV1.Uncheck);
       break;
+    case "select_option":
+      enc.u32(SemActionV1.SelectOption).str(action.option);
+      break;
+    case "scroll_into_view_if_needed":
+      enc.u32(SemActionV1.ScrollIntoView);
+      break;
   }
 }
 
