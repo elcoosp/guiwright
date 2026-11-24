@@ -702,3 +702,104 @@ async fn shard_runs_partition_the_suite_exactly() {
         .collect();
     assert_eq!(unique.len(), 4, "no overlap across shards: {seen:?}");
 }
+
+/// The m5 §4 deferral, closed end-to-end: `--trace` makes the runner own
+/// per-scenario trace emission — the M18 feed rides a second connection
+/// while the steps run on the first, the last attempt finalizes as the
+/// M23 scrubber HTML beside the reports, and the file name rides the
+/// record's artifacts so every renderer deep-links it. Without the flag
+/// no trace rides home (the default run stays lean).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trace_emission_deep_links_the_per_scenario_scrubber() {
+    let dir = leak_dir("runner-trace");
+    write_spec(
+        &dir,
+        "traced.spec.toml",
+        r#"
+[[scenario]]
+name = "save click"
+steps = [
+    "get role button Save",
+    "click",
+    "expect role label \"Welcome, Ada\"",
+]
+
+[[scenario]]
+name = "plain"
+steps = ["ping"]
+"#,
+    );
+    let (path, _server) = spawn_server("runner-trace");
+    let out_dir = leak_dir("runner-trace-out");
+
+    let specs = runner::discover(std::slice::from_ref(&dir)).expect("discovery");
+    let opts = TestOptions {
+        trace: true,
+        reports: vec![ReportKind::Json, ReportKind::Html],
+        out: Some(out_dir.clone()),
+        ..uds_opts(&path)
+    };
+    let outcome = runner::run(specs, &opts, None)
+        .await
+        .expect("run completes");
+    assert!(!outcome.failed);
+    runner::write_reports(&outcome.report, &opts.reports, &out_dir).expect("reports write");
+
+    // Each scenario owns a trace file beside the reports; the file name
+    // rides the record's artifacts (the sanitized `<stem>.<name>` form).
+    let save = outcome
+        .report
+        .scenarios
+        .iter()
+        .find(|s| s.name == "save click")
+        .expect("the save record");
+    let plain = outcome
+        .report
+        .scenarios
+        .iter()
+        .find(|s| s.name == "plain")
+        .expect("the plain record");
+    assert_eq!(save.status, ScenarioStatus::Passed, "{save:?}");
+    let save_trace = save.artifacts.last().expect("the trace rides home");
+    let plain_trace = plain.artifacts.last().expect("the trace rides home");
+    assert_eq!(save_trace, "traced.save-click.trace.html", "{save:?}");
+    assert_eq!(plain_trace, "traced.plain.trace.html", "{plain:?}");
+
+    // The trace is the M23 emitter's output: the live stamp, the
+    // scenario id in the header, the adapter name, and the captured
+    // fixture tree (the attach dump + the post-click re-sync).
+    let save_html = std::fs::read_to_string(out_dir.join(save_trace)).expect("trace file");
+    assert!(save_html.contains("gwtrace/v1 (live)"), "the live stamp");
+    assert!(
+        save_html.contains("traced.spec.toml :: save click"),
+        "the scenario id is the emitter's test label: {}",
+        &save_html[..200.min(save_html.len())]
+    );
+    assert!(
+        save_html.contains("mock"),
+        "the adapter name is in the header"
+    );
+    assert!(
+        save_html.contains("Save"),
+        "the captured tree rides the payload"
+    );
+
+    // Every report renderer deep-links the trace file by name.
+    let html = std::fs::read_to_string(out_dir.join("report.html")).expect("html report");
+    assert!(
+        html.contains(r#"<a href="traced.save-click.trace.html">"#),
+        "{html}"
+    );
+    let json = std::fs::read_to_string(out_dir.join("report.json")).expect("json report");
+    assert!(json.contains("\"traced.save-click.trace.html\""), "{json}");
+
+    // The default run carries no trace: the flag is the emission's only
+    // switch, the lean run stays lean.
+    let specs = runner::discover(std::slice::from_ref(&dir)).expect("discovery");
+    let lean = runner::run(specs, &uds_opts(&path), None)
+        .await
+        .expect("lean run completes");
+    for record in &lean.report.scenarios {
+        assert!(record.artifacts.is_empty(), "{record:?}");
+    }
+}
