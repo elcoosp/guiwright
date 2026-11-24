@@ -2203,3 +2203,74 @@ async fn repl_state_assert_rows_wake_on_the_push() {
 
     handle.shutdown();
 }
+
+/// The m89 select vocabulary at the prompt (the m19 record's named §16
+/// follow-on): the `select` row rides the wire's appended
+/// `SelectOption` variant — the option by accessible name, the
+/// `ActionDone` detail rendered verbatim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_select_row_applies_the_option() {
+    let path = socket_path("repl-select.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::with_combobox())
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches over uds");
+
+    assert_eq!(
+        ok_line(&repl.step("get role ComboBox Country").await),
+        "resolved ComboBox \"Country\" (generation 0) rect=[16,204 → 176,236]"
+    );
+    let out = rendered(&repl.step(r#"select "France""#).await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].starts_with(r#"ComboBox "Country": select_option("France") (frame "#),
+        "{out:?}"
+    );
+
+    // Missing arguments are single error lines (the m61 grammar rule).
+    assert_eq!(
+        rendered(&repl.step("select").await),
+        vec!["error: `select <option>` needs an argument"]
+    );
+
+    handle.shutdown();
+}
+
+/// The m90 scroll-into-view vocabulary at the prompt: the
+/// `scrollintoview` row rides the wire's appended `ScrollIntoView`
+/// variant, the `ActionDone` detail rendered verbatim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_scroll_into_view_row_applies() {
+    let path = socket_path("repl-scroll-view.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches over uds");
+
+    assert_eq!(
+        ok_line(&repl.step("get role button Save").await),
+        "resolved Button \"Save\" (generation 0) rect=[16,16 → 136,48]"
+    );
+    let out = rendered(&repl.step("scrollintoview").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].starts_with(r#"Button "Save": scroll_into_view_if_needed (frame "#),
+        "{out:?}"
+    );
+
+    // The verb takes no arguments (the m61 grammar rule).
+    assert_eq!(
+        rendered(&repl.step("scrollintoview now").await),
+        vec!["error: `scrollintoview` takes no arguments"]
+    );
+
+    handle.shutdown();
+}
