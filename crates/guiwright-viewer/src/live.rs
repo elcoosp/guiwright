@@ -39,7 +39,7 @@ use guiwright_proto::ClientConn;
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
     AdapterInfoV1, EventKindV1, EventV1, GwpEvent, NodeKeyV1, RequestV1, ResponseV1,
-    SnapshotNodeV1, SnapshotV1,
+    ResumeCursorV1, SnapshotNodeV1, SnapshotV1,
 };
 use guiwright_trace::schema::{FrameIndexEntry, TreeNode, TreeSnapshot};
 
@@ -232,6 +232,11 @@ impl LiveTimeline {
 pub struct LiveFeed<C: ClientConn> {
     client: C,
     timeline: LiveTimeline,
+    /// The seqs the feed last saw (the resume cursor a reattach carries):
+    /// the tree seq rides the `TreeChanged` events and the sync dump's
+    /// `TreeDump.tree_seq`, the frame seq the `FramePresented` events.
+    last_tree_seq: u64,
+    last_frame_seq: u64,
 }
 
 impl<C: ClientConn> LiveFeed<C> {
@@ -248,6 +253,8 @@ impl<C: ClientConn> LiveFeed<C> {
         Self {
             client,
             timeline: LiveTimeline::new(String::new()),
+            last_tree_seq: 0,
+            last_frame_seq: 0,
         }
     }
 
@@ -276,15 +283,64 @@ impl<C: ClientConn> LiveFeed<C> {
             .client
             .request(RequestV1::Snapshot(SnapshotV1::Full))
             .await?;
-        let ResponseV1::TreeDump { focus, nodes, .. } = response else {
+        let ResponseV1::TreeDump {
+            focus,
+            nodes,
+            tree_seq,
+            ..
+        } = response
+        else {
             return Err(GwpError::Protocol(format!(
                 "live sync expected a TreeDump response, got {}",
                 response_kind(&response)
             ))
             .into());
         };
+        // The dump's seq anchors the resume cursor (the reattach carries
+        // the seqs the feed last saw).
+        self.last_tree_seq = self.last_tree_seq.max(tree_seq);
         let frame = self.timeline.record_snapshot(&nodes, focus.as_ref());
         Ok(frame)
+    }
+
+    /// The resume cursor this feed would carry on a reattach: the seqs
+    /// it last saw per coalesced topic (the §7 resume vocabulary, the
+    /// m18 record's named follow-on).
+    pub fn resume_cursor(&self) -> ResumeCursorV1 {
+        ResumeCursorV1 {
+            tree_seq: self.last_tree_seq,
+            frame_seq: self.last_frame_seq,
+        }
+    }
+
+    /// Re-attach a dropped connection without re-paying the attach dump
+    /// (the m18 record's remaining-gaps list: *"The feed is one-shot per
+    /// connection. After `Bye` the connection is done; a reconnecting
+    /// viewer re-attaches (and re-dumps)"*): swap in a fresh connected
+    /// client, keep the timeline the old connection built, handshake,
+    /// and resume the event stream from [`Self::resume_cursor`] — the
+    /// driver replays the coalesced position past the cursor ahead of
+    /// the ack, and the drain applies it (a replayed `TreeChanged`
+    /// auto-syncs; a cursor already naming the current position replays
+    /// nothing, so the timeline continues untouched).
+    pub async fn reattach(&mut self, client: C, agent: &str) -> Result<LiveInfo, ViewerError> {
+        self.client = client;
+        let adapter = self.client.handshake(agent).await?;
+        self.client
+            .subscribe_from(
+                &[EventKindV1::TreeChanged, EventKindV1::FramePresented],
+                self.resume_cursor(),
+            )
+            .await?;
+        self.timeline.set_test(agent);
+        // The adapter facts feed the emitter's header (M23) — the same
+        // stamp a fresh attach carries.
+        self.timeline.set_adapter(adapter.name.clone());
+        // Drain the replay: the buffered position events answer
+        // immediately (a `TreeChanged` auto-syncs the model, a frame
+        // advances the axis); the quiet drain ends the loop.
+        while self.pump(Duration::ZERO).await?.is_some() {}
+        Ok(LiveInfo { adapter })
     }
 
     /// Wait up to `timeout` for the next pushed event and apply it:
@@ -302,16 +358,27 @@ impl<C: ClientConn> LiveFeed<C> {
         };
         let GwpEvent::V1(event) = event;
         let change = match event {
-            EventV1::TreeChanged { .. } => {
+            EventV1::TreeChanged { seq } => {
+                self.last_tree_seq = self.last_tree_seq.max(seq);
                 let frame = self.sync_tree().await?;
                 LiveChange::TreeChanged { frame }
             }
             EventV1::FramePresented { seq, hash } => {
+                self.last_frame_seq = self.last_frame_seq.max(seq);
                 self.timeline.record_frame(seq, hash);
                 LiveChange::FramePresented { frame: seq, hash }
             }
             EventV1::Log { record } => {
                 self.timeline.record_log(record);
+                LiveChange::Log
+            }
+            // The m20 record's named event: the checked fact moved. The
+            // timeline has no per-node state model — the fact joins the
+            // scrubber's event log (the §12 events vocabulary), and the
+            // pump surfaces it as the record-appended shape.
+            EventV1::StateChange { node, checked } => {
+                self.timeline
+                    .record_event("state_change", format!("{node:?} now carries {checked:?}"));
                 LiveChange::Log
             }
         };
