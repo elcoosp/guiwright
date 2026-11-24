@@ -109,6 +109,39 @@ fn action_input_requests() -> Vec<(&'static str, RequestV1)> {
                 timeout_ms: 1000,
             },
         ),
+        // The m89 select vocabulary (the m19 record's named §16
+        // follow-on): the option rides by accessible name — the
+        // appended variant's bytes pin the published table.
+        (
+            "action_select_option",
+            RequestV1::Action {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 4,
+                },
+                generation: 0,
+                action: SemActionV1::SelectOption {
+                    option: "France".into(),
+                },
+                force: false,
+                timeout_ms: 5000,
+            },
+        ),
+        // The m90 scroll-into-view vocabulary (the m19 record's named
+        // §16 follow-on): the appended variant's bytes pin the table.
+        (
+            "action_scroll_into_view",
+            RequestV1::Action {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 2,
+                },
+                generation: 0,
+                action: SemActionV1::ScrollIntoView,
+                force: false,
+                timeout_ms: 5000,
+            },
+        ),
         (
             "input_pointer",
             RequestV1::Input {
