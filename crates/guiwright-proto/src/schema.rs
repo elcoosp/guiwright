@@ -1103,6 +1103,17 @@ pub enum SelectorV1 {
         has_not: Option<Box<SelectorV1>>,
         nth: Option<NthV1>,
     },
+    /// The selector-valued **positive** filter (the m34 record's named
+    /// follow-on — Playwright's `filter({ has })` shape). Append-only
+    /// (§7): the variant rides at the end of the table, so every
+    /// encoding the pre-`has` clients pinned is unchanged and an old
+    /// client answers an unknown variant with a clean decode error. The
+    /// `Filter` row's own encodings stay byte-pinned — the widening is
+    /// its own variant, the M64 rule.
+    Has {
+        source: Box<SelectorV1>,
+        has: Box<SelectorV1>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
