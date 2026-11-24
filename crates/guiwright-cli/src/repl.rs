@@ -1621,6 +1621,7 @@ impl Repl {
                         EventKindV1::TreeChanged => "tree_changed",
                         EventKindV1::FramePresented => "frame_presented",
                         EventKindV1::Log => "log",
+                        EventKindV1::StateChange => "state_change",
                     })
                     .collect();
                 Ok(vec![Line::Ok(format!(
@@ -1883,6 +1884,11 @@ fn render_event(event: &GwpEvent) -> String {
         EventV1::TreeChanged { seq } => format!("event tree_changed seq={seq}"),
         EventV1::FramePresented { seq, hash } => {
             format!("event frame_presented seq={seq} hash={hash:#x}")
+        }
+        // The m20 record's named event: the checked fact moved — the
+        // node and the tri-state it now carries, one line at the prompt.
+        EventV1::StateChange { node, checked } => {
+            format!("event state_change {node:?} now carries {checked:?}")
         }
         // The log-tail milestone: each record is one `logs.ndjson`-shape
         // JSON line — pretty-print level + target + message for the REPL
