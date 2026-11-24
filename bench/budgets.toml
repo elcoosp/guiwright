@@ -444,6 +444,15 @@ m0_measurable = true
 sample = "locator_filter"
 
 [[budget]]
+id = "locator_has_filter"
+name = "Kit: one has-filtered resolve (group, subtree holds Save)"
+p50_us = 600
+p95_us = 3000
+notes = "the m91 has filter's steady-state cost on the button fixture: the locator_filter row's shape with the positive verdict — the source resolve (the group bucket) plus one subtree probe per candidate (the node included, the same walk has_not reads with the opposite verdict); a snapshot read with no waiting, so the floor is the source walk plus the positive-filter probes — the composition every kit has() method produces"
+m0_measurable = true
+sample = "locator_has_filter"
+
+[[budget]]
 id = "node_describe"
 name = "Node-describe read, in-process door (Save handle)"
 p50_us = 500
