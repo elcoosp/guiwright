@@ -24,8 +24,9 @@ use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1,
     DescribedIdentityStateV1, DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
     GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
-    RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1,
-    SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1, WindowV1,
+    RequestV1, ResolvedMatchV1, ResponseV1, ResumeCursorV1, ScreenshotV1, SelectorV1, SemActionV1,
+    SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1,
+    WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -302,6 +303,19 @@ fn multi_window_gesture_requests() -> Vec<(&'static str, RequestV1)> {
             }),
         ),
         ("subscribe_off", RequestV1::Subscribe(SubscribeV1::Off)),
+        // The resume vocabulary (the m18 record's named §7 follow-on):
+        // the reconnect cursor rides the appended `Resume` variant — the
+        // bytes pin the published table beside the M12 pair.
+        (
+            "subscribe_resume",
+            RequestV1::Subscribe(SubscribeV1::Resume {
+                kinds: vec![EventKindV1::TreeChanged],
+                cursor: ResumeCursorV1 {
+                    tree_seq: 12,
+                    frame_seq: 34,
+                },
+            }),
+        ),
         ("bye", RequestV1::Bye),
     ]
 }
@@ -1137,6 +1151,27 @@ fn event_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
             serde_json::json!({
                 "kind": "event",
                 "event": { "kind": "log", "record": "video writer dropped 2 static frames" }
+            }),
+        ),
+        // The m20 record's named event: the state change rides the same
+        // event envelope — the node and its post-action tri-state; the
+        // bytes pin the appended EventV1/EventKindV1 rows.
+        (
+            "event_state_change",
+            ResponseV1::Event(EventV1::StateChange {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 10,
+                },
+                checked: CheckedStateV1::Checked,
+            }),
+            serde_json::json!({
+                "kind": "event",
+                "event": {
+                    "kind": "state_change",
+                    "node": { "kind": "accesskit", "tree": "00".repeat(16), "node": 10 },
+                    "checked": "checked"
+                }
             }),
         ),
         (
