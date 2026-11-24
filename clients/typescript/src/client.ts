@@ -914,6 +914,41 @@ export class GwpClient {
     return this.expectCountWith(selector, { kind: "less_than", bound: max }, timeoutMs);
   }
 
+  /** The inclusive count comparator (m25's honest-list widening, the
+   * Rust `ClientConn::expect_count_at_least` mirrored on the
+   * other-language client — the m45/m60 one-milestone-per-surface
+   * pattern carried to the reserved inclusive pair): satisfied while
+   * `min` **or more** nodes match, the bound itself included, the same
+   * composition as `expectCount()` with the comparison as the only
+   * difference. */
+  async expectCountAtLeast(selector: Selector, min: number, timeoutMs = 5000): Promise<number> {
+    return this.expectCountWith(selector, { kind: "at_least", bound: min }, timeoutMs);
+  }
+
+  /** The inclusive count comparator's mirror (m25's honest-list
+   * widening, the Rust `ClientConn::expect_count_at_most` mirrored):
+   * satisfied while `max` **or fewer** nodes match, the bound itself
+   * included — an empty set is found 0 and satisfies every at-most
+   * (absence is an answer, the m59 rule). */
+  async expectCountAtMost(selector: Selector, max: number, timeoutMs = 5000): Promise<number> {
+    return this.expectCountWith(selector, { kind: "at_most", bound: max }, timeoutMs);
+  }
+
+  /** The range count comparator (m25's honest-list widening, the range
+   * shape the same honest list names beside the inclusive pair, the
+   * Rust `ClientConn::expect_count_between` mirrored): satisfied while
+   * `min` **through** `max` nodes match, both ends inclusive, the same
+   * composition as `expectCount()` with the comparison as the only
+   * difference. */
+  async expectCountBetween(
+    selector: Selector,
+    min: number,
+    max: number,
+    timeoutMs = 5000,
+  ): Promise<number> {
+    return this.expectCountWith(selector, { kind: "between", min, max }, timeoutMs);
+  }
+
   /** The shared count-assertion composition (m59/m60): the m54 loop
    * shape over the M30 resolve-all round trip — one entry read,
    * event-driven re-reads, the subscription window owned and dropped,
