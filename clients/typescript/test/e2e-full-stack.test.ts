@@ -35,7 +35,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GwpClient, GwpRejected } from "../src/client.ts";
+import { GwpClient, GwpRejected, filter } from "../src/client.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolvePath(here, "..", "..", "..");
@@ -183,6 +183,38 @@ test("§13 double-stop is the documented clean rejection over the wire", async (
         return true;
       },
     );
+  } finally {
+    await client.close();
+  }
+});
+
+test("§8.1 TS filter(): the composed rows resolve against the real server (m34/m91)", async () => {
+  const client = await GwpClient.connectTcp(demo.addr);
+  try {
+    await client.handshake("ts-e2e-full-stack/0.1");
+
+    // The positive filter through the helper: the group whose subtree
+    // holds a button — the ancestor row rides the m91 appended
+    // `SelectorV1::Has` variant over the real door.
+    const group = await client.resolve(
+      filter(
+        { kind: "role", role: "Group", name: null },
+        { has: { kind: "role", role: "Button", name: null } },
+      ),
+    );
+    assert.equal(group.node.kind, "accesskit", "the group resolves");
+
+    // The m34 filter row through the helper: the Save button narrowed
+    // by the string form (the fuzzy default) and the document-order
+    // pick — the row the wire already spoke, now typed client-side.
+    const save = await client.resolve(
+      filter({ kind: "role", role: "Button", name: null }, {
+        hasText: "Save",
+        nth: "first",
+      }),
+    );
+    const clicked = await client.action(save.node, save.generation, { kind: "click" });
+    assert.equal(clicked.detail, "clicked", "the has-filtered resolve acts");
   } finally {
     await client.close();
   }
