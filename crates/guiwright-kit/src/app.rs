@@ -151,6 +151,31 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         self
     }
 
+    /// `locator.filter({ has })` narrowing (§16 locators row — the m34
+    /// record's named follow-on): keep only the matches whose **subtree**
+    /// — the node included — contains a node matching `inner` (the
+    /// positive [`Self::has_not`], which reads the same subtree walk with
+    /// the opposite verdict). Distinct from [`Self::locator`], which
+    /// narrows to the *descendant's* rows — `has` keeps the *ancestor's*.
+    /// The inner selector is a full [`Selector`]: a role+name constraint,
+    /// a test id, a nested chain — a text probe only when built as one.
+    ///
+    /// The leaf rule carries over from the inverted filter: a leaf's
+    /// subtree is itself, so `get_by_role(Role::Button,
+    /// "Save").has(&Selector::role(Role::Button))` keeps Save — `has`
+    /// and `has_not` read the same walk. Like every narrowing, it
+    /// composes ([`Self::first`]/[`Self::nth`]/[`Self::has_text`]/
+    /// [`Self::has_not`]/[`Self::locator`] nest by value, the resolver
+    /// walks them), rides the window pin (§16 v0.4), and is consulted at
+    /// act time by the same strict-mode resolve every locator action
+    /// runs — an empty `has` answer is the valid snapshot read
+    /// (`count()` answers 0), a failed act-time resolve is the
+    /// strict-mode error naming the miss.
+    pub fn has(mut self, inner: &Selector) -> Self {
+        self.selector = self.selector.has(inner.clone());
+        self
+    }
+
     /// `locator.locator(child)` (§16 locators row — the m34 filter
     /// surface): the Playwright chained-descendant shape — resolve the
     /// locator's own set first, then narrow to `child` nodes inside each
