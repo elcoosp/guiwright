@@ -23,6 +23,8 @@ import {
   type MockCmd,
   type NodeKey,
   NodeKeyV1,
+  type Nth,
+  NthV1,
   RequestV1,
   type ResolvedMatch,
   type Selector,
@@ -282,6 +284,38 @@ function encodeSelector(enc: Encoder, sel: Selector): void {
     case "all":
       enc.u32(SelectorV1.All).seqLen(sel.selectors.length);
       for (const s of sel.selectors) encodeSelector(enc, s);
+      break;
+    case "filter":
+      // The m34 filter row (index 6): source, has_text, has_not, nth —
+      // the field order the Rust enum serializes, Options as tags.
+      enc.u32(SelectorV1.Filter);
+      encodeSelector(enc, sel.source);
+      encodeTextMatchOption(enc, sel.has_text);
+      enc.optionTag(sel.has_not !== null);
+      if (sel.has_not !== null) encodeSelector(enc, sel.has_not);
+      enc.optionTag(sel.nth !== null);
+      if (sel.nth !== null) encodeNth(enc, sel.nth);
+      break;
+    case "has":
+      // The appended positive-filter variant (index 7): source, then the
+      // inner selector — the same order the Rust enum fields serialize.
+      enc.u32(SelectorV1.Has);
+      encodeSelector(enc, sel.source);
+      encodeSelector(enc, sel.has);
+      break;
+  }
+}
+
+function encodeNth(enc: Encoder, nth: Nth): void {
+  switch (nth.kind) {
+    case "first":
+      enc.u32(NthV1.First);
+      break;
+    case "last":
+      enc.u32(NthV1.Last);
+      break;
+    case "index":
+      enc.u32(NthV1.Index).u32(nth.index);
       break;
   }
 }
