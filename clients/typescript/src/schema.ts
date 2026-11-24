@@ -221,6 +221,10 @@ export const SemActionV1 = {
   Scroll: 7,
   Check: 8,
   Uncheck: 9,
+  /** m89: the select vocabulary (the m19 record's named §16 follow-on). */
+  SelectOption: 10,
+  /** m90: the scroll-into-view vocabulary (the m19 record's named §16 follow-on). */
+  ScrollIntoView: 11,
 } as const;
 
 export const InputEventV1 = {
@@ -449,7 +453,11 @@ export type SemAction =
   | { kind: "press"; key: string; modifiers: string[] }
   | { kind: "scroll"; dx: number; dy: number }
   | { kind: "check" }
-  | { kind: "uncheck" };
+  | { kind: "uncheck" }
+  /** m89: select an option by accessible name on a choice widget. */
+  | { kind: "select_option"; option: string }
+  /** m90: scroll the node into view (the a11y-first honest form). */
+  | { kind: "scroll_into_view_if_needed" };
 
 export type InputEvent =
   | { kind: "pointer_down"; x: number; y: number; button: number }
