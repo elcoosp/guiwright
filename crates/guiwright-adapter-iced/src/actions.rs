@@ -55,6 +55,20 @@ pub fn route(role: Role, action: &SemAction, handle: u64) -> Result<WidgetOp, Ad
         (_, SemAction::SetValue { .. }) => Err(AdapterError::Unsupported(
             "set_value on a non-editable widget",
         )),
+        // The m89 select vocabulary needs an option-list op (open the
+        // choice widget, press the option row) the engine's WidgetOp
+        // table does not carry — loud, like the other framework-native
+        // vocabulary here (§8.4 per-adapter precision).
+        (_, SemAction::SelectOption { .. }) => Err(AdapterError::Unsupported(
+            "select_option needs an option-list widget op (combobox open + option press)",
+        )),
+        // The m90 scroll-into-view vocabulary needs a scroll-into-view
+        // op the engine's WidgetOp table does not carry — loud, like the
+        // other framework-native vocabulary here (§8.4 per-adapter
+        // precision).
+        (_, SemAction::ScrollIntoView) => Err(AdapterError::Unsupported(
+            "scroll_into_view_if_needed needs a scroll-into-view widget op",
+        )),
         (_, SemAction::Focus) => Ok(WidgetOp::Focus(handle)),
         (_, SemAction::Blur) => Ok(WidgetOp::Blur(handle)),
         // Rides the input pipeline (session, §8.4) — loud here.
