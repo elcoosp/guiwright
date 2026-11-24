@@ -2965,3 +2965,84 @@ pub fn client_count_assert() -> Duration {
     handle.shutdown();
     measured.max(Duration::from_nanos(1))
 }
+
+// --- §15.6 shared-frame ring hop (m88) --------------------------------------
+
+/// The §15.1 bench frame (1280×800 RGBA8) the hop measures.
+const RING_W: u32 = 1280;
+const RING_H: u32 = 800;
+
+thread_local! {
+    /// One ring per bench thread: the store is built once, the hop
+    /// (publish + digest-validated read) is the measured operation.
+    /// `RefCell` because the writer half commits by nature.
+    static RING_HOP: std::cell::RefCell<RingBench> =
+        std::cell::RefCell::new(RingBench::new());
+}
+
+/// The §15.6 ring fixture: a process-unique scratch root (the bench
+/// crate's no-tempfile posture), one writer + one reader + one reused
+/// read buffer over a 1280×800 RGBA8 store.
+struct RingBench {
+    _scratch: ScratchDir,
+    writer: guiwright_proto::shmring::FrameRingWriter,
+    reader: guiwright_proto::shmring::FrameRingReader,
+    pixels: Vec<u8>,
+    buf: Vec<u8>,
+}
+
+impl RingBench {
+    fn new() -> Self {
+        use guiwright_proto::shmring::{FrameRingReader, FrameRingWriter};
+        let scratch = ScratchDir(std::env::temp_dir().join(format!(
+            "gw-bench-shm-ring-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )));
+        std::fs::create_dir_all(&scratch.0).expect("bench ring dir");
+        let path = scratch.0.join("session.gwring");
+        // Pseudo-random pixels: the copy is the cost, never a compressible
+        // pattern (the same honesty the blob sample's incompressible
+        // buffer carries).
+        let pixels: Vec<u8> = (0..(u64::from(RING_W) * u64::from(RING_H) * 4))
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+            .collect();
+        let mut writer = FrameRingWriter::create(&path, RING_W, RING_H).expect("bench ring");
+        // The reader opens against a committed store (the client-attach
+        // order the §15.6 seam documents); the warm commit is setup.
+        writer.publish(1, &pixels).expect("warm commit");
+        let reader = FrameRingReader::open(&path).expect("bench ring reader");
+        Self {
+            _scratch: scratch,
+            writer,
+            reader,
+            pixels,
+            buf: Vec::new(),
+        }
+    }
+}
+
+/// §15.6 "a shared-memory frame ring for same-host clients" (m88): one
+/// publication hop — `FrameRingWriter::publish` of the 1280×800 RGBA8
+/// frame (payload + record commit + header stats) followed by the reader's
+/// `latest_into` digest-validated read into a reused buffer. The ring is
+/// built once per thread; the hop is the measured operation.
+pub fn shm_ring_frame_hop() -> Duration {
+    RING_HOP.with_borrow_mut(|bench| {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let started = Instant::now();
+        bench
+            .writer
+            .publish(seq, &bench.pixels)
+            .expect("bench publish");
+        let frame = bench
+            .reader
+            .latest_into(std::mem::take(&mut bench.buf))
+            .expect("bench read")
+            .expect("the just-published frame");
+        debug_assert_eq!(frame.seq, seq, "the hop serves the newest commit");
+        bench.buf = frame.pixels;
+        started.elapsed()
+    })
+}
