@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { GwpClient, GwpRejected, GwpWaitTimeout } from "../src/client.ts";
-import { Encoder } from "../src/postcard.ts";
+import { Encoder, Decoder } from "../src/postcard.ts";
+import { RequestV1, NodeKeyV1, SemActionV1 } from "../src/schema.ts";
 
 /** Hex → bytes (the golden vectors' wire form, the codec tests' shape). */
 function hexToBytes(hex: string): Uint8Array {
@@ -739,6 +740,196 @@ test("waitFor expiry is the typed timeout and the door stays healthy (M45)", asy
     await client.ping();
     await client.close();
   } finally {
+    server.close();
+  }
+});
+
+/** The appended-action server (the m89/m90 sugar's conversation):
+ * handshake, then the Resolve request (variant 3) answers with a
+ * Resolved handle and the Action request (variant 4) is captured and
+ * answered with the ActionDone pair — the byte shapes the client's
+ * `selectOption()` / `scrollIntoViewIfNeeded()` sugar must speak. */
+function startAppendedActionServer(
+  actionReply: "done" | "unsupported",
+  detail = 'select_option("France")',
+): Promise<{ port: number; close: () => void; actionBodies: Uint8Array[] }> {
+  const actionBodies: Uint8Array[] = [];
+  return new Promise((resolve) => {
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        const variant = chunk[5];
+        const reply = (payload: Uint8Array) => {
+          const frame = new Uint8Array(4 + payload.length);
+          const view = new DataView(frame.buffer);
+          view.setUint32(0, payload.length, true);
+          frame.set(payload, 4);
+          socket.write(frame);
+        };
+        if (variant === 0) {
+          // Hello → Welcome{...} — the hand-encoded postcard the other
+          // tests speak (§7: the handshake must land first).
+          const enc = new Encoder();
+          enc.u32(0); // GwpResponse::V1
+          enc.u32(0); // Welcome
+          enc.u32(1); // proto_version
+          enc.str("mock-session");
+          enc.u64(1);
+          enc.u64(2);
+          enc.str("mock");
+          enc.str("fixture");
+          enc.str("0.1");
+          for (const bit of [true, false, true, false, false, true]) enc.bool(bit);
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 3) {
+          // Resolve → Resolved: the m47 aim half — one AccessKit handle
+          // the sugar then aims the appended action at.
+          const enc = new Encoder();
+          enc.u32(0); // GwpResponse::V1
+          enc.u32(3); // Resolved
+          enc.u32(NodeKeyV1.AccessKit); // NodeKeyV1::AccessKit
+          enc.raw(new Uint8Array(16).fill(0xab)); // the tree id
+          enc.u64(2); // the node
+          enc.u32(0); // the handle's generation
+          enc.optionTag(false); // rect: None
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 4) {
+          // Action → capture the request body (the sugar's appended
+          // variant is what the test decodes), then the act half.
+          actionBodies.push(new Uint8Array(chunk.subarray(4)));
+          if (actionReply === "unsupported") {
+            // Error{Unsupported} — the honest per-adapter cap the
+            // m89/m90 records document (the iced/floem/gpui rows).
+            const enc = new Encoder();
+            enc.u32(0).u32(9);
+            enc.u32(6); // ErrorCode.Unsupported
+            enc.str("the fixture adapter carries no option-list op");
+            reply(Array.from(enc.finish()));
+            return;
+          }
+          const enc = new Encoder();
+          enc.u32(0); // GwpResponse::V1
+          enc.u32(4); // ActionDone
+          enc.u64(7); // the applied-at frame
+          enc.str(detail);
+          reply(enc.finish());
+          return;
+        }
+        if (variant === 9) {
+          // Bye → Bye (the clean close, §7's last word).
+          reply(Uint8Array.from([0, 10]));
+          socket.end();
+          return;
+        }
+        // Anything else → Error{Internal} (the other tests' fallback).
+        const enc = new Encoder();
+        enc.u32(0).u32(9);
+        enc.u32(7);
+        enc.str("not implemented in the appended-action mock server");
+        reply(Array.from(enc.finish()));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as net.AddressInfo).port;
+      resolve({
+        port,
+        close: () => {
+          server.close();
+          server.closeAllConnections?.();
+        },
+        actionBodies,
+      });
+    });
+  });
+}
+
+test("selectOption speaks the appended SelectOption variant (m89 sugar)", async () => {
+  const server = await startAppendedActionServer("done");
+  const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+  try {
+    await client.handshake("guiwright-tests/m2");
+    const done = await client.selectOption(
+      { kind: "role", role: "ComboBox", name: "Country" },
+      "France",
+    );
+    assert.equal(done.frame_seq, 7, "the applied-at frame rides the pair");
+    assert.equal(done.detail, 'select_option("France")', "the ActionDone detail verbatim");
+
+    // The Action request's bytes: the m47 aim-and-act loop with the m89
+    // appended discriminant — the option by accessible name, the
+    // gate opt-outs riding the same row.
+    assert.equal(server.actionBodies.length, 1, "one Action request");
+    const dec = new Decoder(server.actionBodies[0]);
+    assert.equal(dec.u32(), 0, "V1 envelope");
+    assert.equal(dec.u32(), RequestV1.Action, "the Action request");
+    assert.equal(dec.u32(), NodeKeyV1.AccessKit, "the resolved handle");
+    dec.raw(16); // the tree id the resolve minted
+    assert.equal(dec.u64n(), 2, "the resolved node");
+    assert.equal(dec.u32(), 0, "the handle's generation");
+    assert.equal(dec.u32(), SemActionV1.SelectOption, "the m89 appended discriminant (10)");
+    assert.equal(dec.str(), "France", "the option by accessible name");
+    assert.equal(dec.bool(), false, "force off");
+    assert.equal(dec.u64n(), 5000, "the timeout budget rides");
+  } finally {
+    await client.close();
+    server.close();
+  }
+});
+
+test("scrollIntoViewIfNeeded speaks the appended ScrollIntoView variant (m90 sugar)", async () => {
+  const server = await startAppendedActionServer("done", "scroll_into_view_if_needed");
+  const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+  try {
+    await client.handshake("guiwright-tests/m2");
+    const done = await client.scrollIntoViewIfNeeded(
+      { kind: "role", role: "Button", name: "Save" },
+      2500,
+      true,
+    );
+    assert.equal(done.frame_seq, 7, "the applied-at frame rides the pair");
+    assert.equal(done.detail, "scroll_into_view_if_needed", "the ActionDone detail verbatim");
+
+    // The request bytes: the m90 appended discriminant, no coordinates
+    // and no delta (the a11y-first request — the framework scrolls).
+    assert.equal(server.actionBodies.length, 1, "one Action request");
+    const dec = new Decoder(server.actionBodies[0]);
+    assert.equal(dec.u32(), 0, "V1 envelope");
+    assert.equal(dec.u32(), RequestV1.Action, "the Action request");
+    assert.equal(dec.u32(), NodeKeyV1.AccessKit, "the resolved handle");
+    dec.raw(16); // the tree id the resolve minted
+    assert.equal(dec.u64n(), 2, "the resolved node");
+    assert.equal(dec.u32(), 0, "the handle's generation");
+    assert.equal(dec.u32(), SemActionV1.ScrollIntoView, "the m90 appended discriminant (11)");
+    assert.equal(dec.bool(), true, "force rides the opt-out");
+    assert.equal(dec.u64n(), 2500, "the timeout budget rides");
+    assert.ok(dec.done(), "no payload after the bare variant (a11y-first)");
+  } finally {
+    await client.close();
+    server.close();
+  }
+});
+
+test("selectOption surfaces the driver's typed rejection (m89/m90 caps)", async () => {
+  const server = await startAppendedActionServer("unsupported");
+  const client = await GwpClient.connectTcp(`127.0.0.1:${server.port}`);
+  try {
+    await client.handshake("guiwright-tests/m2");
+    await assert.rejects(
+      () =>
+        client.selectOption({ kind: "role", role: "ComboBox", name: "Country" }, "France"),
+      (err) => {
+        assert.ok(err instanceof GwpRejected, "the typed rejection");
+        assert.equal(err.codeName, "Unsupported", "the honest per-adapter cap");
+        assert.match(err.message, /no option-list op/);
+        return true;
+      },
+    );
+    assert.equal(server.actionBodies.length, 1, "the request still rode the wire");
+  } finally {
+    await client.close();
     server.close();
   }
 });
