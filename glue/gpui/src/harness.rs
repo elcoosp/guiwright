@@ -733,6 +733,25 @@ impl FrameworkAdapter for GpuiAdapter {
                      focus click + three Keystroke dispatches)",
                 ));
             }
+            // The m89 select vocabulary rides the same documented
+            // blocker the fill path names (m80): selecting an option on
+            // a combobox drives the same keystroke-dispatch pipeline
+            // the scheduler cannot account headless.
+            SemAction::SelectOption { .. } => {
+                return Err(AdapterError::Unsupported(
+                    "select_option (same zed test-scheduler session-id overflow \
+                     as fill — scheduler/src/test_scheduler.rs:232)",
+                ));
+            }
+            // The m90 scroll-into-view vocabulary: the test-support
+            // dispatch surface carries no scroll-into-view request —
+            // loud, like the other framework-native vocabulary here.
+            SemAction::ScrollIntoView => {
+                return Err(AdapterError::Unsupported(
+                    "scroll_into_view_if_needed (no scroll-into-view dispatch \
+                     on the test-support event surface)",
+                ));
+            }
             SemAction::Focus => {
                 // gpui focuses tracked elements on click (the real
                 // focus path; there is no focus-without-activate
