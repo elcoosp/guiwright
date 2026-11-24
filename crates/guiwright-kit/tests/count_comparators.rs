@@ -137,3 +137,102 @@ fn comparators_scope_through_the_window_handle() {
     .to_have_count_less_than(2)
     .expect("the pin scopes the set to 1 < 2");
 }
+
+// --- The inclusive comparators (m25's honest-list widening) ----------------
+//
+// Plan pin (docs/m25-count-comparators.md §5 "Remaining gaps"): the
+// inclusive `at_least`/`at_most` pair rides "the same `CountMatch`" —
+// the same waiter, the same waitable-mismatch contract, no new machinery.
+
+#[test]
+fn at_least_passes_on_the_bound_inclusive() {
+    let mut app = App::launch_fixture("compare_at_least_immediate");
+    app.wait_for_settle();
+    expect(app.role_locator(Role::Button))
+        .to_have_count_at_least(4)
+        .expect("4 buttons hold at-least-4 (the bound included)");
+    expect(app.role_locator(Role::Button))
+        .to_have_count_at_least(1)
+        .expect("4 buttons clear at-least-1");
+    expect(app.get_by_role(Role::Button, "Ghost"))
+        .to_have_count_at_least(0)
+        .expect("0 ghosts hold at-least-0 (the inclusive empty set)");
+}
+
+#[test]
+fn at_most_passes_on_the_bound_inclusive() {
+    let mut app = App::launch_fixture("compare_at_most_immediate");
+    app.wait_for_settle();
+    expect(app.role_locator(Role::Button))
+        .to_have_count_at_most(4)
+        .expect("4 buttons hold at-most-4 (the bound included)");
+    expect(app.get_by_role(Role::Button, "Ghost"))
+        .to_have_count_at_most(1)
+        .expect("0 ghosts hold at-most-1");
+}
+
+#[test]
+fn at_least_completes_when_a_node_late_appears() {
+    // The inclusive form waits event-driven in the widening direction
+    // too: the export button streams in and the set reaches >= 5.
+    let scripts = Arc::new(Mutex::new(Vec::new()));
+    let fixture = Fixture::buttons();
+    let late = fixture.add_button_update("Export");
+    let adapter = MockAdapter::with_fixture(&fixture).with_shared_scripts(scripts.clone());
+    let mut app = App::launch("compare_at_least_late_node", adapter);
+    app.wait_for_settle();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        scripts.lock().expect("script channel").push(late);
+    });
+    expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_secs(2))
+        .to_have_count_at_least(5)
+        .expect("the export button reaches at-least-5");
+}
+
+#[test]
+fn an_inclusive_timeout_names_the_inclusive_form() {
+    let mut app = App::launch_fixture("compare_inclusive_timeout");
+    app.wait_for_settle();
+    let err = expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_millis(250))
+        .to_have_count_at_least(99)
+        .expect_err("4 buttons never reach >= 99");
+    let msg = err.to_string();
+    assert!(msg.contains("count >= 99"), "{msg}");
+    assert!(msg.contains("found 4"), "{msg}");
+    let err = expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_millis(250))
+        .to_have_count_at_most(3)
+        .expect_err("4 buttons never sit at-or-below <= 3");
+    assert!(
+        err.to_string().contains("count <= 3"),
+        "{}",
+        err.to_string()
+    );
+}
+
+#[test]
+fn negated_inclusive_comparators_compose_through_the_decorator() {
+    let mut app = App::launch_fixture("compare_inclusive_negated");
+    app.wait_for_settle();
+    // not(>= 99) holds right now (4 does not reach it)…
+    expect(app.role_locator(Role::Button))
+        .not()
+        .to_have_count_at_least(99)
+        .expect("4 buttons do not reach >= 99");
+    // …and not(<= 4) never lands while the set stays at 4: the inclusive
+    // bound itself holds, so the negation pends through the whole budget
+    // (the timeout header names the inverted comparator).
+    let err = expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_millis(250))
+        .not()
+        .to_have_count_at_most(4)
+        .expect_err("4 buttons keep holding at-most-4");
+    assert!(
+        err.to_string().contains("not (count <= 4"),
+        "{}",
+        err.to_string()
+    );
+}
