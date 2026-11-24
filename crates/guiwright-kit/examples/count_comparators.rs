@@ -52,7 +52,17 @@ fn main() {
     expect(app.get_by_role(Role::Button, "Ghost"))
         .to_have_count_less_than(1)
         .expect("0 ghosts sit below the < 1 bound");
-    println!("count > 3 / count < 5 / count < 1: satisfied on the initial evaluation");
+    // The inclusive pair (m25's honest-list widening): the bound itself
+    // holds, same waiter, same event-driven wait.
+    expect(app.role_locator(Role::Button))
+        .to_have_count_at_least(4)
+        .expect("4 buttons hold at-least-4 (the bound included)");
+    expect(app.role_locator(Role::Button))
+        .to_have_count_at_most(4)
+        .expect("4 buttons hold at-most-4 (the bound included)");
+    println!(
+        "count > 3 / count < 5 / count < 1 / count >= 4 / count <= 4: satisfied on the initial evaluation"
+    );
 
     // The mismatch is waitable in the widening direction: the assertion
     // completes exactly when the scripted diff lands the fifth button
@@ -61,7 +71,11 @@ fn main() {
         .with_timeout(Duration::from_secs(2))
         .to_have_count_greater_than(4)
         .expect("the export button clears the > 4 bound");
-    println!("count > 4: satisfied on the scripted late button");
+    expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_secs(2))
+        .to_have_count_at_least(5)
+        .expect("the export button reaches at-least-5");
+    println!("count >= 5: satisfied on the scripted late button (inclusive)");
 
     // …and in the narrowing direction: the removal drops the set below
     // the < 5 bound on the second scripted diff.
@@ -70,6 +84,9 @@ fn main() {
         .to_have_count_less_than(5)
         .expect("the removal drops the set below < 5");
     println!("count < 5: satisfied on the scripted removal");
+
+    // The inclusive widening direction: the set reaches >= 5 exactly when
+    // the late button lands (before the removal drops it to 3).
 
     pusher.join().expect("script thread");
 
@@ -80,6 +97,10 @@ fn main() {
         .to_have_count_greater_than(99)
         .expect("3 buttons do not clear > 99");
     println!("not(count > 99): satisfied through the negation decorator");
+    expect(app.role_locator(Role::Button))
+        .not()
+        .to_have_count_at_most(3)
+        .expect_err("3 buttons hold at-most-3 — the negation never lands");
 
     // The failure shape: the timeout names the comparator, the locator
     // and the count the last evaluation found.
