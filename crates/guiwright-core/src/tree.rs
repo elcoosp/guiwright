@@ -560,6 +560,16 @@ impl TreeService {
             } => {
                 self.filter_candidates(source, has_text.as_ref(), has_not.as_deref(), nth.as_ref())
             }
+            Selector::Has { source, has } => {
+                // `has` candidates: keep the source's matches whose
+                // subtree (the node included) matches the inner selector
+                // — the positive dual of the `Filter { has_not }` pass
+                // (the same subtree walk, opposite verdict). Document
+                // order rides the source resolution.
+                let mut candidates = self.resolve_all(source)?;
+                candidates.retain(|r| self.subtree_matches_selector(&r.key, has));
+                Ok(candidates.into_iter().map(|r| r.key).collect())
+            }
         }
     }
 
@@ -766,7 +776,7 @@ impl TreeService {
             }
             Selector::Value(m) => entry.value.as_deref().is_some_and(|v| m.matches(v)),
             Selector::TestId(id) => self.index.test_ids.get(id) == Some(&key),
-            Selector::All(_) | Selector::Filter { .. } => {
+            Selector::All(_) | Selector::Filter { .. } | Selector::Has { .. } => {
                 // Full sub-resolution within the subtree of this node.
                 self.subtree_matches_selector(&key, selector)
             }
