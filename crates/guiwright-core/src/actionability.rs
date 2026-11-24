@@ -56,6 +56,13 @@ pub enum Check {
     /// (§8 check vocabulary — M38's `to_have_accessible_description`
     /// assertion).
     Description(TextMatch),
+    /// The node carries no content: its label *and* value both read
+    /// absent-or-empty (§8 check vocabulary — m28's honest-list
+    /// `to_be_empty` assertion rides this row). A label/value composite,
+    /// not an effective-state predicate: the same node reads
+    /// [`Check::HasText`] makes, negated — never a subtree walk (the
+    /// m29/m31 reads' honest node-level scope).
+    Empty,
 }
 
 impl Check {
@@ -81,6 +88,7 @@ impl Check {
             Check::Role(role) => format!("role {}", role_debug_name(*role)),
             Check::Name(m) => format!("has accessible name {}", render(m)),
             Check::Description(m) => format!("has accessible description {}", render(m)),
+            Check::Empty => "empty".to_string(),
         }
     }
 }
@@ -148,6 +156,7 @@ pub fn evaluate(tree: &TreeService, key: &NodeKey, check: &Check) -> CheckStatus
         Check::Role(want) => role_status(&node, *want),
         Check::Name(m) => name_status(&node, m),
         Check::Description(m) => description_status(&node, m),
+        Check::Empty => empty_status(&node),
         Check::Focused => {
             if tree.focus() == Some(*key) {
                 CheckStatus::Pass
@@ -267,6 +276,25 @@ fn has_text_status(node: &NodeRef<'_>, m: &TextMatch) -> CheckStatus {
                 label.or(value).unwrap_or_default(),
                 render(m)
             ),
+        }
+    }
+}
+
+/// §8.3 `Empty` (m28's honest-list row): the label/value composite —
+/// both facts absent-or-empty passes, either fact present stays Pending
+/// (the same node reads `has_text_status` makes; the Pending reason
+/// names what still holds, the waitable-mismatch convention). The
+/// emptiness test is exact — whitespace-only content is content, the
+/// Playwright `textContent === ''` rule — and the read is node-level by
+/// design (the m29/m31 honest scope: no subtree concatenation).
+fn empty_status(node: &NodeRef<'_>) -> CheckStatus {
+    let label = node.label().unwrap_or_default();
+    let value = node.value().unwrap_or_default();
+    if label.is_empty() && value.is_empty() {
+        CheckStatus::Pass
+    } else {
+        CheckStatus::Pending {
+            reason: format!("text is {label:?}, value is {value:?} — expected both empty"),
         }
     }
 }
@@ -688,5 +716,47 @@ mod tests {
         assert_eq!(Check::Checked(Toggled::True).describe(), "checked");
         assert_eq!(Check::Checked(Toggled::False).describe(), "unchecked");
         assert_eq!(Check::Checked(Toggled::Mixed).describe(), "mixed-checked");
+    }
+
+    #[test]
+    fn empty_check_passes_on_a_factless_node() {
+        let fixture = Fixture::with_empty();
+        let mut svc = TreeService::new();
+        svc.apply_update(fixture.initial_update());
+        let region = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.empty_region.expect("empty fixture"),
+        };
+        assert_eq!(evaluate(&svc, &region, &Check::Empty), CheckStatus::Pass);
+    }
+
+    #[test]
+    fn empty_check_pends_on_labeled_and_valued_nodes() {
+        let fixture = Fixture::with_empty();
+        let mut svc = TreeService::new();
+        svc.apply_update(fixture.initial_update());
+        let label = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.welcome_label,
+        };
+        let status = evaluate(&svc, &label, &Check::Empty);
+        assert!(
+            matches!(&status, CheckStatus::Pending { reason } if reason.contains("Welcome, Ada")),
+            "{status:?}"
+        );
+        let email = NodeKey::AccessKit {
+            tree: accesskit::TreeId::ROOT,
+            node: fixture.email_input,
+        };
+        let status = evaluate(&svc, &email, &Check::Empty);
+        assert!(
+            matches!(&status, CheckStatus::Pending { reason } if reason.contains("ada@example.dev")),
+            "{status:?}"
+        );
+    }
+
+    #[test]
+    fn empty_describes_the_demand() {
+        assert_eq!(Check::Empty.describe(), "empty");
     }
 }
