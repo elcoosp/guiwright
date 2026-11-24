@@ -76,6 +76,16 @@ fn record_archive(path: std::path::PathBuf) -> guiwright_trace::TraceFile {
                 value: None,
                 bounds: Some([16.0, 56.0, 136.0, 88.0]),
             },
+            // The deep-inspect total rule's honest case: a bounds-less node
+            // carries no badge (nothing to pin to a point, §13).
+            TreeNode {
+                id: 4,
+                parent: Some(1),
+                role: "Text".into(),
+                label: Some("Ready".into()),
+                value: None,
+                bounds: None,
+            },
         ],
         focus: Some(3),
     });
@@ -194,4 +204,124 @@ fn empty_run_opens_with_no_content() {
     assert_eq!(archive.events.len(), 0);
     let timeline = Timeline::from_archive(&archive);
     assert!(timeline.is_empty(), "no frames recorded");
+}
+
+// --- The replayable §13 overlay (deep-inspect mode) ------------------------
+//
+// Plan pins (docs/m8-inspect-highlight.md §4 "Remaining gaps" — the two
+// viewer bullets this milestone pays):
+//
+// * "Full-tree badges (the §13 'deep-inspect mode') land with the viewer;
+//   live sessions composite interactive-only badges."
+// * "The overlay does not ride `gwtrace/v1` archives yet (the plan is
+//   present-time state; replayable overlays belong to the viewer)."
+//
+// The acceptance shape: the viewer replays the §13 overlay plan from the
+// archived tree facts — every bounds-carrying node badged (full-tree, the
+// deep-inspect rule: non-interactive roles included), the recorded focus
+// outlined, and the emitted `trace.html` carrying the layer.
+#[test]
+fn the_deep_inspect_overlay_replays_from_the_archive() {
+    use guiwright_viewer::overlay;
+
+    let tmp = tempfile::tempdir().expect("tmp");
+    let path = tmp.path().join("trace.zip");
+    let _file = record_archive(path.clone());
+    let archive = TraceArchive::open(&path).expect("archive opens");
+    let timeline = Timeline::from_archive(&archive);
+
+    // Frame 3 resolves snapshot 1 (Window + Save): the deep-inspect plan
+    // badges EVERY node with bounds — the Window (non-interactive) role
+    // included, document order kept.
+    let plan = overlay::replay_plan_at(&timeline, 3).expect("plan at 3");
+    let texts: Vec<&str> = plan.badges.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        vec!["Window \u{201c}App\u{201d}", "Button \u{201c}Save\u{201d}"]
+    );
+    // The recorded focus is the outline (the archived stand-in for the
+    // live hover outline): node 2's rect.
+    assert_eq!(
+        plan.hover.expect("focus outline"),
+        guiwright_inspect::overlay::OverlayRect::new(16.0, 16.0, 136.0, 48.0)
+    );
+
+    // Frame 5 resolves snapshot 4 with id 2 removed: the greyed row earns
+    // no badge (it is not on screen), the bounds-less node neither —
+    // two badges, the new focus (id 3) outlined.
+    let plan = overlay::replay_plan_at(&timeline, 5).expect("plan at 5");
+    let texts: Vec<&str> = plan.badges.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        vec![
+            "Window \u{201c}App\u{201d}",
+            "Button \u{201c}Export\u{201d}"
+        ],
+        "the removed row and the bounds-less node earn no badge"
+    );
+    assert_eq!(
+        plan.hover.expect("new focus"),
+        guiwright_inspect::overlay::OverlayRect::new(16.0, 56.0, 136.0, 88.0)
+    );
+
+    // A frame before any snapshot answers honestly: no facts, no plan.
+    assert!(overlay::replay_plan_at(&timeline, 0).is_none());
+
+    // The emitted HTML carries the layer: per-snapshot overlay rows with
+    // badge geometry and the archive's resolution as the canvas —
+    // self-contained like the rest of the payload.
+    let html = guiwright_viewer::render_html(&archive, &timeline);
+    assert!(
+        html.contains(r#""overlays":"#),
+        "the layer rides: {html:.400}"
+    );
+    assert!(html.contains("Save All"), "badge text rides the payload");
+    assert!(
+        html.contains(r#""canvas":[1280.0,800.0]"#),
+        "the archive resolution"
+    );
+    assert!(!html.contains("src=\"http"), "still self-contained");
+
+    // The scrubber JS renders the layer (an SVG with the outline + badges).
+    assert!(html.contains("renderOverlay"), "the layer is scrubbed");
+}
+
+// The live half rides the same seam: a live capture's accumulated
+// snapshots replay the layer too (the live capture has no honest
+// resolution — the canvas falls back to the overlay's own extent, the
+// m18 record's honest-metadata rule).
+#[test]
+fn the_live_capture_replays_the_layer_too() {
+    use guiwright_proto::schema::{NodeKeyV1, SnapshotNodeV1};
+
+    let row = |id: u64, role: &str, name: &str, bounds: Option<[f64; 4]>| SnapshotNodeV1 {
+        key: NodeKeyV1::AccessKit {
+            tree: [0u8; 16],
+            node: id,
+        },
+        role: role.into(),
+        name: Some(name.into()),
+        value: None,
+        bounds,
+        children: 0,
+    };
+
+    let mut live = guiwright_viewer::LiveTimeline::new("live-overlay/0.1");
+    live.record_frame(2, 0x2);
+    live.record_snapshot(
+        &[
+            row(1, "Window", "W", Some([0.0, 0.0, 300.0, 200.0])),
+            row(2, "Button", "Save", Some([8.0, 8.0, 88.0, 40.0])),
+        ],
+        None,
+    );
+    let html = guiwright_viewer::render_live_html(&live);
+    assert!(html.contains(r#""overlays":"#), "the live layer rides");
+    assert!(html.contains("Button"), "the badge text");
+    // No resolution to speak of: the fallback canvas is computed, not
+    // invented.
+    assert!(
+        !html.contains(r#""canvas":[1280.0,800.0]"#),
+        "no archive resolution"
+    );
 }
