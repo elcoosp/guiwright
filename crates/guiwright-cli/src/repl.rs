@@ -254,37 +254,9 @@ impl Repl {
                     Err(err) => Err(format!("expectation failed: {err}")),
                 }
             }
-            "click" => self.simple_action(tokens, SemActionV1::Click).await,
-            "dblclick" => self.simple_action(tokens, SemActionV1::DoubleClick).await,
-            "hover" => self.simple_action(tokens, SemActionV1::Hover).await,
-            "focus" => self.simple_action(tokens, SemActionV1::Focus).await,
-            "blur" => self.simple_action(tokens, SemActionV1::Blur).await,
-            "check" => self.simple_action(tokens, SemActionV1::Check).await,
-            "uncheck" => self.simple_action(tokens, SemActionV1::Uncheck).await,
-            "fill" | "setvalue" => {
-                let text = one_argument(tokens, "fill <text>")?;
-                self.action(SemActionV1::SetValue { text }).await
-            }
-            "press" => {
-                let key = tokens
-                    .get(1)
-                    .ok_or("`press` needs a key — e.g. `press Enter`")?
-                    .clone();
-                let modifiers = tokens[2..].to_vec();
-                self.action(SemActionV1::Press { key, modifiers }).await
-            }
-            "scroll" => {
-                let dx = tokens
-                    .get(1)
-                    .ok_or("`scroll` needs dx and dy — e.g. `scroll 0 -120`")?
-                    .parse::<f64>()
-                    .map_err(|_| format!("`dx` is not a number: {}", tokens[1]))?;
-                let dy = tokens
-                    .get(2)
-                    .ok_or("`scroll` needs dx and dy — e.g. `scroll 0 -120`")?
-                    .parse::<f64>()
-                    .map_err(|_| format!("`dy` is not a number: {}", tokens[2]))?;
-                self.action(SemActionV1::Scroll { dx, dy }).await
+            "click" | "dblclick" | "hover" | "focus" | "blur" | "check" | "uncheck" | "fill"
+            | "setvalue" | "select" | "selectoption" | "scrollintoview" | "press" | "scroll" => {
+                self.action_row(tokens[0].as_str(), tokens).await
             }
             "clock" => self.clock_command(tokens).await,
             "mock" => self.mock_command(tokens).await,
@@ -1124,6 +1096,65 @@ impl Repl {
     }
 
     // --- actions (§8.4) -------------------------------------------------------
+
+    /// The semantic action rows (the §8.4 vocabulary at the prompt):
+    /// every verb parses its arguments here and rides the one `Action`
+    /// request shape. The m89 select row and the m90 scroll-into-view
+    /// row join the M4-era verbs — the same grammar rules (argument
+    /// usage strings, the no-argument refusal) apply verbatim.
+    async fn action_row(&mut self, verb: &str, tokens: &[String]) -> Result<Vec<Line>, String> {
+        match verb {
+            "click" => self.simple_action(tokens, SemActionV1::Click).await,
+            "dblclick" => self.simple_action(tokens, SemActionV1::DoubleClick).await,
+            "hover" => self.simple_action(tokens, SemActionV1::Hover).await,
+            "focus" => self.simple_action(tokens, SemActionV1::Focus).await,
+            "blur" => self.simple_action(tokens, SemActionV1::Blur).await,
+            "check" => self.simple_action(tokens, SemActionV1::Check).await,
+            "uncheck" => self.simple_action(tokens, SemActionV1::Uncheck).await,
+            "fill" | "setvalue" => {
+                let text = one_argument(tokens, "fill <text>")?;
+                self.action(SemActionV1::SetValue { text }).await
+            }
+            // The m89 select vocabulary at the prompt: the option rides
+            // by accessible name on the resolved node (the m61/m74
+            // prompt-row shape — the wire speaks, the REPL renders).
+            "select" | "selectoption" => {
+                let option = one_argument(tokens, "select <option>")?;
+                self.action(SemActionV1::SelectOption { option }).await
+            }
+            // The m90 scroll-into-view vocabulary at the prompt.
+            "scrollintoview" => {
+                self.simple_action(tokens, SemActionV1::ScrollIntoView)
+                    .await
+            }
+            "press" => {
+                let key = tokens
+                    .get(1)
+                    .ok_or("`press` needs a key — e.g. `press Enter`")?
+                    .clone();
+                let modifiers = tokens[2..].to_vec();
+                self.action(SemActionV1::Press { key, modifiers }).await
+            }
+            "scroll" => {
+                let dx = tokens
+                    .get(1)
+                    .ok_or("`scroll` needs dx and dy — e.g. `scroll 0 -120`")?
+                    .parse::<f64>()
+                    .map_err(|_| format!("`dx` is not a number: {}", tokens[1]))?;
+                let dy = tokens
+                    .get(2)
+                    .ok_or("`scroll` needs dx and dy — e.g. `scroll 0 -120`")?
+                    .parse::<f64>()
+                    .map_err(|_| format!("`dy` is not a number: {}", tokens[2]))?;
+                self.action(SemActionV1::Scroll { dx, dy }).await
+            }
+            // `execute` dispatches only the verbs listed above; the arm
+            // keeps the match total without a panic path.
+            other => Err(format!(
+                "unknown command `{other}` — type `help` for the command list"
+            )),
+        }
+    }
 
     async fn simple_action(
         &mut self,
