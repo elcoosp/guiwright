@@ -2,6 +2,13 @@
 //!
 //! * [`App`] — the embedded app: launch, locators, clock, mock seams,
 //!   screenshots, codegen.
+//! * [`remote`] — the kit-side "remote-to-self" handle (the m16
+//!   record's named follow-on): the whole remote stack in-process over
+//!   the duplex door, the typed [`ClientConn`] seam reachable from kit
+//!   tests — no socket, no filesystem.
+//! * [`live`] — the kit's live capture (the m18 record's named
+//!   follow-on): the M18 [`LiveFeed`]-shaped pump riding the
+//!   remote-to-self door, `render_live_html` written mid-run.
 //! * [`WindowHandle`] — the multi-window surface (§16 v0.4): aim one
 //!   window target, resolve inside its subtree.
 //! * [`expect`] — retry-until-timeout assertions (§16).
@@ -22,6 +29,8 @@
 pub mod app;
 pub mod context;
 pub mod input;
+pub mod live;
+pub mod remote;
 pub mod run;
 pub mod wait_for;
 pub mod window;
@@ -32,6 +41,8 @@ pub use guiwright_driver::{GestureOutcome, PointerButton, SeamRegistry};
 pub use guiwright_macros::{register_seams, seam, test};
 pub use guiwright_shot::baseline::{BlessMode, SnapshotOutcome};
 pub use input::{KeyboardHandle, MouseHandle};
+pub use live::{LiveCapture, LiveExport};
+pub use remote::{RemoteToSelf, RemoteToSelfReport};
 pub use run::TestOutcome;
 pub use wait_for::WaitState;
 pub use window::WindowHandle;
