@@ -37,7 +37,7 @@ fn published_schema_matches_the_wire_enums() {
     };
     assert_eq!(count("requests"), request_variants(), "requests table");
     assert_eq!(count("responses"), response_variants(), "responses table");
-    assert_eq!(count("events"), 3, "events table");
+    assert_eq!(count("events"), 4, "events table");
 
     let domains = &doc["domains"];
     assert_eq!(
@@ -203,16 +203,19 @@ fn inspect_variants() -> usize {
 
 fn subscribe_variants() -> usize {
     let probe = |s: SubscribeV1| match s {
-        SubscribeV1::On { .. } | SubscribeV1::Off => 2usize,
+        SubscribeV1::On { .. } | SubscribeV1::Off | SubscribeV1::Resume { .. } => 3usize,
     };
     probe(SubscribeV1::Off)
 }
 
 fn event_kind_variants() -> usize {
     let probe = |k: EventKindV1| match k {
-        EventKindV1::TreeChanged | EventKindV1::FramePresented | EventKindV1::Log => 3usize,
+        EventKindV1::TreeChanged
+        | EventKindV1::FramePresented
+        | EventKindV1::Log
+        | EventKindV1::StateChange => 4usize,
     };
-    probe(EventKindV1::Log)
+    probe(EventKindV1::StateChange)
 }
 
 fn checked_state_variants() -> usize {
