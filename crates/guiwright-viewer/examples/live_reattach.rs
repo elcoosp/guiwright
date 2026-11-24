@@ -141,8 +141,7 @@ fn main() {
             .expect("the reattach resumes past the cursor");
         let synced = feed.snapshot_count();
         println!(
-            "resume reattach: the position replayed — snapshots {} → {} (one auto-sync)",
-            snapshots_before, synced
+            "resume reattach: the position replayed — snapshots {snapshots_before} → {synced} (one auto-sync)"
         );
 
         // The kept timeline answers at the newest frame: the second
