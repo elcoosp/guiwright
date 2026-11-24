@@ -989,11 +989,12 @@ impl Repl {
     }
 
     /// The count-assertion row (m59 — the exact form and every
-    /// comparator, the inclusive pair included): the locator resolves
-    /// through the get vocabulary, the comparison rides the seam's
-    /// [`ClientConn::expect_count`] / [`expect_count_greater_than`] /
-    /// [`expect_count_less_than`] / [`expect_count_at_least`] /
-    /// [`expect_count_at_most`] rows, the found count renders as the
+    /// comparator, the inclusive pair and the range included): the
+    /// locator resolves through the get vocabulary, the comparison rides
+    /// the seam's [`ClientConn::expect_count`] /
+    /// [`expect_count_greater_than`] / [`expect_count_less_than`] /
+    /// [`expect_count_at_least`] / [`expect_count_at_most`] /
+    /// [`expect_count_between`] rows, the found count renders as the
     /// answer — `found 0` included (the m59 absence rule: an empty set
     /// is an answer, satisfying `is 0` and every at-most).
     async fn assert_count_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
@@ -1028,6 +1029,16 @@ impl Repl {
             CountSpec::AtMost(max) => {
                 self.conn
                     .expect_count_at_most(selector, max, Duration::from_millis(self.timeout_ms))
+                    .await
+            }
+            CountSpec::Between { min, max } => {
+                self.conn
+                    .expect_count_between(
+                        selector,
+                        min,
+                        max,
+                        Duration::from_millis(self.timeout_ms),
+                    )
                     .await
             }
         };
@@ -1931,8 +1942,10 @@ fn parse_ms(value: Option<&String>) -> Result<u64, String> {
 /// grammar (the survival rule's hint shape).
 const ASSERT_KINDS_USAGE: &str = "text | value | count | role | name | description | checked | enabled | focused (e.g. `assert count role Button is 4`)";
 
-/// The `assert count` expectation's forms (the m59 comparator shapes).
-const ASSERT_COUNT_USAGE: &str = "`is <N>` | `is > <N>` | `is < <N>` | `is >= <N>` | `is <= <N>`";
+/// The `assert count` expectation's forms (the m59 comparator shapes,
+/// the m25 widening's inclusive pair and range included).
+const ASSERT_COUNT_USAGE: &str =
+    "`is <N>` | `is > <N>` | `is < <N>` | `is >= <N>` | `is <= <N>` | `is between <A> and <B>`";
 
 /// The `assert checked` row's grammar (m74): the `is` separator plus the
 /// m68 four-way word the tri-state demand speaks — the kebab-cased
@@ -1982,13 +1995,20 @@ fn split_at_is(tail: &[String]) -> Result<(&[String], &[String]), String> {
 }
 
 /// The parsed `assert count` expectation (the m59 comparator shapes: the
-/// exact form and the one-sided pair).
+/// exact form, the one-sided pair, the m25 widening's inclusive pair and
+/// range).
 enum CountSpec {
     Exact(usize),
     GreaterThan(usize),
     LessThan(usize),
     AtLeast(usize),
     AtMost(usize),
+    Between {
+        /// The inclusive lower bound.
+        min: usize,
+        /// The inclusive upper bound.
+        max: usize,
+    },
 }
 
 /// The row-assertion answer line (m61/m62): the satisfying row rendered
@@ -2116,6 +2136,14 @@ fn parse_count_spec(spec: &[String]) -> Result<CountSpec, String> {
                 "unknown comparator `{other}` — `assert count` needs {ASSERT_COUNT_USAGE}"
             )),
         },
+        // The range form: `is between <A> and <B>` — both ends inclusive,
+        // the m25 widening's range shape spoken at the prompt.
+        [between, a, and_kw, b] if between == "between" && and_kw == "and" => {
+            Ok(CountSpec::Between {
+                min: count(a)?,
+                max: count(b)?,
+            })
+        }
         _ => Err(format!(
             "`assert count` needs a count — {ASSERT_COUNT_USAGE}"
         )),
