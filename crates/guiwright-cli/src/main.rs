@@ -40,7 +40,7 @@ fn run(argv: &[String]) -> i32 {
         }
     };
     match command {
-        Command::Repl { target } => run_repl(target),
+        Command::Repl { target, json } => run_repl(target, json),
         Command::Test {
             paths,
             target,
@@ -156,7 +156,13 @@ fn run_bless(dir: &std::path::Path, dry_run: bool) -> i32 {
 /// The interactive front-end: read lines, feed the core, print the
 /// outputs. The prompt goes to stderr (stdout stays parseable), and only
 /// when stdin is a TTY — `echo 'snapshot' | guiwright repl …` is clean.
-async fn repl_loop(target: guiwright_cli::ConnectTarget) -> i32 {
+///
+/// `json` selects the machine-readable output mode (the m11/m13 records'
+/// named CLI milestone): every step prints as **one JSON document** —
+/// the lines carry their kind word, the exit flag rides the document —
+/// and the error lines stay in the stream (stdout is the document
+/// channel; the banner and prompt remain stderr diagnostics).
+async fn repl_loop(target: guiwright_cli::ConnectTarget, json: bool) -> i32 {
     use std::io::BufRead;
     use std::io::IsTerminal;
 
@@ -190,10 +196,17 @@ async fn repl_loop(target: guiwright_cli::ConnectTarget) -> i32 {
             }
         };
         let outcome = repl.step(&line).await;
-        for line in &outcome.lines {
-            match line {
-                guiwright_cli::Line::Err(_) => eprintln!("{}", line.render()),
-                other => println!("{}", other.render()),
+        if json {
+            // One document per step, every line in it — failures are part
+            // of the conversation the machine consumer is parsing (the
+            // kind word distinguishes them, never a stderr escape).
+            println!("{}", outcome.to_json_string());
+        } else {
+            for line in &outcome.lines {
+                match line {
+                    guiwright_cli::Line::Err(_) => eprintln!("{}", line.render()),
+                    other => println!("{}", other.render()),
+                }
             }
         }
         if interactive && !outcome.exit {
@@ -210,9 +223,9 @@ async fn repl_loop(target: guiwright_cli::ConnectTarget) -> i32 {
 
 /// The `guiwright repl` front-end: one current-thread runtime, one
 /// sequential conversation (§16 REPL parity).
-fn run_repl(target: guiwright_cli::session::ConnectTarget) -> i32 {
+fn run_repl(target: guiwright_cli::session::ConnectTarget, json: bool) -> i32 {
     match current_thread_runtime() {
-        Ok(rt) => rt.block_on(repl_loop(target)),
+        Ok(rt) => rt.block_on(repl_loop(target, json)),
         Err(err) => {
             eprintln!("error: tokio runtime: {err}");
             1
