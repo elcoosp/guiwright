@@ -135,6 +135,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("hit_test_wire", crate::samples::hit_test_wire),
     ("drag_to", crate::samples::drag_to),
     ("locator_filter", crate::samples::locator_filter),
+    ("locator_has_filter", crate::samples::locator_has_filter),
     ("node_describe", crate::samples::node_describe),
     ("identity_assert", crate::samples::identity_assert),
     ("describe_all_wire", crate::samples::describe_all_wire),
