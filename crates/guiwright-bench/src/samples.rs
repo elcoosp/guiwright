@@ -1472,6 +1472,41 @@ pub fn editable_assert() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- Empty-assertion sample (§16 assertions row, m28's honest list) ----------
+
+/// §16 assertions row, m28's honest list: one `to_be_empty()` kit
+/// assertion on the empty fixture's factless region — the label/value
+/// composite assertion's steady-state cost: one strict resolve (auto-wait
+/// index path) plus the two node reads the `HasText` check makes (label +
+/// value) through the session's zero-polling wait. The assertion completes
+/// on the initial evaluation, so this is the floor every empty assertion
+/// adds on top of the `resolve_cached_index` row — the same shape as the
+/// M20 checked row and the M28 editable row (a composite check rides an
+/// existing waiter, no new machinery).
+pub fn empty_assert() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::with_empty();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("empty_assert", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        guiwright_kit::expect(app.role_locator(Role::GenericContainer))
+            .to_be_empty()
+            .expect("bench assertion holds");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 // --- Bulk text-read sample (§16 assertions row, M29) -------------------------
 
 /// §16 assertions row, M29 (the m26 record's open kit gap): one
