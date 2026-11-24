@@ -16,6 +16,10 @@ uuid = { version = "1.18.1", features = ["v4"] }
 serde.workspace = true
 postcard.workspace = true
 lz4_flex.workspace = true
+# The §15.6 shared-frame ring: the xxh3 slot digest (the §10
+# scene-digest hash family, reused verbatim); the positioned I/O edge is
+# std (`FileExt`), keeping the workspace's unsafe forbid intact.
+twox-hash.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
