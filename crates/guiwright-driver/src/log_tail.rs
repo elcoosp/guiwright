@@ -66,17 +66,50 @@ impl std::fmt::Debug for LogTail {
 /// The server creates its tap internally when
 /// [`crate::server::ServerOptions::log_tail`] is set (the
 /// [`LogTapLayer`] feeds it from `tracing`); the public pair exists so
-/// tests, benches and custom hosts can exercise the same mechanics.
+/// tests, benches and custom hosts can exercise the same mechanics. The
+/// app-fed form is [`LogTap::new`] + the
+/// [`crate::server::ServerOptions::log_tap`] knob: the app keeps the tap
+/// (or clones of it) and feeds its own records onto the session's stream.
 /// A record is one `logs.ndjson`-shape JSON line (the §12 vocabulary).
 pub struct LogTap {
+    /// The shared producer end: one channel sender + the drop counter
+    /// behind an `Arc`, so a tap, its clones and the session's
+    /// [`LogTapLayer`] all feed the same tail and report the same drops.
+    inner: Arc<TapInner>,
+    /// The consumer half this tap was born with ([`LogTap::new`]); the
+    /// session boot takes it once at spawn. Clones are born without one —
+    /// they are feeders, not spawners (the take-once rule the
+    /// [`crate::server::ServerOptions::log_tap`] refusal names).
+    rx: Option<Receiver<String>>,
+}
+
+/// The shared producer end of a [`LogTap`]: the channel's sender half
+/// plus the tail's drop counter, both shared through the tap's `Arc`.
+struct TapInner {
     tx: SyncSender<String>,
     dropped: Arc<AtomicU64>,
+}
+
+impl Clone for LogTap {
+    /// A clone shares the producer end and the drop counter — the
+    /// "cloneable" contract this module's header has always documented,
+    /// now true in the compiler — and carries no tail: only the tap
+    /// [`LogTap::new`] returned can spawn a session (a clone passed to
+    /// [`crate::server::ServerOptions::log_tap`] refuses at spawn with
+    /// the typed error).
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            rx: None,
+        }
+    }
 }
 
 impl std::fmt::Debug for LogTap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LogTap")
-            .field("dropped", &self.dropped.load(Ordering::Relaxed))
+            .field("dropped", &self.inner.dropped.load(Ordering::Relaxed))
+            .field("carries_tail", &self.rx.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -91,7 +124,13 @@ impl LogTail {
                 rx,
                 dropped: Arc::clone(&dropped),
             },
-            LogTap { tx, dropped },
+            LogTap {
+                inner: Arc::new(TapInner {
+                    tx,
+                    dropped: Arc::clone(&dropped),
+                }),
+                rx: None,
+            },
         )
     }
 
@@ -114,10 +153,10 @@ impl LogTail {
     }
 }
 
-impl LogTap {
+impl TapInner {
     /// Push one record onto the tail — lossy by contract: a full tail
     /// drops the incoming record and counts it, never blocks (§15.6).
-    pub fn send(&self, record: impl Into<String>) {
+    fn send(&self, record: impl Into<String>) {
         match self.tx.try_send(record.into()) {
             Err(TrySendError::Full(_)) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -128,10 +167,48 @@ impl LogTap {
             Ok(()) | Err(TrySendError::Disconnected(_)) => {}
         }
     }
+}
+
+impl LogTap {
+    /// A standalone tap over a fresh bounded channel — the app-fed form
+    /// (the m14 record's named knob): the app keeps the tap (or clones)
+    /// and feeds its own records through [`LogTap::send`], and the
+    /// session adopts the paired tail at spawn via
+    /// [`crate::server::ServerOptions::log_tap`]. The server-created
+    /// form stays [`LogTail::new`].
+    pub fn new(capacity: usize) -> Self {
+        let (tx, rx) = sync_channel(capacity);
+        Self {
+            inner: Arc::new(TapInner {
+                tx,
+                dropped: Arc::new(AtomicU64::new(0)),
+            }),
+            rx: Some(rx),
+        }
+    }
+
+    /// The consumer half, taken once by the session boot (the §7/M12
+    /// single-owner discipline: the tail is drained at the publish
+    /// points, never cloned around). `None` after the first take — and
+    /// clones are born without a tail, so only the tap [`LogTap::new`]
+    /// returned can spawn a session.
+    pub(crate) fn take_tail(&mut self) -> Option<LogTail> {
+        let rx = self.rx.take()?;
+        Some(LogTail {
+            rx,
+            dropped: Arc::clone(&self.inner.dropped),
+        })
+    }
+
+    /// Push one record onto the tail — lossy by contract: a full tail
+    /// drops the incoming record and counts it, never blocks (§15.6).
+    pub fn send(&self, record: impl Into<String>) {
+        self.inner.send(record);
+    }
 
     /// Records dropped by a full tail since spawn.
     pub fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
+        self.inner.dropped.load(Ordering::Relaxed)
     }
 }
 
@@ -146,7 +223,11 @@ impl LogTap {
 /// `record_str`/`record_debug` split: strings land raw, `Debug` values
 /// keep their quoting.
 pub(crate) struct LogTapLayer {
-    tap: LogTap,
+    /// The shared producer end only: the layer sends records, and the
+    /// dispatcher's `Send + Sync` bound wants a `Sync` handle — the tap's
+    /// `Arc`-shared inner (sender + drop counter) is both, the borrowed
+    /// receiver half is not (and the session boot has already taken it).
+    tap: Arc<TapInner>,
     start: Instant,
     process_id: u32,
 }
@@ -154,7 +235,7 @@ pub(crate) struct LogTapLayer {
 impl LogTapLayer {
     pub(crate) fn new(tap: LogTap) -> Self {
         Self {
-            tap,
+            tap: Arc::clone(&tap.inner),
             start: Instant::now(),
             process_id: std::process::id(),
         }
@@ -335,5 +416,39 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&records[0]).expect("one JSON line per record");
         assert_eq!(parsed["count"], "3", "Debug fields land quoted: {parsed}");
+    }
+
+    // The app-fed form (the m14 record's named knob): `LogTap::new` owns
+    // the paired tail, clones share the producer end and the drop
+    // counter, and the session boot takes the tail once.
+    #[test]
+    fn a_standalone_tap_serves_its_tail_and_shares_it_with_clones() {
+        let mut tap = LogTap::new(4);
+        let feeder = tap.clone();
+        feeder.send("first");
+        feeder.send("second");
+
+        let tail = tap.take_tail().expect("the born-with tail leaves once");
+        assert_eq!(tail.drain(), ["first", "second"]);
+
+        // The clone feeds the same channel the adopted tail drains, and
+        // both ends report the same drop counter.
+        for i in 0..6 {
+            feeder.send(format!("record {i}"));
+        }
+        let drained = tail.drain();
+        assert_eq!(drained.len(), 4, "the bound holds");
+        assert_eq!(tail.dropped(), 2, "every drop is counted");
+        assert_eq!(feeder.dropped(), 2, "clones report the shared counter");
+
+        // Take-once: the tail is gone after the first take.
+        assert!(
+            tap.take_tail().is_none(),
+            "the tail leaves the tap exactly once"
+        );
+        assert!(
+            LogTap::new(4).clone().take_tail().is_none(),
+            "clones are born without a tail — feeders, not spawners"
+        );
     }
 }
