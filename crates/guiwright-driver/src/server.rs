@@ -24,10 +24,11 @@ use tracing_subscriber::layer::SubscriberExt;
 use guiwright_proto::GwpError;
 use guiwright_proto::duplex::{DuplexConnect, DuplexListener};
 use guiwright_proto::schema::{
-    AdapterInfoV1, CapsV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
-    DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1, GwpEvent, InspectV1, MockV1,
-    NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1,
-    SemActionV1, SnapshotV1, SubscribeV1, VideoV1, WindowInfoV1, WindowV1,
+    AdapterInfoV1, CapsV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1,
+    DescribedIdentityStateV1, DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
+    GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1,
+    ResumeCursorV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, VideoV1,
+    WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -842,6 +843,15 @@ fn handle_request<A: FrameworkAdapter>(
                 message: "subscribe request arrived without an event channel".into(),
             },
         },
+        RequestV1::Subscribe(SubscribeV1::Resume { kinds, cursor }) => match events {
+            Some((conn_id, tx)) => {
+                subscribe_resume(session, hub, conn_id, tx, kinds, cursor, tail_enabled)
+            }
+            None => ResponseV1::Error {
+                code: ErrorCode::Internal,
+                message: "subscribe request arrived without an event channel".into(),
+            },
+        },
         RequestV1::Subscribe(SubscribeV1::Off) => {
             if let Some((conn_id, _tx)) = events {
                 hub.unsubscribe(conn_id);
@@ -884,7 +894,33 @@ fn handle_request<A: FrameworkAdapter>(
             action,
             force,
             timeout_ms,
-        } => action_response(session, node, generation, &action, force, timeout_ms),
+        } => {
+            // The m20 record's named event (§5 honest list): the check
+            // vocabulary's state changes ride the subscription instead of
+            // a tree poll — the pre-action fact, the action, the
+            // post-action fact; a real move publishes `StateChange`.
+            let is_check = matches!(action, SemActionV1::Check | SemActionV1::Uncheck);
+            let before = if is_check {
+                checked_fact(session, &node)
+            } else {
+                None
+            };
+            let acted_on = is_check.then(|| node.clone());
+            let response = action_response(session, node, generation, &action, force, timeout_ms);
+            if let (Some(before), Some(acted_on), ResponseV1::ActionDone { .. }) =
+                (before, acted_on, &response)
+            {
+                if let Some(checked) = checked_fact(session, &acted_on) {
+                    if checked != before {
+                        hub.publish(&[GwpEvent::V1(EventV1::StateChange {
+                            node: acted_on,
+                            checked,
+                        })]);
+                    }
+                }
+            }
+            response
+        }
         RequestV1::Input { events } => {
             // Raw input over the wire (§9, M7): the connection's active
             // window target steers the coordinates (the M6 handoff —
@@ -1585,6 +1621,70 @@ fn subscribe_on(
     hub.subscribe(Subscriber::new(conn_id, deduped.clone(), tx));
     tracing::debug!(subscriber = conn_id, "event subscription registered");
     ResponseV1::Subscribed { kinds: deduped }
+}
+
+/// The resume form (§7 resume vocabulary, the m18 record's named
+/// follow-on): register the subscription exactly like `Subscribe::On`,
+/// then replay the *position* past the cursor — the coalesced
+/// current-seq notification per subscribed seq topic, pushed into this
+/// connection's queue ahead of the ack so `next_event` yields the replay
+/// from the interleaved buffer before any live event. A cursor already
+/// naming the current position replays nothing (the reconnecting viewer
+/// skips the re-dump it used to pay unconditionally); a cursor from the
+/// future also replays nothing — the next live change tells the client
+/// where the session stands. The replay rides the ack's honored kinds
+/// (a filtered kind never leaks its position), and the `Log` kind has no
+/// seq to resume from — the tail is a live tap, never a replay buffer
+/// (the log-tail rule `publish_if_advanced` carries).
+fn subscribe_resume<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    hub: &mut EventHub,
+    conn_id: u64,
+    tx: mpsc::Sender<GwpEvent>,
+    kinds: Vec<EventKindV1>,
+    cursor: ResumeCursorV1,
+    tail_enabled: bool,
+) -> ResponseV1 {
+    let response = subscribe_on(hub, conn_id, tx.clone(), kinds, tail_enabled);
+    let ResponseV1::Subscribed { kinds: honored } = &response else {
+        return response;
+    };
+    let mut replay = Vec::new();
+    if honored.contains(&EventKindV1::TreeChanged) && session.tree_seq() > cursor.tree_seq {
+        replay.push(GwpEvent::V1(EventV1::TreeChanged {
+            seq: session.tree_seq(),
+        }));
+    }
+    if honored.contains(&EventKindV1::FramePresented) && session.frame_seq() > cursor.frame_seq {
+        if let Some(stamp) = session.last_presented() {
+            replay.push(GwpEvent::V1(EventV1::FramePresented {
+                seq: stamp.seq,
+                hash: stamp.hash,
+            }));
+        }
+    }
+    // At most two events into a fresh bounded queue (§15.6): a full queue
+    // here means the client vanished mid-handshake — the publish path's
+    // drop-and-log rule, never a blocked session thread.
+    for event in replay {
+        if tx.try_send(event).is_err() {
+            tracing::debug!(subscriber = conn_id, "subscriber went away mid-resume");
+        }
+    }
+    response
+}
+
+/// The node's checked fact as the tree stands (`None` when the node is
+/// gone) — the pre/post read pair the m20 state-change event compares.
+fn checked_fact<A: FrameworkAdapter>(
+    session: &Session<A>,
+    node: &NodeKeyV1,
+) -> Option<CheckedStateV1> {
+    let key: NodeKey = node.clone().into();
+    session
+        .tree()
+        .node(&key)
+        .map(|n| n.toggled().map_or(CheckedStateV1::NotCheckable, Into::into))
 }
 
 fn error_response(err: &CoreError) -> ResponseV1 {
