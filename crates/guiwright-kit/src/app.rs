@@ -301,6 +301,69 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
         Ok(outcome)
     }
 
+    /// `locator.select_option(option)` (§16 actions row's `select` — the
+    /// m19 record's named §16 follow-on, m89): the Playwright
+    /// `locator.selectOption(...)` shape. The option rides by accessible
+    /// name — the same string a text locator matches — through the same
+    /// actionability gate, auto-wait and codegen recording every other
+    /// locator action takes. The adapter translates per framework (§8.4):
+    /// a11y-first stacks take the option as the choice widget's value,
+    /// pixel-first stacks resolve the option row and click it; adapters
+    /// whose framework cannot express the selection report the typed
+    /// `Unsupported` the other vocabulary carries.
+    pub fn select_option(
+        self,
+        option: &str,
+    ) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(
+                &selector,
+                SemAction::SelectOption {
+                    option: option.to_string(),
+                },
+                &ActionOpts::default(),
+            )
+        })?;
+        app.record_scoped_action("select_option", &recorded, Some(option), window.as_deref());
+        Ok(outcome)
+    }
+
+    /// `locator.scroll_into_view_if_needed()` (§16 actions row's
+    /// scroll-into-view — the m19 record's named §16 follow-on, m90):
+    /// the Playwright `locator.scrollIntoViewIfNeeded()` shape. The
+    /// a11y-first honest form: the request rides the framework's own
+    /// `ScrollIntoView` semantic where the stack carries it (egui,
+    /// masonry and freya honor AccessKit's native action), through the
+    /// same actionability gate, auto-wait and codegen recording every
+    /// other locator action takes; adapters without the dispatch report
+    /// the typed `Unsupported` the other vocabulary carries.
+    pub fn scroll_into_view_if_needed(
+        self,
+    ) -> Result<guiwright_driver::adapter::ActionOutcome, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let recorded = selector.clone();
+        let outcome = app.run_scoped(window.as_deref(), move |session| {
+            session.perform_action(&selector, SemAction::ScrollIntoView, &ActionOpts::default())
+        })?;
+        app.record_scoped_action(
+            "scroll_into_view_if_needed",
+            &recorded,
+            None,
+            window.as_deref(),
+        );
+        Ok(outcome)
+    }
+
     /// `locator.drag_to(target)` (§16 actions row — the m19 parity
     /// stream's named drag item, M33): the Playwright
     /// `locator.dragTo(target)` shape, adapted to the kit's
