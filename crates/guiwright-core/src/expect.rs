@@ -216,6 +216,16 @@ impl ExpectBuilder {
         self.count_expectation(CountMatch::AtMost(max))
     }
 
+    /// The range count comparator (m25's honest-list widening, the
+    /// range shape the same honest list names beside the inclusive
+    /// pair): satisfied while `min` **through** `max` nodes match, both
+    /// ends inclusive. Same waiter, same waitable mismatch, same error
+    /// shape (`count 3..=5 — …`). Under [`Self::not`] the decorator
+    /// inverts the comparison.
+    pub fn to_have_count_between(self, min: usize, max: usize) -> Expectation {
+        self.count_expectation(CountMatch::Between { min, max })
+    }
+
     /// The shared count-assertion assembly (M25): the M22 exact form and
     /// the comparators differ only in the [`CountMatch`] they hand the
     /// waiter (and the [`NotWaiter`] wrapper under `not()`); the exact
@@ -764,6 +774,44 @@ mod tests {
             "{}",
             err.to_string()
         );
+    }
+
+    // --- The range comparator (m25's honest-list widening) -----------------
+    //
+    // Plan pin (docs/m25-count-comparators.md §5 "Remaining gaps"): the
+    // range/between shape rides "the same `CountMatch`" beside the
+    // inclusive pair — one builder assembly, no new machinery, the same
+    // error shape.
+
+    #[test]
+    fn to_have_count_between_passes_within_the_range() {
+        let tree = tree_with_fixture();
+        expect(Selector::role(Role::Button))
+            .to_have_count_between(3, 5)
+            .check_now(&tree)
+            .expect("4 buttons hold 3..=5");
+        // Both ends hold on the bound — the inclusive range is the point.
+        expect(Selector::role(Role::Button))
+            .to_have_count_between(4, 4)
+            .check_now(&tree)
+            .expect("4 buttons hold 4..=4");
+        // The empty set holds a zero-bottomed range.
+        expect(Selector::role_named(Role::Button, "Ghost"))
+            .to_have_count_between(0, 2)
+            .check_now(&tree)
+            .expect("0 ghosts hold 0..=2");
+    }
+
+    #[test]
+    fn a_between_timeout_names_the_range() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count_between(5, 9)
+            .check_now(&tree)
+            .expect_err("4 buttons never reach 5..=9");
+        let msg = err.to_string();
+        assert!(msg.contains("count 5..=9"), "{msg}");
+        assert!(msg.contains("found 4"), "{msg}");
     }
 
     #[test]
