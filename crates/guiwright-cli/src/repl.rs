@@ -48,6 +48,33 @@ impl Line {
             Line::Err(s) => format!("error: {s}"),
         }
     }
+
+    /// The line's kind word in the machine-readable mode (the m11/m13
+    /// records' `--json` output mode): `ok` / `info` / `warn` / `err` —
+    /// the same four faces the text mode distinguishes by prefix.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Line::Ok(_) => "ok",
+            Line::Info(_) => "info",
+            Line::Warn(_) => "warn",
+            Line::Err(_) => "err",
+        }
+    }
+
+    /// The raw text, without the text mode's `error: `/`warning: `
+    /// decoration — the machine document carries the kind word instead
+    /// (the decoration stays text-mode only).
+    pub fn raw(&self) -> &str {
+        match self {
+            Line::Ok(s) | Line::Info(s) | Line::Warn(s) | Line::Err(s) => s,
+        }
+    }
+
+    /// One line as its JSON row (`{"kind": …, "text": …}`) — the row the
+    /// machine-readable mode's document carries.
+    fn json_value(&self) -> serde_json::Value {
+        serde_json::json!({ "kind": self.kind(), "text": self.raw() })
+    }
 }
 
 /// A resolved node handle held by the REPL — the "current node" follow-up
@@ -67,6 +94,38 @@ pub struct StepOutcome {
     pub lines: Vec<Line>,
     /// `bye`/`exit`/`quit` — the front-end should close the session.
     pub exit: bool,
+}
+
+impl StepOutcome {
+    /// The step as its machine-readable document (the m11/m13 records'
+    /// named CLI milestone — docs/m11-full-tree-snapshot.md §5: *"a
+    /// `--json` output mode for machine consumers rides the CLI's
+    /// output-formatting milestones"*): `{"lines": [{"kind": "ok",
+    /// "text": …}, …], "exit": false}`. The kind word carries what the
+    /// text mode prefixes (`error: `/`warning: `), the raw text stays
+    /// undecorated, and the exit flag rides the document — one parseable
+    /// value per step, the same lines the interactive front-end renders.
+    pub fn json_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "lines": self.lines.iter().map(Line::json_value).collect::<Vec<_>>(),
+            "exit": self.exit,
+        })
+    }
+
+    /// [`StepOutcome::json_value`] as its serialized form — one JSON
+    /// document per step, no trailing newline (the front-end's print
+    /// adds one; a machine consumer parses the string directly).
+    pub fn to_json_string(&self) -> String {
+        serde_json::to_string(&self.json_value()).unwrap_or_else(|_| {
+            // A `serde_json::Value` document cannot fail to serialize
+            // (numbers are finite, keys are strings) — the fallback
+            // keeps the front-end's print total without a panic path.
+            format!(
+                "{{\"lines\":[],\"exit\":{},\"error\":\"serialization failed\"}}",
+                self.exit
+            )
+        })
+    }
 }
 
 /// The live session debugger. Connect through [`Repl::connect`], feed
