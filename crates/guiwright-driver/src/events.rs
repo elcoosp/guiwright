@@ -103,6 +103,7 @@ fn event_matches(event: &GwpEvent, kind: EventKindV1) -> bool {
         guiwright_proto::schema::EventV1::TreeChanged { .. } => EventKindV1::TreeChanged,
         guiwright_proto::schema::EventV1::FramePresented { .. } => EventKindV1::FramePresented,
         guiwright_proto::schema::EventV1::Log { .. } => EventKindV1::Log,
+        guiwright_proto::schema::EventV1::StateChange { .. } => EventKindV1::StateChange,
     };
     event_kind == kind
 }
