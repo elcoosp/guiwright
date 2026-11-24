@@ -61,6 +61,23 @@ pub enum KitError {
         "input_value: {0} carries no value fact (the getter reads the value fact only — the label never answers)"
     )]
     NoValue(String),
+    /// The remote-to-self door's wire refusals ([`crate::remote`]):
+    /// every typed `GwpError` the seam answers — the strict-mode
+    /// rejection, the act-time `Timeout` naming the stuck check, the
+    /// stale-generation/unknown-node boundary errors — surfaced as the
+    /// kit's own error, never stringly-flattened.
+    #[error(transparent)]
+    Wire(#[from] guiwright_proto::GwpError),
+    /// The live capture's viewer-side refusals ([`crate::live`]): the
+    /// M18 feed's attach/pump errors that are not wire errors (the
+    /// archive half's own surfaces), surfaced typed.
+    #[error(transparent)]
+    Viewer(#[from] guiwright_viewer::ViewerError),
+    /// The remote-to-self door's own I/O ([`crate::remote`], the pump
+    /// thread's runtime, the capture file write): the kit's honest
+    /// std-io surface, surfaced typed, never flattened into a string.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 /// A locator (§6.3 `Locator = Selector + retry policy`): every action
@@ -1237,17 +1254,16 @@ impl<A: FrameworkAdapter> App<A> {
                 "no trace archive: finish() has not run or tracing was never enabled".into(),
             ));
         };
-        let archive = guiwright_viewer::TraceArchive::open(&trace_path)
-            .map_err(|e| KitError::Trace(e.to_string()))?;
+        let archive = guiwright_viewer::TraceArchive::open(&trace_path)?;
         let timeline = guiwright_viewer::Timeline::from_archive(&archive);
         let html = guiwright_viewer::render_html(&archive, &timeline);
         let out = out_path.into();
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| KitError::Trace(format!("{}: {e}", parent.display())))?;
+                .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", parent.display())))?;
         }
         std::fs::write(&out, html)
-            .map_err(|e| KitError::Trace(format!("{}: {e}", out.display())))?;
+            .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", out.display())))?;
         Ok(out)
     }
 
