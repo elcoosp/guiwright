@@ -53,6 +53,14 @@ pub enum KitError {
     Trace(String),
     #[error("mock error: {0}")]
     Mock(String),
+    /// [`Locator::input_value`] on a node that carries no value fact —
+    /// the getter reads the value fact only (the label never answers,
+    /// never a silent fallback); the message names the locator the
+    /// strict resolve answered.
+    #[error(
+        "input_value: {0} carries no value fact (the getter reads the value fact only — the label never answers)"
+    )]
+    NoValue(String),
 }
 
 /// A locator (§6.3 `Locator = Selector + retry policy`): every action
@@ -504,6 +512,76 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
             let resolved = session.resolve(&selector)?;
             session.describe_state(&resolved.key, resolved.generation)
         })?)
+    }
+
+    /// `locator.inner_text()` (§16 actions row — the m19 record's
+    /// remaining-gaps list's content getter, cashed last of that list:
+    /// `drag_to` rode m33, `wait_for(state)` m21, `select_option` m89
+    /// and `scroll_into_view_if_needed` m90): resolve the locator (the
+    /// [`Self::describe`] surface — strict mode, the auto-wait, the
+    /// window pin) and read the match's text — the accessible label
+    /// first, then the value (the `HasText` check's source order), the
+    /// same derivation [`Self::all_text_contents`] applies per set row,
+    /// now at single-node width. Where [`Self::input_value`] reads what
+    /// the form *carries*, this reads what the text locators *match* —
+    /// the fixture's Email input reads `Email` here and
+    /// `ada@example.dev` there, and the two reads can never silently
+    /// agree on the wrong datum. A node with neither fact reads the
+    /// empty string (the m29 totality rule at single-node width). A
+    /// read, not an action: like [`Self::describe`], nothing is
+    /// recorded — no codegen line, no trace action (the trace's tree
+    /// snapshots carry the same facts).
+    ///
+    /// The a11y substrate carries no arbitrary attribute vocabulary, so
+    /// the m19 list's third getter (`get_attribute`) stays the honest
+    /// cap: the facts DOM attributes feed are the identity reads'
+    /// name/value/description, which [`Self::describe`] already
+    /// answers.
+    pub fn inner_text(self) -> Result<String, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        Ok(app.run_scoped(window.as_deref(), move |session| {
+            let resolved = session.resolve(&selector)?;
+            let tree = session.tree();
+            Ok(tree
+                .node(&resolved.key)
+                .and_then(|n| n.label().or_else(|| n.value()))
+                .unwrap_or_default()
+                .clone())
+        })?)
+    }
+
+    /// `locator.input_value()` (§16 actions row — the m19 record's
+    /// remaining-gaps list's content getter, beside
+    /// [`Self::inner_text`]): resolve the locator (the [`Self::describe`]
+    /// surface — strict mode, the auto-wait, the window pin) and read
+    /// what the form *carries* — the value fact only, never the label
+    /// fallback ([`Self::all_values`]'s flip is the bulk read's shape,
+    /// not the single-node getter's; a button's name is not a value).
+    ///
+    /// The refusal is the typed one: a node that carries no value fact
+    /// ([`KitError::NoValue`]) names the locator the strict resolve
+    /// answered — Playwright's `inputValue()` throws for non-form
+    /// elements, and a silent empty string would read as "the form
+    /// carries nothing", which the tree's missing fact never claimed.
+    /// A read, not an action: nothing is recorded, the
+    /// [`Self::inner_text`] rule unchanged.
+    pub fn input_value(self) -> Result<String, KitError> {
+        let Self {
+            app,
+            selector,
+            window,
+        } = self;
+        let locator = selector.render();
+        let value = app.run_scoped(window.as_deref(), move |session| {
+            let resolved = session.resolve(&selector)?;
+            let tree = session.tree();
+            Ok(tree.node(&resolved.key).and_then(|n| n.value()))
+        })?;
+        value.map_or_else(|| Err(KitError::NoValue(locator)), |v| Ok(v.clone()))
     }
 
     /// `locator.count()` — how many nodes match right now (§16
