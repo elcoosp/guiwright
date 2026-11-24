@@ -130,6 +130,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("wire_window_targets", crate::samples::wire_window_targets),
     ("resolve_all_wire", crate::samples::resolve_all_wire),
     ("all_values", crate::samples::all_values),
+    ("content_getter_read", crate::samples::content_getter_read),
     ("hit_test_wire", crate::samples::hit_test_wire),
     ("drag_to", crate::samples::drag_to),
     ("locator_filter", crate::samples::locator_filter),
