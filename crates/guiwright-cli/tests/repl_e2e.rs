@@ -1456,6 +1456,16 @@ async fn assert_rows_satisfied_on_entry(repl: &mut Repl) {
         rendered(&repl.step("assert count role Button is < 5").await),
         vec!["assert count — found 4 (Button)"],
     );
+    // The inclusive comparators (m25's honest-list widening): the bound
+    // itself holds, the grammar speaking `>=`/`<=` like the kit's forms.
+    assert_eq!(
+        rendered(&repl.step("assert count role Button is >= 4").await),
+        vec!["assert count — found 4 (Button)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("assert count role Button is <= 5").await),
+        vec!["assert count — found 4 (Button)"],
+    );
 
     // Absence is an answer for counts (the m59 parity rule): an empty
     // set satisfies `is 0` — unlike the content pair's pending.
