@@ -188,6 +188,74 @@ fn descendant_chain_resolves_through_hierarchy() {
     assert_eq!(node_id(resolved.key), f.save_button);
 }
 
+// --- the `has` filter (the m34 record's named follow-on) --------------------
+
+#[test]
+fn has_filter_keeps_matches_whose_subtree_fits() {
+    let (svc, f) = tree();
+    // The group's subtree holds buttons: kept. The fixture ids are
+    // window(0) > group(1) > {Save(2), Cancel(3), label(4), input(5),
+    // Invisible(6), Confirm(7)}.
+    let kept = svc
+        .resolve_all(&Selector::role(Role::Group).has(Selector::role(Role::Button)))
+        .expect("the group keeps");
+    assert_eq!(kept.len(), 1);
+    assert_eq!(node_id(kept[0].key).0, 1);
+    // A name constraint the subtree cannot answer drops the match, and
+    // an empty `has` answer is the valid snapshot read (no error).
+    let empty = svc
+        .resolve_all(&Selector::role(Role::Group).has(Selector::role_named(Role::Button, "Export")))
+        .expect("empty set read");
+    assert!(empty.is_empty(), "{:?}", empty.len());
+    // The `save_button` fixture id grounds the positive read: the
+    // group's subtree holds Save too.
+    let _ = f.save_button;
+}
+
+#[test]
+fn has_matches_the_subtree_including_the_node_itself() {
+    let (svc, _) = tree();
+    // A leaf's subtree is itself: every button keeps itself, document
+    // order (2, 3, 6, 7 — hidden and disabled are tree matches, the
+    // visibility gate is the waitable face).
+    let kept = svc
+        .resolve_all(&Selector::role(Role::Button).has(Selector::role(Role::Button)))
+        .expect("the buttons keep themselves");
+    let ids: Vec<_> = kept.iter().map(|r| node_id(r.key).0).collect();
+    assert_eq!(ids, vec![2, 3, 6, 7]);
+    // The label's subtree has no button: dropped.
+    let dropped = svc
+        .resolve_all(&Selector::label("Welcome, Ada").has(Selector::role(Role::Button)))
+        .expect("the label drops");
+    assert!(dropped.is_empty());
+}
+
+#[test]
+fn has_is_not_the_descendant_chain() {
+    let (svc, _) = tree();
+    // The semantic distinction the m34 note named: the All chain narrows
+    // to the DESCENDANT's rows, `has` keeps the ANCESTOR's.
+    let chained = svc
+        .resolve_all(&Selector::role(Role::Group).then_descendant(Selector::role(Role::Button)))
+        .expect("the chain answers buttons");
+    let chained_ids: Vec<_> = chained.iter().map(|r| node_id(r.key).0).collect();
+    assert_eq!(chained_ids, vec![2, 3, 6, 7]);
+
+    let filtered = svc
+        .resolve_all(&Selector::role(Role::Group).has(Selector::role(Role::Button)))
+        .expect("has answers the ancestor");
+    let filtered_ids: Vec<_> = filtered.iter().map(|r| node_id(r.key).0).collect();
+    assert_eq!(filtered_ids, vec![1]);
+    // The render names the positive filter the way has_not names the
+    // inverted one.
+    assert_eq!(
+        Selector::role(Role::Group)
+            .has(Selector::role(Role::Button))
+            .render(),
+        "getByRole(Group).filter(has=getByRole(Button))"
+    );
+}
+
 #[test]
 fn rename_updates_indexes() {
     let fixture = Fixture::buttons();
