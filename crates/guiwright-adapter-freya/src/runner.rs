@@ -325,8 +325,11 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
             .ok_or_else(|| AdapterError::Internal(format!("unknown node {node:?}")))?;
         let detail = match action {
             // Native semantic path (§4.3): focus moves through the
-            // accessibility tree's own handling.
-            SemAction::Focus | SemAction::Blur => self.seam.handle_action(freya_id, &action)?,
+            // accessibility tree's own handling, and the tree answers
+            // ScrollIntoView natively too (§4.3 — m90).
+            SemAction::Focus | SemAction::Blur | SemAction::ScrollIntoView => {
+                self.seam.handle_action(freya_id, &action)?
+            }
             SemAction::Click | SemAction::Check | SemAction::Uncheck => {
                 let (x, y) = self.center_of(freya_id)?;
                 self.click_at(x, y)?;
@@ -341,6 +344,13 @@ impl<S: TestingSeam + 'static> FrameworkAdapter for FreyaAdapter<S> {
             SemAction::SetValue { text } => {
                 self.fill_at(freya_id, &text)?;
                 format!("filled {text:?}")
+            }
+            // §8.4 select vocabulary (m89): the option rides the same
+            // fill path the framework's editable widgets take — the
+            // choice widget's value becomes the option.
+            SemAction::SelectOption { option } => {
+                self.fill_at(freya_id, &option)?;
+                format!("selected {option:?}")
             }
             SemAction::Hover => {
                 let (x, y) = self.center_of(freya_id)?;
@@ -677,6 +687,10 @@ impl<T: 'static> TestingSeam for FreyaTestingHarness<T> {
         let (accesskit_action, label) = match action {
             SemAction::Focus => (accesskit::Action::Focus, "focus"),
             SemAction::Blur => (accesskit::Action::Blur, "blur"),
+            // The m90 scroll-into-view vocabulary: the accessibility
+            // tree handles the native action (§4.3 — scroll into the
+            // synthetic wheel the handle_action route drives).
+            SemAction::ScrollIntoView => (accesskit::Action::ScrollIntoView, "scroll-into-view"),
             // The rest rides the native `EventName::AccessibilityAction`
             // route (§4.3) — elements that declare the a11y action fire.
             _ => (accesskit::Action::Click, "accessibility-action"),
