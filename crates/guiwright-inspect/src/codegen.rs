@@ -129,10 +129,12 @@ impl CodegenRecorder {
         };
         // M4 (§13 remote codegen): `fill` and `press` carry their payload
         // as the recorder argument — the emitted call reads like the kit
-        // API (`locator.fill("…")`, `locator.press("Enter")`).
+        // API (`locator.fill("…")`, `locator.press("Enter")`). The m89
+        // select vocabulary rides the same argument shape.
         let call = match (action, argument) {
             ("fill", Some(arg)) => format!("{locator}.fill({arg:?});"),
             ("press", Some(arg)) => format!("{locator}.press({arg:?});"),
+            ("select_option", Some(arg)) => format!("{locator}.select_option({arg:?});"),
             _ => format!("{locator}.{action}();"),
         };
         let line = RecordedLine {
