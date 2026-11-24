@@ -80,6 +80,11 @@ pub struct ServerOptions {
     /// keep the process subscriber, and the tail is a bounded live tap
     /// (§15.6), never a replay buffer.
     pub log_tail: bool,
+    /// The §15.6 shared-frame ring: the path a same-host client opens to
+    /// read presented frames outside the door (zero-copy-pixels posture).
+    /// When `None`, the `GUIWRIGHT_FRAME_RING` env var names the path
+    /// instead (the remote-mode default, like `GUIWRIGHT_VIDEO_DIR`).
+    pub frame_ring: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for ServerOptions {
@@ -87,6 +92,7 @@ impl std::fmt::Debug for ServerOptions {
         f.debug_struct("ServerOptions")
             .field("seams", &self.seams)
             .field("log_tail", &self.log_tail)
+            .field("frame_ring", &self.frame_ring)
             .finish()
     }
 }
@@ -639,7 +645,21 @@ fn run_session_thread<A: FrameworkAdapter>(
     } else {
         (None, None)
     };
-    runtime.block_on(session_loop(cmd_rx, adapter, options.seams, tail));
+    // The §15.6 shared-frame ring: the options knob names the path, the
+    // `GUIWRIGHT_FRAME_RING` env var is the remote-mode fallback (the
+    // `GUIWRIGHT_VIDEO_DIR` pattern).
+    let frame_ring = options.frame_ring.clone().or_else(|| {
+        std::env::var_os("GUIWRIGHT_FRAME_RING")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    });
+    runtime.block_on(session_loop(
+        cmd_rx,
+        adapter,
+        options.seams,
+        tail,
+        frame_ring,
+    ));
 }
 
 /// The async half of the session thread (see [`run_session_thread`]).
@@ -648,6 +668,7 @@ async fn session_loop<A: FrameworkAdapter>(
     adapter: A,
     seams: crate::seams::SeamRegistry,
     tail: Option<LogTail>,
+    frame_ring: Option<PathBuf>,
 ) {
     let mut session = Session::new(adapter);
     // App-boot seams are available to the whole session (§14).
@@ -655,6 +676,15 @@ async fn session_loop<A: FrameworkAdapter>(
     // Attach: settle the app so the initial tree is visible (§6.3
     // "app.wait_for_settle()").
     session.settle(std::time::Instant::now() + std::time::Duration::from_secs(5));
+    // The §15.6 shared-frame ring (when configured): presented frames
+    // publish into the store so a same-host client reads pixels outside
+    // the door. A ring that fails to start is a session without the ring,
+    // never a session that fails (the §15.6 backpressure posture).
+    if let Some(path) = frame_ring {
+        if let Err(err) = session.frame_ring_start(&path) {
+            tracing::debug!(path = %path.display(), %err, "frame ring did not start");
+        }
+    }
 
     // The session thread owns the event hub (§7, M12): subscriptions
     // arrive through the command queue, publications happen at the pump
