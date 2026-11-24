@@ -99,13 +99,15 @@ impl CountTracker {
 }
 
 /// The demanded comparison's render for the timeout's "expected" side
-/// (the core's `count 4` / `count > 3` / `count < 5` vocabulary, the
-/// exact form the kit's headers print).
+/// (the core's `count 4` / `count > 3` / `count < 5` / `count >= 4` /
+/// `count <= 4` vocabulary, the exact form the kit's headers print).
 fn render_expected(comparison: CountMatch) -> String {
     match comparison {
         CountMatch::Exact(n) => n.to_string(),
         CountMatch::GreaterThan(n) => format!("> {n}"),
         CountMatch::LessThan(n) => format!("< {n}"),
+        CountMatch::AtLeast(n) => format!(">= {n}"),
+        CountMatch::AtMost(n) => format!("<= {n}"),
     }
 }
 
@@ -183,6 +185,37 @@ mod tests {
             fewer.evaluate(&[row(2), row(3), row(6), row(7), row(8)]),
             CountEval::Pending {
                 reason: "count is 5, expected < 5".into()
+            }
+        );
+    }
+
+    /// The inclusive comparators (m25's honest-list widening): the bound
+    /// itself holds — `>= 4` on 4, `<= 4` on 4 — and the mismatches name
+    /// the inclusive form the kit's headers print.
+    #[test]
+    fn the_inclusive_comparators_hold_on_the_bound() {
+        let four = [row(2), row(3), row(6), row(7)];
+        let least = CountTracker::new(CountMatch::AtLeast(4));
+        assert_eq!(least.evaluate(&four), CountEval::Satisfied { found: 4 });
+        assert_eq!(
+            least.evaluate(&[]),
+            CountEval::Pending {
+                reason: "count is 0, expected >= 4".into()
+            }
+        );
+        assert_eq!(
+            least.evaluate(&[row(2)]),
+            CountEval::Pending {
+                reason: "count is 1, expected >= 4".into()
+            }
+        );
+        let most = CountTracker::new(CountMatch::AtMost(4));
+        assert_eq!(most.evaluate(&four), CountEval::Satisfied { found: 4 });
+        assert_eq!(most.evaluate(&[]), CountEval::Satisfied { found: 0 });
+        assert_eq!(
+            most.evaluate(&[row(2), row(3), row(6), row(7), row(8)]),
+            CountEval::Pending {
+                reason: "count is 5, expected <= 4".into()
             }
         );
     }
