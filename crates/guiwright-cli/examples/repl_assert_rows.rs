@@ -88,9 +88,12 @@ fn main() {
         // The inclusive comparators (m25's honest-list widening): the
         // bound itself holds, the grammar speaking `>=`/`<=` — the set
         // stands at 5 here, so the inclusive bounds 4 and 5 both answer.
+        // The range shape the same honest list names beside the pair:
+        // 5 sits inside 3..=5, the bounds included.
         step(&mut repl, "timeout 2000").await;
         step(&mut repl, "assert count role Button is >= 4").await;
         step(&mut repl, "assert count role Button is <= 5").await;
+        step(&mut repl, "assert count role Button is between 3 and 5").await;
         step(&mut repl, "ping").await;
 
         // The conversation's end (the §7 lifecycle).
