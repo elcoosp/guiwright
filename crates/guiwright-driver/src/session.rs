@@ -2135,6 +2135,15 @@ impl<A: FrameworkAdapter> ExpectBuilder<'_, A> {
         self.run_count(CountMatch::AtMost(max))
     }
 
+    /// `expect(locator).to_have_count_between(min, max)` (m25's
+    /// honest-list widening, the range shape the same honest list names
+    /// beside the inclusive pair): satisfied while `min` *through* `max`
+    /// nodes match, both ends inclusive, same waiter, same error shape
+    /// (`count 3..=5 — …`).
+    pub fn to_have_count_between(self, min: usize, max: usize) -> Result<(), CoreError> {
+        self.run_count(CountMatch::Between { min, max })
+    }
+
     /// The shared count path (M22 exact + M25 comparators): the window
     /// scope resolves at act time (the M17 discipline), the comparator
     /// rides the zero-polling loop, the decorator wrapping under
