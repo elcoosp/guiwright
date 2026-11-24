@@ -271,6 +271,17 @@ test("requests encode byte-identical to the Rust wire", () => {
       cmd: { kind: "on", kinds: ["tree_changed", "frame_presented"] },
     }),
     subscribe_off: () => ({ kind: "subscribe", cmd: { kind: "off" } }),
+    // The resume vocabulary (the m18 record's named §7 follow-on): the
+    // appended `Resume` variant's bytes pin the published table beside
+    // the M12 pair.
+    subscribe_resume: () => ({
+      kind: "subscribe",
+      cmd: {
+        kind: "resume",
+        kinds: ["tree_changed"],
+        cursor: { tree_seq: 12, frame_seq: 34 },
+      },
+    }),
     resolve_all_role: () => ({
       kind: "resolve_all",
       selector: { kind: "role", role: "Button", name: null },
