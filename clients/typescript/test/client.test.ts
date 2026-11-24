@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { GwpClient, GwpRejected, GwpWaitTimeout } from "../src/client.ts";
+import { GwpClient, GwpRejected, GwpWaitTimeout, filter } from "../src/client.ts";
 import { Encoder, Decoder } from "../src/postcard.ts";
 import { RequestV1, NodeKeyV1, SemActionV1 } from "../src/schema.ts";
 
@@ -932,4 +932,58 @@ test("selectOption surfaces the driver's typed rejection (m89/m90 caps)", async 
     await client.close();
     server.close();
   }
+});
+
+// --- the typed filter composition (m34's named TS pass, the m91 rows) -------
+
+test("filter() builds the m34 filter row: hasText default, hasNot, nth", () => {
+  const source = { kind: "role", role: "Button", name: null } as const;
+
+  // The bare string rides the Rust TextMatch default: substring,
+  // case-insensitive.
+  assert.deepEqual(filter(source, { hasText: "Save" }), {
+    kind: "filter",
+    source,
+    has_text: { text: "Save", exact: false, ignore_case: true },
+    has_not: null,
+    nth: null,
+  });
+  // A full TextMatchV1 passes as-is; the pick maps the three forms.
+  assert.deepEqual(
+    filter(source, {
+      hasText: { text: "Save", exact: true, ignore_case: false },
+      hasNot: { kind: "role", role: "TextInput", name: null },
+      nth: "first",
+    }).has_text,
+    { text: "Save", exact: true, ignore_case: false },
+  );
+  assert.deepEqual(filter(source, { nth: "last" }).nth, { kind: "last" });
+  assert.deepEqual(filter(source, { nth: 2 }).nth, { kind: "index", index: 2 });
+});
+
+test("filter() rides the m91 has row and composes, no-opts returns the source", () => {
+  const source = { kind: "role", role: "Group", name: null } as const;
+  const button = { kind: "role", role: "Button", name: null } as const;
+
+  // The positive filter rides its own appended variant — the wire's
+  // Filter payload never grew (the M64 rule at selector width).
+  const withHas = filter(source, { has: button });
+  assert.deepEqual(withHas, { kind: "has", source, has: button });
+
+  // has + hasText compose: the Has row wraps the source, the filter row
+  // narrows the wrapped set (the kit's composition order).
+  assert.deepEqual(filter(source, { has: button, hasText: "Save" }), {
+    kind: "filter",
+    source: { kind: "has", source, has: button },
+    has_text: { text: "Save", exact: false, ignore_case: true },
+    has_not: null,
+    nth: null,
+  });
+
+  // Nesting composes like every other row.
+  const inner = filter(source, { hasText: "Save" });
+  assert.deepEqual(filter(inner, { nth: "first" }).source, inner);
+
+  // No options: the source returns unchanged (no wrapper rows).
+  assert.deepEqual(filter(source), source);
 });
