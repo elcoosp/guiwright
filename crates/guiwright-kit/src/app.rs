@@ -419,7 +419,32 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
     /// applied gesture records exactly like the raw-input surface (§13
     /// over §9): the raw `mouse.drag(...)` kit line while a codegen
     /// recording runs, plus one `drag_to` trace event naming both ends.
+    /// The offset form — Playwright's `{ sourcePosition, targetPosition }`
+    /// options — is [`Self::drag_to_with_positions`] (m33's honest-list
+    /// widening); this method keeps the centers contract byte-identical.
     pub fn drag_to(self, target: &Selector) -> Result<guiwright_driver::GestureOutcome, KitError> {
+        self.drag_to_with_positions(target, None, None)
+    }
+
+    /// `locator.dragTo(target, { sourcePosition, targetPosition })` —
+    /// the offset drags (§16 actions row's drag, m33's honest-list
+    /// widening). A position is a `(dx, dy)` offset from the resolved
+    /// node's bounds top-left (the Playwright padding-box-corner shape,
+    /// the bounds' own window-relative space): `Some` aims that exact
+    /// point, `None` keeps the M33 center. Playwright validates nothing,
+    /// and neither does this — an offset outside the bounds lands
+    /// exactly where the suite aimed (no clamp, no silent snap); a node
+    /// without bounds is still the honest §10 error. The synthesis is
+    /// unchanged: the same auto-waiting resolves, the same one-gesture
+    /// one-window discipline, the same §9 ratchet between the aimed
+    /// points, the same codegen line (the coordinates it renders are the
+    /// aimed points).
+    pub fn drag_to_with_positions(
+        self,
+        target: &Selector,
+        source_position: Option<(f64, f64)>,
+        target_position: Option<(f64, f64)>,
+    ) -> Result<guiwright_driver::GestureOutcome, KitError> {
         let Self {
             app,
             selector,
@@ -436,13 +461,13 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
                 session.wait_for(&selector, vec![Check::Attached], deadline)
             })?
             .into_node()?;
-        let (from_x, from_y) = drag_center(source.bounds, &selector)?;
+        let (from_x, from_y) = drag_center(source.bounds, &selector, source_position)?;
         let resolved_target = app
             .run_scoped(window.as_deref(), |session| {
                 session.wait_for(target, vec![Check::Attached], deadline)
             })?
             .into_node()?;
-        let (to_x, to_y) = drag_center(resolved_target.bounds, target)?;
+        let (to_x, to_y) = drag_center(resolved_target.bounds, target, target_position)?;
 
         let gesture = Gesture::Drag {
             from_x,
@@ -1799,13 +1824,17 @@ impl<A: FrameworkAdapter> VideoHandle<'_, A> {
     }
 }
 
-/// The drag endpoint's center (M33): the resolved bounds' midpoint — an
-/// unbounded node is an honest error, not an empty drag (the §10
-/// element-crop rule's shape: "no bounds — nothing to crop" reads the
-/// same way here).
+/// The drag endpoint's aim point (M33, widened by m33's honest-list
+/// offsets): the resolved bounds' midpoint, or the bounds top-left plus
+/// the asked `(dx, dy)` offset when the suite aims a point (the
+/// Playwright padding-box-corner shape — validated nowhere, carried as
+/// asked). An unbounded node is an honest error, not an empty drag (the
+/// §10 element-crop rule's shape: "no bounds — nothing to crop" reads
+/// the same way here).
 fn drag_center(
     bounds: Option<accesskit::Rect>,
     selector: &Selector,
+    offset: Option<(f64, f64)>,
 ) -> Result<(f64, f64), KitError> {
     let rect = bounds.ok_or_else(|| {
         KitError::Core(CoreError::other(format!(
@@ -1813,7 +1842,10 @@ fn drag_center(
             selector.render()
         )))
     })?;
-    Ok((rect.x0.midpoint(rect.x1), rect.y0.midpoint(rect.y1)))
+    Ok(match offset {
+        None => (rect.x0.midpoint(rect.x1), rect.y0.midpoint(rect.y1)),
+        Some((dx, dy)) => (rect.x0 + dx, rect.y0 + dy),
+    })
 }
 
 /// The clamped §10 crop window in physical px (`x0, y0, x1, y1`) — the
@@ -1993,6 +2025,18 @@ pub(crate) mod core_expect {
         }
         pub fn to_have_value(mut self, value: impl Into<TextMatch>) -> Result<(), CoreError> {
             self.builder().to_have_value(value)
+        }
+        /// `expect(locator).toBeEmpty()` (§16 assertions row, m28's
+        /// honest-list row) — the label/value composite: the node's own
+        /// label *and* value must both read absent-or-empty, the same
+        /// node reads `to_have_text` makes (never a subtree walk — the
+        /// m29/m31 reads' honest node-level scope). The mismatch is
+        /// waitable (text arrives with the node's restatement, Playwright
+        /// parity), the timeout error names the assertion, the locator
+        /// and the facts the last evaluation found. Composes with
+        /// [`Self::not`].
+        pub fn to_be_empty(mut self) -> Result<(), CoreError> {
+            self.builder().to_be_empty()
         }
         /// `expect(locator).toHaveRole(role)` (§16 assertions row, M38) —
         /// the identity family's role row: the node's AccessKit role
