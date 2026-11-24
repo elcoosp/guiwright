@@ -1750,6 +1750,30 @@ pub trait ClientConn: Send + 'static {
         self.expect_count_with(selector, CountMatch::AtMost(max), timeout)
     }
 
+    /// The range count comparator (m25's honest-list widening, the
+    /// range shape the same honest list names beside the inclusive
+    /// pair — the kit's `expect(locator).to_have_count_between(...)`
+    /// over any door): satisfied while `min` **through** `max` nodes
+    /// match, both ends inclusive, the same composition as
+    /// [`Self::expect_count`] with the comparison as the only
+    /// difference. **No wire change**; every [`ClientConn`] impl
+    /// inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_count`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have count`.
+    fn expect_count_between(
+        &mut self,
+        selector: SelectorV1,
+        min: usize,
+        max: usize,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        self.expect_count_with(selector, CountMatch::Between { min, max }, timeout)
+    }
+
     /// The shared count-assertion composition (m59): the m54 loop shape
     /// over the M30 resolve-all round trip — one entry read, event-driven
     /// re-reads, the subscription window owned and dropped, the typed
