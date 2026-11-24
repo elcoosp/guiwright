@@ -62,8 +62,17 @@ mod tests {
         let mid = corrupt.len() / 2;
         corrupt[mid] ^= 0xFF;
         // Corrupting the compressed stream may error or produce garbage;
-        // either way it must not panic.
-        let _ = decode_blob(&corrupt);
+        // either way it must never silently hand back the original bytes
+        // (a side-channel payload that lies is worse than a named error).
+        match decode_blob(&corrupt) {
+            Err(_) => {}
+            Ok(back) => {
+                assert_ne!(
+                    back, b"hello world",
+                    "corrupt bytes must not decode to the original"
+                );
+            }
+        }
     }
 
     #[test]
