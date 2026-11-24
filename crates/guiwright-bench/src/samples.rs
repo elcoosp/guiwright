@@ -1704,6 +1704,54 @@ pub fn locator_filter() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- m91 sample (kit locator has-filter surface, §8.1 composition) ----------
+
+/// §15.1 `locator_has_filter`: one positive-filtered resolve (the m34
+/// record's named follow-on) — the `has(...)` sugar's steady-state cost
+/// on the button fixture: the source resolve (the group bucket) plus one
+/// subtree probe per candidate (the node included — the same walk
+/// `has_not` reads with the opposite verdict), the composition the kit's
+/// `has()` method produces. A snapshot read: no waiting, no strict mode,
+/// the `locator_filter` row's shape with the positive verdict.
+pub fn locator_has_filter() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::Selector;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+    use std::time::Instant;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("locator_has_filter", adapter);
+    app.wait_for_settle();
+    let save = Selector::role_named(Role::Button, "Save");
+
+    // Warm-up: the composed selector builds once; the measured loop
+    // reads the steady-state set.
+    let warm = app
+        .role_locator(Role::Group)
+        .has(&save)
+        .count()
+        .expect("warm has read");
+    assert_eq!(warm, 1, "the group's subtree holds Save");
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let count = app
+            .role_locator(Role::Group)
+            .has(&save)
+            .count()
+            .expect("bench has read");
+        assert_eq!(count, 1, "the composed set is stable");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 // --- M32 sample (wire hit-test, §8.3's mechanism over the door) --------------
 
 /// §15.1 `hit_test_wire`: one `HitTest` round-trip over the in-process
