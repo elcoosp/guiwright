@@ -23,6 +23,23 @@ struct NodeRow<'a> {
     bounds: Option<[f64; 4]>,
 }
 
+/// One embedded deep-inspect overlay badge (the replayed §13 plan's
+/// caption pinned to its center point, `overlay::replay_plan`).
+#[derive(serde::Serialize)]
+struct OverlayBadgeRow {
+    text: String,
+    at: [f64; 2],
+}
+
+/// One snapshot's replayed overlay layer: badge geometry + the outline
+/// (the recorded focus) against the payload canvas.
+#[derive(serde::Serialize)]
+struct OverlayRow {
+    frame: u64,
+    outline: Option<[f64; 4]>,
+    badges: Vec<OverlayBadgeRow>,
+}
+
 /// One embedded tick row.
 #[derive(serde::Serialize)]
 struct TickRow<'a> {
@@ -45,8 +62,14 @@ struct Payload<'a> {
     test: &'a str,
     adapter: &'a str,
     schema: &'a str,
+    /// The geometry canvas the overlay layer draws against: the
+    /// archive's recorded resolution, or — on live captures, which have
+    /// no honest `TraceMeta` (the m18 record's named gap) — the overlay
+    /// rows' own extent.
+    canvas: [f64; 2],
     ticks: Vec<TickRow<'a>>,
     snapshots: Vec<SnapshotRow<'a>>,
+    overlays: Vec<OverlayRow>,
     logs: Vec<&'a str>,
 }
 
@@ -62,6 +85,7 @@ pub fn render_html(archive: &TraceArchive, timeline: &Timeline) -> String {
         &archive.meta.test,
         &archive.meta.adapter.name,
         &archive.meta.schema,
+        Some(archive.meta.resolution),
         timeline,
         &archive.logs,
     );
@@ -82,6 +106,7 @@ pub fn render_live_html(live: &LiveTimeline) -> String {
         live.test(),
         live.adapter().unwrap_or("(unknown)"),
         "gwtrace/v1 (live)",
+        None,
         &timeline,
         live.logs(),
     );
@@ -98,14 +123,40 @@ fn embed_payload(json: &str) -> String {
 
 /// The emitter's single payload builder (§12): archive and live captures
 /// differ only in where the header strings and logs come from — the
-/// scrubber payload itself is the timeline's, verbatim.
+/// scrubber payload itself is the timeline's, verbatim. `resolution` is
+/// the archive's recorded canvas (`None` on live captures, which have no
+/// honest meta — the fallback extent rides the overlay rows themselves).
 fn build_payload<'a>(
     test: &'a str,
     adapter: &'a str,
     schema: &'a str,
+    resolution: Option<(u32, u32)>,
     timeline: &'a Timeline,
     logs: &'a [String],
 ) -> Payload<'a> {
+    // The replayable §13 overlay (deep-inspect mode): one plan per
+    // snapshot, through the same cost model the live session speaks.
+    let overlays: Vec<OverlayRow> = crate::overlay::snapshot_replay_plans(timeline)
+        .into_iter()
+        .map(|(frame, plan)| OverlayRow {
+            frame,
+            outline: plan.hover.map(|r| [r.x0, r.y0, r.x1, r.y1]),
+            badges: plan
+                .badges
+                .iter()
+                .map(|b| OverlayBadgeRow {
+                    text: b.text.clone(),
+                    at: [b.at.0, b.at.1],
+                })
+                .collect(),
+        })
+        .collect();
+
+    let canvas = resolution.map_or_else(
+        || overlay_extent(&overlays),
+        |(w, h)| [f64::from(w), f64::from(h)],
+    );
+
     let ticks = timeline
         .ticks
         .iter()
@@ -151,10 +202,32 @@ fn build_payload<'a>(
         test,
         adapter,
         schema,
+        canvas,
         ticks,
         snapshots,
+        overlays,
         logs,
     }
+}
+
+/// The live capture's fallback canvas: the overlay rows' own extent plus
+/// a small margin — computed, never invented (the archive's resolution
+/// is the honest source when it exists).
+fn overlay_extent(overlays: &[OverlayRow]) -> [f64; 2] {
+    const MARGIN: f64 = 24.0;
+    let mut max_x = 1.0f64;
+    let mut max_y = 1.0f64;
+    for row in overlays {
+        for badge in &row.badges {
+            max_x = max_x.max(badge.at[0]);
+            max_y = max_y.max(badge.at[1]);
+        }
+        if let Some([_, _, x1, y1]) = row.outline {
+            max_x = max_x.max(x1);
+            max_y = max_y.max(y1);
+        }
+    }
+    [max_x + MARGIN, max_y + MARGIN]
 }
 
 const HTML_HEAD: &str = r#"<!doctype html>
@@ -162,6 +235,7 @@ const HTML_HEAD: &str = r#"<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>Guiwright trace viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { color-scheme: dark; --bg: #14161a; --panel: #1c1f24; --line: #2b3038;
           --fg: #dfe3e8; --dim: #8b939e; --accent: #4f9cf9; --warn: #f9a54f; }
@@ -198,6 +272,15 @@ const HTML_HEAD: &str = r#"<!doctype html>
   .log { color: var(--dim); white-space: pre-wrap; }
   .framebox { margin-top: 8px; }
   .framebox img { max-width: 100%; border: 1px solid var(--line); }
+  .overlay-title { color: var(--dim); margin: 8px 0 4px; }
+  .overlay-svg { max-width: 100%; border: 1px solid var(--line);
+                 background: #0d0f12; display: block; }
+  .overlay-svg rect.outline { fill: none; stroke: var(--accent); stroke-width: 2; }
+  .overlay-svg rect.badge-box { fill: rgba(79,156,249,.08); stroke: #3a4350; }
+  .overlay-svg text.badge { fill: var(--fg); font-size: 11px;
+                            font-family: ui-monospace, monospace; }
+  .overlay-svg .empty { fill: var(--dim); font-size: 12px;
+                        font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
@@ -219,10 +302,13 @@ const HTML_HEAD: &str = r#"<!doctype html>
   </section>
 </main>
 <script>
-const PAYLOAD = window.__GW_TRACE__;
 "#;
 
 const HTML_TAIL: &str = r#"
+// The payload assignment is emitted (by `html_template`) before this
+// read — the M2-era template read `const PAYLOAD` first and the whole
+// page rendered nothing (the guard test pins the order).
+const PAYLOAD = window.__GW_TRACE__;
 document.getElementById("meta").textContent =
   `${PAYLOAD.test} — adapter ${PAYLOAD.adapter} — ${PAYLOAD.schema}`;
 
@@ -297,17 +383,58 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// The replayable §13 overlay (deep-inspect mode): the nearest snapshot's
+// replayed plan — full-tree badges + the recorded focus outline — drawn
+// as an SVG layer against the payload canvas.
+function overlayAt(frame) {
+  let best = null;
+  for (const row of PAYLOAD.overlays || []) {
+    if (row.frame <= frame) best = row;
+    else break;
+  }
+  return best;
+}
+
+function renderOverlay(frame) {
+  const box = document.getElementById("framebox");
+  const [w, h] = PAYLOAD.canvas || [100, 100];
+  const row = overlayAt(frame);
+  let svg = `<h2 class="overlay-title">Overlay — deep inspect (§13)</h2>` +
+    `<svg class="overlay-svg" viewBox="0 0 ${w} ${h}" role="img">`;
+  if (!row || (row.badges.length === 0 && !row.outline)) {
+    svg += `<text class="empty" x="12" y="24">(no overlay facts at this frame)</text>`;
+  } else {
+    if (row.outline) {
+      const [x0, y0, x1, y1] = row.outline;
+      svg += `<rect class="outline" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"/>`;
+    }
+    for (const b of row.badges) {
+      const bw = Math.min(w - 4, 8 + b.text.length * 6.6);
+      const bh = 16;
+      const bx = Math.max(2, Math.min(b.at[0] - bw / 2, w - bw - 2));
+      const by = Math.max(2, Math.min(b.at[1] - bh / 2, h - bh - 2));
+      svg += `<g><rect class="badge-box" x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="3"/>` +
+        `<text class="badge" x="${bx + 4}" y="${by + 12}">${escapeHtml(b.text)}</text></g>`;
+    }
+  }
+  svg += `</svg>`;
+  box.innerHTML = svg;
+}
+
 function show(index) {
   const tick = ticks[index];
   if (!tick) return;
   scrubber.value = index;
   const parts = [`frame ${tick.frame}`];
-  if (tick.hash !== undefined) parts.push(`hash ${tick.hash.toString(16)}`);
+  // JSON null (serde None) is not `undefined` — the loose check covers
+  // both, the strict one threw on any hash-less tick.
+  if (tick.hash != null) parts.push(`hash ${tick.hash.toString(16)}`);
   if (tick.clock) parts.push(`clock ${tick.clock}`);
   if (tick.png) parts.push("png stored");
   document.getElementById("tick-info").textContent = parts.join(" · ");
   renderTree(tick.frame);
   renderEvents(tick.frame);
+  renderOverlay(tick.frame);
 }
 
 scrubber.addEventListener("input", () => show(Number(scrubber.value)));
@@ -325,6 +452,34 @@ fn html_template(payload_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_payload_is_assigned_before_the_scrubber_reads_it() {
+        // The M2-era template read `const PAYLOAD = window.__GW_TRACE__`
+        // BEFORE the emitter assigned it — `PAYLOAD` answered `undefined`
+        // and the whole scrubber page rendered nothing (the payload rode
+        // the file, never the runtime). The assignment is emitted between
+        // the two halves of the template; this guard pins the order the
+        // runtime needs.
+        let html = html_template(r#"{"ticks":[]}"#);
+        let assign = html.find("window.__GW_TRACE__ = ").expect("assignment");
+        let read = html
+            .find("const PAYLOAD = window.__GW_TRACE__")
+            .expect("read");
+        assert!(assign < read, "assign before read");
+    }
+
+    #[test]
+    fn the_scrubber_reads_json_nulls_loosely() {
+        // serde `None` serializes as JSON `null` — the M2-era strict
+        // `!== undefined` check answered true on a hash-less tick and the
+        // page threw on `null.toString(16)` before rendering anything.
+        assert!(HTML_TAIL.contains("tick.hash != null"), "loose null check");
+        assert!(
+            !HTML_TAIL.contains("tick.hash !== undefined"),
+            "the strict check is gone"
+        );
+    }
 
     #[test]
     fn template_embeds_payload_and_is_self_contained() {
