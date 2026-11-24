@@ -277,6 +277,26 @@ impl<W: Widget> FrameworkAdapter for MasonryAdapter<W> {
                     data: Some(m21::ActionData::Value(text.clone().into_boxed_str())),
                 });
             }
+            // §8.4 select vocabulary (m89): the option rides SetValue's
+            // ActionData — the same request path the masonry widget set
+            // honors for a value change on a choice widget.
+            SemAction::SelectOption { option } => {
+                self.harness.process_access_event(m21::ActionRequest {
+                    action: m21::Action::SetValue,
+                    target: target_widget,
+                    data: Some(m21::ActionData::Value(option.clone().into_boxed_str())),
+                });
+            }
+            // §8.4 scroll-into-view vocabulary (m90): the native m21
+            // action (the dialect's normalize table already maps it,
+            // `normalize.rs`) — masonry's own scroll semantics apply.
+            SemAction::ScrollIntoView => {
+                self.harness.process_access_event(m21::ActionRequest {
+                    action: m21::Action::ScrollIntoView,
+                    target: target_widget,
+                    data: None,
+                });
+            }
             SemAction::Focus => {
                 self.harness.process_access_event(m21::ActionRequest {
                     action: m21::Action::Focus,
