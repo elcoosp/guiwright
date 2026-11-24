@@ -7,12 +7,21 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "User-facing Guiwright kit (architecture §5.2/§6.3): App, Locators, #[test], fixtures, traces, screenshot baselines; embedded mode"
+description = "User-facing Guiwright kit (architecture §5.2/§6.3): App, Locators, #[test], fixtures, traces, screenshot baselines; embedded mode plus the remote-to-self door"
 
 [dependencies]
 guiwright-core.workspace = true
 accesskit_consumer.workspace = true
 guiwright-driver.workspace = true
+# The remote-to-self handle (the m16 record's named follow-on): the
+# typed `ClientConn` client speaks the wire schema and rides the
+# embedded door, so the seam crate is runtime plumbing now, not a
+# test-only schema vocabulary.
+guiwright-proto.workspace = true
+# The handle owns the door's runtime (the serve task lives on it) and
+# drives the typed rows with `block_on` — the sync kit surface never
+# asks the test thread for an async context.
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 guiwright-shot.workspace = true
 guiwright-trace.workspace = true
 guiwright-macros = { path = "../guiwright-macros", version = "1.0.0" }
@@ -27,10 +36,6 @@ tempfile.workspace = true
 zip = { version = "9.4.1", default-features = false, features = ["time"] }
 serde_json = "1.0.154"
 postcard.workspace = true
-# The state-read tests name the wire's `CheckedStateV1` vocabulary word
-# the facts ride (the m68 four-way word) — schema types, not runtime
-# plumbing, so the dependency stays test-only.
-guiwright-proto.workspace = true
 
 [lints]
 workspace = true
