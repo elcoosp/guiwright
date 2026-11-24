@@ -1544,6 +1544,44 @@ pub fn all_values() -> Duration {
     start.elapsed() / ITERATIONS
 }
 
+// --- Content-getter sample (the m19 record's named §16 follow-on) ------
+
+/// §15.1 `content_getter_read`: one single-node content getter read
+/// (the m19 record's remaining-gaps list, cashed beside the m29/m31
+/// bulk readers) — the `input_value()` getter on the fixture's Email
+/// input. The measured operation is one strict auto-wait resolve (the
+/// `describe` surface's single-node path) plus the value-fact read —
+/// the `count_assert` row's resolve shape with the fact accessor in
+/// place of the set walk; `inner_text()` rides the same surface (the
+/// label-or-value accessor over the identical resolve), so one number
+/// covers both getters' cost shape. The launch and settle stay outside
+/// the measured span; the read is a snapshot, no waiter rides it.
+pub fn content_getter_read() -> Duration {
+    use accesskit::Role;
+    use guiwright_core::test_util::Fixture;
+    use guiwright_driver::mock::MockAdapter;
+    use guiwright_kit::App;
+
+    const ITERATIONS: u32 = 64;
+
+    let fixture = Fixture::buttons();
+    let mut adapter = MockAdapter::with_fixture(&fixture);
+    adapter.push_frame(1);
+    adapter.push_frame(1);
+    let mut app = App::launch("content_getter_read", adapter);
+    app.wait_for_settle();
+
+    let start = Instant::now();
+    for _ in 0..ITERATIONS {
+        let value = app
+            .get_by_role(Role::TextInput, "Email")
+            .input_value()
+            .expect("bench value read");
+        assert_eq!(value, "ada@example.dev", "the carried value");
+    }
+    start.elapsed() / ITERATIONS
+}
+
 /// §15.1 `drag_to`: one locator `drag_to` (M33) — the m19 parity
 /// stream's named drag item. The measured window is the whole embedded
 /// operation on the button fixture: two `Attached`-gated auto-wait
