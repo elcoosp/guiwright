@@ -52,6 +52,7 @@ fn run(argv: &[String]) -> i32 {
             quiet,
             reports,
             out,
+            trace,
         } => {
             // The runner is IO-bound (one GWP connection per attempt);
             // a current-thread runtime interleaves the workers on the
@@ -74,6 +75,7 @@ fn run(argv: &[String]) -> i32 {
                     quiet,
                     reports,
                     out,
+                    trace,
                 },
                 paths,
             ))
@@ -94,6 +96,19 @@ fn run(argv: &[String]) -> i32 {
             duration_ms,
             test,
         } => run_live_html(&target, out, duration_ms, test),
+        Command::Codegen {
+            door,
+            attach_ms,
+            duration_ms,
+            out,
+            command,
+        } => run_codegen(&guiwright_cli::codegen::CodegenLaunch {
+            command,
+            door,
+            attach_ms,
+            duration_ms,
+            out,
+        }),
         Command::Bless { dir, dry_run } => run_bless(&dir, dry_run),
         Command::InstallDeps { run } => match install_deps_command(run) {
             Ok(_) => 0,
@@ -238,6 +253,46 @@ fn run_live_html(
     }
 }
 
+/// The `guiwright codegen` front-end (§13 standalone codegen, the m4 §4
+/// deferred row): one current-thread runtime over the launcher's await
+/// points — spawn, door wait, window, capture (the same shape the
+/// live-html front-end rides). stdout stays parseable: the attach note
+/// and the strict-mode warnings ride stderr, the kit code rides stdout.
+fn run_codegen(launch: &guiwright_cli::codegen::CodegenLaunch) -> i32 {
+    let rt = match current_thread_runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("error: tokio runtime: {err}");
+            return 1;
+        }
+    };
+    match rt.block_on(guiwright_cli::codegen::codegen_launch(launch)) {
+        Ok(outcome) => {
+            eprintln!(
+                "guiwright codegen — adapter `{}` (framework `{}`); recording on — \
+                 the window ends on --duration-ms, Ctrl-C, or the app closing",
+                outcome.adapter.name, outcome.adapter.framework
+            );
+            println!(
+                "codegen: {} line(s), {} warning(s)",
+                outcome.code.lines().count(),
+                outcome.warnings.len()
+            );
+            for code_line in outcome.code.lines() {
+                println!("{code_line}");
+            }
+            for warning in &outcome.warnings {
+                eprintln!("warning: {warning}");
+            }
+            0
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            1
+        }
+    }
+}
+
 /// The `guiwright test` front-end (M5): discover → run → print → report.
 /// Exit codes: 0 all passed (flaky included), 1 any failure, 2 config
 /// errors (no specs, bad specs, missing target).
@@ -292,7 +347,7 @@ async fn test_loop(
         let out_dir = opts
             .out
             .take()
-            .unwrap_or_else(|| std::path::PathBuf::from("guiwright-report"));
+            .unwrap_or_else(|| std::path::PathBuf::from(guiwright_cli::runner::DEFAULT_REPORT_DIR));
         match guiwright_cli::runner::write_reports(&outcome.report, &opts.reports, &out_dir) {
             Ok(written) => {
                 for path in written {
