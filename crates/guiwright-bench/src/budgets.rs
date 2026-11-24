@@ -115,6 +115,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ),
     ("wire_action_click", crate::samples::wire_action_click),
     ("viewer_live_sync", crate::samples::viewer_live_sync),
+    ("overlay_replay_plan", crate::samples::overlay_replay_plan),
     ("checked_assert", crate::samples::checked_assert),
     ("count_assert", crate::samples::count_assert),
     ("not_assert", crate::samples::not_assert),
