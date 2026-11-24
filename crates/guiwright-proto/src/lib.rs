@@ -3,6 +3,9 @@
 //! * [`schema`] — versioned postcard schema (`GwpRequest::V1`, …)
 //! * [`framing`] — 4-byte LE length prefix + postcard body, size-guarded
 //! * [`blob`] — LZ4 side-channel for large payloads (frames/trees/traces)
+//! * [`shmring`] — the §15.6 shared-memory frame ring: same-host clients
+//!   read presented frames as zero-copy views over a file-backed shared
+//!   mapping (CDP binary-socket shaped, no wire change; m88)
 //! * [`uds`] — default transport: server loop + client
 //! * [`tcp`] — loopback/container transport for other-language clients
 //! * [`ws`] — the viewer live-mode door: RFC 6455 server + client (M15)
@@ -43,6 +46,7 @@ pub mod expect;
 pub mod framing;
 pub mod schema;
 pub mod schemadoc;
+pub mod shmring;
 pub mod tcp;
 pub mod uds;
 pub mod wait;
