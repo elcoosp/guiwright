@@ -1025,6 +1025,63 @@ export class GwpClient {
     return { frame_seq: resp.frame_seq, detail: resp.detail };
   }
 
+  /** The select vocabulary's TypeScript sugar (m89 §5's named
+   * per-surface milestone — "the TS client gains no dedicated
+   * `selectOption()` sugar: the typed `action()` row (M47) speaks the
+   * appended variant directly, codec-side — the per-surface sugar is
+   * its own milestone when a remote TS suite asks (the m64/m65
+   * pattern)"): Playwright's `locator.selectOption(option)` for remote
+   * TS suites, one semantics with the kit's
+   * `Locator::select_option`. Resolves the selector (the M47
+   * aim-and-act split: the strict, auto-waited `resolve()`), then
+   * speaks the appended `SemActionV1::SelectOption` variant — the
+   * option by accessible name (the m89 append-only rule's
+   * discriminant 10, the codec's encode tables byte-pinned) — through
+   * the same `action()` row: the actionability gate, the
+   * `force`/`timeout_ms` opt-outs and the `ActionDone` pair ride
+   * unchanged. No wire change. */
+  async selectOption(
+    selector: Selector,
+    option: string,
+    timeoutMs = 5000,
+    force = false,
+  ): Promise<{ frame_seq: number; detail: string }> {
+    const resolved = await this.resolve(selector, timeoutMs);
+    return this.action(
+      resolved.node,
+      resolved.generation,
+      { kind: "select_option", option },
+      timeoutMs,
+      force,
+    );
+  }
+
+  /** The scroll-into-view vocabulary's TypeScript sugar (m90 §5's
+   * named per-surface milestone, the m89 shape): Playwright's
+   * `locator.scrollIntoViewIfNeeded()` for remote TS suites, one
+   * semantics with the kit's `Locator::scroll_into_view_if_needed`.
+   * Resolves the selector (the M47 aim-and-act split), then speaks the
+   * appended `SemActionV1::ScrollIntoView` variant — the a11y-first
+   * request, no coordinates, the framework walks its scrollable
+   * ancestors (the m90 append-only rule's discriminant 11) — through
+   * the same `action()` row: the actionability gate, the
+   * `force`/`timeout_ms` opt-outs and the `ActionDone` pair ride
+   * unchanged. No wire change. */
+  async scrollIntoViewIfNeeded(
+    selector: Selector,
+    timeoutMs = 5000,
+    force = false,
+  ): Promise<{ frame_seq: number; detail: string }> {
+    const resolved = await this.resolve(selector, timeoutMs);
+    return this.action(
+      resolved.node,
+      resolved.generation,
+      { kind: "scroll_into_view_if_needed" },
+      timeoutMs,
+      force,
+    );
+  }
+
   /** `clock.fast_forward(ms)` etc. (§14 over the wire). */
   async clock(cmd: ClockCmd): Promise<{
     virtual_time_ms: number | null;
