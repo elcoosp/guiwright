@@ -218,6 +218,16 @@ try {
   assert.ok(done.frame_seq > 0);
   console.log("✓ action: clicked at frame", done.frame_seq);
 
+  // --- appended actions: the m90 scroll-into-view sugar (m90 §5's named
+  // per-surface milestone) over the real server — the a11y-first
+  // request, no coordinates, the mock accepting it on any node. ---
+  const scrolled = await client.scrollIntoViewIfNeeded(
+    { kind: "role", role: "Button", name: { text: "Save", exact: false, ignore_case: true } },
+  );
+  assert.equal(scrolled.detail, "scroll_into_view_if_needed");
+  assert.ok(scrolled.frame_seq > 0);
+  console.log("✓ scrollIntoViewIfNeeded:", scrolled.detail, "at frame", scrolled.frame_seq);
+
   // --- clock (§14 over the wire) ---
   await client.clock({ kind: "install_virtual" });
   // 320 ms = 19 frame-sized steps at 60 Hz (16.67 ms) + one partial step.
@@ -889,4 +899,30 @@ try {
   await wsClient.close();
 } finally {
   wsDemo.stop();
+}
+
+// --- appended actions: the m89 select sugar over a real combobox (m89
+// §5's named per-surface milestone) — its own demo spawn, the
+// `--fixture combobox` band (the state fixture's node pins stay
+// untouched on the main conversation). ---
+const selectDemo = await startDemoApp("GWP_TCP_ADDR=", ["--fixture", "combobox"]);
+const [selHost, selPort] = selectDemo.addr.split(":");
+await waitForTcp({ host: selHost, port: Number(selPort) });
+
+try {
+  const selectClient = await GwpClient.connectTcp(`127.0.0.1:${selectDemo.addr}`);
+  const selectWelcome = await selectClient.handshake("ts-e2e-m89/0.1");
+  assert.equal(selectWelcome.adapter.name, "mock");
+
+  const selected = await selectClient.selectOption(
+    { kind: "role", role: "ComboBox", name: { text: "Country", exact: true, ignore_case: false } },
+    "France",
+  );
+  assert.equal(selected.detail, 'select_option("France")');
+  assert.ok(selected.frame_seq > 0);
+  console.log("✓ m89 selectOption:", selected.detail, "at frame", selected.frame_seq);
+
+  await selectClient.close();
+} finally {
+  selectDemo.stop();
 }
