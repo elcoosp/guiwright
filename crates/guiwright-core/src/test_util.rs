@@ -25,6 +25,19 @@ pub fn expect(locator: crate::selector::Selector) -> crate::expect::ExpectBuilde
 }
 
 /// A fixture definition: builds both the initial full update and scripted
+/// The extension band `initial_update` composes: the group children the
+/// optional slots contribute and their `(NodeId, Node)` rows, in band
+/// order (trio, input pair, described button, combobox).
+struct ExtensionBand {
+    children: Vec<NodeId>,
+    nodes: Vec<(NodeId, Node)>,
+}
+
+/// The canonical fixture tree: a window root, a group and the six M0
+/// nodes (the §1 quickstart app), with the optional extension slots the
+/// vocabulary milestones compose on top — `with_checkboxes` (the M20
+/// tri-state), `with_readonly` (M28), `with_description` (M38) and
+/// `with_combobox` (m89) carry their band rows; the tests drive
 /// incremental updates against it.
 #[derive(Clone, Debug)]
 pub struct Fixture {
@@ -52,6 +65,10 @@ pub struct Fixture {
     /// [`Fixture::with_description`]; the same byte-stability rule as the
     /// checkbox trio applies to the base.
     pub described_button: Option<NodeId>,
+    /// The combobox (§8.4 select vocabulary, m89) — `Some` only for
+    /// [`Fixture::with_combobox`]; the same byte-stability rule as the
+    /// checkbox trio applies to the base.
+    pub combobox: Option<NodeId>,
     pub screen_size: (f64, f64),
 }
 
@@ -89,6 +106,7 @@ impl Fixture {
             editable_input: None,
             readonly_input: None,
             described_button: None,
+            combobox: None,
             screen_size: (480.0, 240.0),
         }
     }
@@ -192,6 +210,28 @@ impl Fixture {
         }
     }
 
+    /// The select-vocabulary fixture (§8.4 actions, m89): the `buttons()`
+    /// base plus one combobox under the group —
+    ///
+    /// ```text
+    /// group (1)
+    /// ├── … the six buttons()/label/input nodes …
+    /// └── combo_box "Country" (15) @ 16,204 160×32
+    /// ```
+    ///
+    /// `NodeId(8)` stays reserved for [`Fixture::add_button_update`],
+    /// `NodeId(9..=11)` for [`Fixture::with_checkboxes`],
+    /// `NodeId(12..=13)` for [`Fixture::with_readonly`] and
+    /// `NodeId(14)` for [`Fixture::with_description`]; this fixture
+    /// takes `NodeId(15)` so every constructor stays independent.
+    pub fn with_combobox() -> Self {
+        Self {
+            expected_nodes: 9,
+            combobox: Some(NodeId(15)),
+            ..Self::buttons()
+        }
+    }
+
     fn node(role: Role, name: Option<&str>) -> Node {
         let mut n = Node::new(role);
         if let Some(name) = name {
@@ -224,6 +264,26 @@ impl Fixture {
                     y1: y0 + 32.0,
                 });
                 (id, btn)
+            })
+            .into_iter()
+            .collect()
+    }
+
+    /// The combobox row of the extension band (`with_combobox`, m89) —
+    /// the §8.4 select vocabulary's target: bounded, labeled. The same
+    /// `first_extra` band indexing the other extension helpers take.
+    fn combobox_pair(&self, first_extra: usize) -> Vec<(NodeId, Node)> {
+        self.combobox
+            .map(|id| {
+                let mut box_node = Self::node(Role::ComboBox, Some("Country"));
+                let y0 = 204.0 + 40.0 * first_extra as f64;
+                box_node.set_bounds(Rect {
+                    x0: 16.0,
+                    y0,
+                    x1: 176.0,
+                    y1: y0 + 32.0,
+                });
+                (id, box_node)
             })
             .into_iter()
             .collect()
@@ -274,6 +334,48 @@ impl Fixture {
 
     /// Full initial update carrying the root `TreeInfo` (what egui emits on
     /// its first pass and what masonry emits per redraw).
+    /// The extension band's present rows, composed in band order — the
+    /// checkbox trio (`with_checkboxes`), the read-only pair
+    /// (`with_readonly`, M28), the described button (`with_description`,
+    /// M38) and the combobox (`with_combobox`, m89) share the 40px row
+    /// grid under the base's six nodes; the `buttons()` base keeps its
+    /// 8-node shape. `initial_update`'s one extension helper.
+    fn extension_band(&self) -> ExtensionBand {
+        let mut children: Vec<NodeId> = Vec::new();
+        let mut nodes: Vec<(NodeId, Node)> = Vec::new();
+        for (slot, name, toggled) in [
+            (self.checked_checkbox, "Notifications", Toggled::True),
+            (self.unchecked_checkbox, "Dark mode", Toggled::False),
+            (self.mixed_checkbox, "Partially installed", Toggled::Mixed),
+        ] {
+            if let Some(id) = slot {
+                let mut node = Self::checkbox(name, toggled);
+                let y0 = 204.0 + 40.0 * nodes.len() as f64;
+                node.set_bounds(Rect {
+                    x0: 16.0,
+                    y0,
+                    x1: 136.0,
+                    y1: y0 + 32.0,
+                });
+                children.push(id);
+                nodes.push((id, node));
+            }
+        }
+        for (slot, node) in self.input_pair(nodes.len()) {
+            children.push(slot);
+            nodes.push((slot, node));
+        }
+        for (slot, node) in self.described_pair(nodes.len()) {
+            children.push(slot);
+            nodes.push((slot, node));
+        }
+        for (slot, node) in self.combobox_pair(nodes.len()) {
+            children.push(slot);
+            nodes.push((slot, node));
+        }
+        ExtensionBand { children, nodes }
+    }
+
     pub fn initial_update(&self) -> TreeUpdate {
         let mut window = Self::node(Role::Window, Some("Test App"));
         window.set_children([NodeId(1)]);
@@ -286,38 +388,8 @@ impl Fixture {
             self.hidden_button,
             self.disabled_button,
         ];
-        // The checked-state trio rides the same group when present
-        // (`with_checkboxes`); `buttons()` keeps its 8-node shape.
-        let mut checkboxes: Vec<(NodeId, Node)> = Vec::new();
-        for (slot, name, toggled) in [
-            (self.checked_checkbox, "Notifications", Toggled::True),
-            (self.unchecked_checkbox, "Dark mode", Toggled::False),
-            (self.mixed_checkbox, "Partially installed", Toggled::Mixed),
-        ] {
-            if let Some(id) = slot {
-                let mut node = Self::checkbox(name, toggled);
-                let y0 = 204.0 + 40.0 * checkboxes.len() as f64;
-                node.set_bounds(Rect {
-                    x0: 16.0,
-                    y0,
-                    x1: 136.0,
-                    y1: y0 + 32.0,
-                });
-                children.push(id);
-                checkboxes.push((id, node));
-            }
-        }
-        // The editable/read-only input pair rides the same extension band
-        // (`with_readonly`, M28); the base keeps its 8-node shape.
-        let mut inputs: Vec<(NodeId, Node)> = Vec::new();
-        for (slot, node) in self.input_pair(checkboxes.len()) {
-            children.push(slot);
-            inputs.push((slot, node));
-        }
-        // The described button rides the same extension band
-        // (`with_description`, M38); the base keeps its 8-node shape.
-        let described = self.described_pair(checkboxes.len() + inputs.len());
-        children.extend(described.iter().map(|(slot, _)| *slot));
+        let band = self.extension_band();
+        children.extend(band.children.iter().copied());
         group.set_children(children);
 
         let mut save = Self::node(Role::Button, Some("Save"));
@@ -375,9 +447,7 @@ impl Fixture {
             (self.hidden_button, hidden),
             (self.disabled_button, disabled),
         ];
-        nodes.extend(checkboxes);
-        nodes.extend(inputs);
-        nodes.extend(described);
+        nodes.extend(band.nodes);
         TreeUpdate {
             nodes,
             tree: Some(TreeInfo {
