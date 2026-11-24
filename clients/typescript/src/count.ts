@@ -33,12 +33,16 @@
  */
 
 /** The count-assertion vocabulary (the kit's `to_have_count` family:
- * the M22 exact form + the M25 one-sided comparators) — a client-side
- * vocabulary, never serialized (the Rust `CountMatch` rule). */
-export type CountCompare = {
-  kind: "exact" | "greater_than" | "less_than";
-  bound: number;
-};
+ * the M22 exact form + the M25 one-sided comparators + the m25
+ * honest-list widening's inclusive pair and range) — a client-side
+ * vocabulary, never serialized (the Rust `CountMatch` rule). The
+ * single-bound comparisons carry `bound`; the range carries both ends. */
+export type CountCompare =
+  | {
+      kind: "exact" | "greater_than" | "less_than" | "at_least" | "at_most";
+      bound: number;
+    }
+  | { kind: "between"; min: number; max: number };
 
 /** The static state word the typed timeout names (the Rust
  * `HAVE_COUNT_STATE` wording — the m54 `have text` / `have value`
@@ -46,19 +50,30 @@ export type CountCompare = {
 export const HAVE_COUNT_STATE = "have count";
 
 /** Whether `found` satisfies the comparison (the Rust
- * `CountMatch::holds` predicate, mirrored). */
+ * `CountMatch::holds` predicate, mirrored — the inclusive pair holds
+ * on the bound itself: `>= 4` on 4, `<= 4` on 4; the range holds
+ * within `min`..=`max`, both ends included). */
 function holds(compare: CountCompare, found: number): boolean {
   if (compare.kind === "exact") return found === compare.bound;
   if (compare.kind === "greater_than") return found > compare.bound;
+  if (compare.kind === "at_least") return found >= compare.bound;
+  if (compare.kind === "at_most") return found <= compare.bound;
+  if (compare.kind === "between") {
+    return found >= compare.min && found <= compare.max;
+  }
   return found < compare.bound;
 }
 
 /** The demanded comparison's render for the timeout's "expected" side
- * (the core's `count 4` / `count > 3` / `count < 5` vocabulary, the
- * exact form the kit's headers print). */
+ * (the core's `count 4` / `count > 3` / `count < 5` / `count >= 4` /
+ * `count <= 4` / `count 3..=5` vocabulary, the exact form the kit's
+ * headers print). */
 function renderExpected(compare: CountCompare): string {
   if (compare.kind === "exact") return String(compare.bound);
   if (compare.kind === "greater_than") return `> ${compare.bound}`;
+  if (compare.kind === "at_least") return `>= ${compare.bound}`;
+  if (compare.kind === "at_most") return `<= ${compare.bound}`;
+  if (compare.kind === "between") return `${compare.min}..=${compare.max}`;
   return `< ${compare.bound}`;
 }
 
