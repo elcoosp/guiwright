@@ -3084,3 +3084,62 @@ pub fn shm_ring_frame_hop() -> Duration {
         started.elapsed()
     })
 }
+
+// --- sample (the kit's remote-to-self handle, the m16 record's named follow-on) ---
+
+/// §15.1 `remote_to_self_resolve`: one strict Resolve round-trip over
+/// the embedded door through the kit's remote-to-self handle (the m16
+/// record's named follow-on, restated unchanged by the m18 record's
+/// honest list). The measured window is the `resolve_remote_uds`
+/// round-trip shape minus the socket: the kit handle's sync `block_on`
+/// wrapper, the core-selector → `SelectorV1` bridge, the wire
+/// marshalling and the session-thread rendezvous — the launch (server +
+/// bridge + typed client, no socket, no filesystem) sits outside the
+/// window, the way the UDS row's bind does.
+pub fn remote_to_self_resolve() -> Duration {
+    const ITERATIONS: u32 = 64;
+    use guiwright_core::selector::{Selector, TextMatch, TextPattern};
+    use guiwright_kit::RemoteToSelf;
+    use guiwright_proto::schema::NodeKeyV1;
+    use std::time::Instant;
+
+    let mut handle = RemoteToSelf::launch(|| {
+        let mut adapter = guiwright_driver::mock::MockAdapter::with_fixture(
+            &guiwright_core::test_util::Fixture::buttons(),
+        );
+        adapter.push_frame(1);
+        adapter.push_frame(1);
+        adapter
+    })
+    .expect("bench remote-to-self handle");
+
+    let selector = Selector::Role {
+        role: accesskit::Role::Button,
+        name: Some(TextMatch {
+            pattern: TextPattern::Str("Save".into()),
+            exact: true,
+            ignore_case: false,
+        }),
+    };
+
+    // Warm the session once (the §15.1 row is the steady-state hop).
+    for _ in 0..4 {
+        handle
+            .resolve(selector.clone(), 1_000)
+            .expect("warm resolve");
+    }
+
+    let started = Instant::now();
+    for _ in 0..ITERATIONS {
+        let row = handle
+            .resolve(selector.clone(), 1_000)
+            .expect("bench resolve");
+        if let NodeKeyV1::AccessKit { node, .. } = row.node {
+            assert_eq!(node, 2, "the fixture's Save button");
+        }
+    }
+    let measured = started.elapsed() / ITERATIONS;
+
+    handle.finish().expect("bench shutdown");
+    measured.max(Duration::from_nanos(1))
+}
