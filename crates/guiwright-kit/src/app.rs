@@ -1911,6 +1911,15 @@ pub(crate) mod core_expect {
         pub fn to_have_count_at_most(mut self, max: usize) -> Result<(), CoreError> {
             self.builder().to_have_count_at_most(max)
         }
+        /// `expect(locator).to_have_count_between(min, max)` (m25's
+        /// honest-list widening, the range shape the same honest list
+        /// names beside the inclusive pair) — satisfied while `min`
+        /// *through* `max` nodes match, both ends inclusive, same
+        /// waiter, same waitable mismatch, same error shape
+        /// (`count 3..=5 — …`). Composes with [`Self::not`].
+        pub fn to_have_count_between(mut self, min: usize, max: usize) -> Result<(), CoreError> {
+            self.builder().to_have_count_between(min, max)
+        }
 
         /// `expect(locator).to_have_screenshot(name, bless)` — the §16
         /// retry waiter over the §10 baseline flow (Playwright
