@@ -236,3 +236,83 @@ fn negated_inclusive_comparators_compose_through_the_decorator() {
         err.to_string()
     );
 }
+
+// --- The range comparator (m25's honest-list widening) ----------------------
+//
+// Plan pin (docs/m25-count-comparators.md §5 "Remaining gaps"): the
+// range/between shape rides "the same `CountMatch`" beside the inclusive
+// pair — the same waiter, the same waitable-mismatch contract, no new
+// machinery.
+
+#[test]
+fn between_passes_within_the_range() {
+    let mut app = App::launch_fixture("compare_between_immediate");
+    app.wait_for_settle();
+    expect(app.role_locator(Role::Button))
+        .to_have_count_between(3, 5)
+        .expect("4 buttons hold 3..=5");
+    // Both ends hold on the bound — the inclusive range is the point.
+    expect(app.role_locator(Role::Button))
+        .to_have_count_between(4, 4)
+        .expect("4 buttons hold 4..=4");
+    // The empty set holds a zero-bottomed range.
+    expect(app.get_by_role(Role::Button, "Ghost"))
+        .to_have_count_between(0, 2)
+        .expect("0 ghosts hold 0..=2");
+}
+
+#[test]
+fn between_completes_when_a_node_late_appears() {
+    // 4 buttons now; the export button streams in and the set reaches
+    // the inclusive upper bound 5..=5 on that tree diff (§15.3).
+    let scripts = Arc::new(Mutex::new(Vec::new()));
+    let fixture = Fixture::buttons();
+    let late = fixture.add_button_update("Export");
+    let adapter = MockAdapter::with_fixture(&fixture).with_shared_scripts(scripts.clone());
+    let mut app = App::launch("compare_between_late_node", adapter);
+    app.wait_for_settle();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        scripts.lock().expect("script channel").push(late);
+    });
+    expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_secs(2))
+        .to_have_count_between(5, 5)
+        .expect("the export button reaches the 5..=5 range");
+}
+
+#[test]
+fn a_between_timeout_names_the_range() {
+    let mut app = App::launch_fixture("compare_between_timeout");
+    app.wait_for_settle();
+    let err = expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_millis(250))
+        .to_have_count_between(5, 9)
+        .expect_err("4 buttons never reach 5..=9");
+    let msg = err.to_string();
+    assert!(msg.contains("count 5..=9"), "{msg}");
+    assert!(msg.contains("found 4"), "{msg}");
+}
+
+#[test]
+fn negated_between_composes_through_the_decorator() {
+    let mut app = App::launch_fixture("compare_between_negated");
+    app.wait_for_settle();
+    // not(0..=2) holds right now (4 sits outside the range)…
+    expect(app.role_locator(Role::Button))
+        .not()
+        .to_have_count_between(0, 2)
+        .expect("4 buttons sit outside 0..=2");
+    // …and not(3..=5) never lands while the set stays at 4: the timeout
+    // header names the inverted range.
+    let err = expect(app.role_locator(Role::Button))
+        .with_timeout(Duration::from_millis(250))
+        .not()
+        .to_have_count_between(3, 5)
+        .expect_err("4 buttons keep holding inside 3..=5");
+    assert!(
+        err.to_string().contains("not (count 3..=5"),
+        "{}",
+        err.to_string()
+    );
+}
