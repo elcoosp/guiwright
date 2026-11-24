@@ -93,6 +93,11 @@ fn main() {
                     println!("event: frame_presented seq={seq} hash={hash:#x}");
                 }
                 EventV1::Log { record } => println!("event: log {record}"),
+                // The m20 record's named event: the checked fact moved —
+                // the node and the tri-state it now carries.
+                EventV1::StateChange { node, checked } => {
+                    println!("event: state_change {node:?} now carries {checked:?}");
+                }
             }
         }
 
