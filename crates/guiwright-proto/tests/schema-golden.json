@@ -108,6 +108,11 @@
           "index": 2,
           "name": "Log",
           "payload": "a log record — one logs.ndjson-shape JSON line per record, streamed from the session thread's per-session tracing tap; the tap is opt-in (ServerOptions::log_tail), and a session spawned without it still rejects the kind with Error { Unsupported } (the log-tail milestone)"
+        },
+        {
+          "index": 3,
+          "name": "StateChange",
+          "payload": "a node's checked fact moved (the m20 record's named event) — the wire Action path's check vocabulary landed and the tri-state actually moved; the subscription answers instead of a tree poll, and an action that lands without moving the fact publishes nothing"
         }
       ]
     },
@@ -238,6 +243,11 @@
           "index": 1,
           "name": "Off",
           "payload": "— → Subscribed { kinds: [] }; drop the connection's subscription"
+        },
+        {
+          "index": 2,
+          "name": "Resume",
+          "payload": "{ kinds: seq<EventKindV1>, cursor: ResumeCursorV1 { tree_seq: u64 varint, frame_seq: u64 varint } } → Subscribed after a position replay; resume the event stream from a re-attach cursor (the m18 record's named §7 follow-on): for each seq topic the filter names, the session pushes the coalesced current-seq event when it stands past the cursor — a current cursor replays nothing (the reconnecting viewer skips the re-dump); the Log kind has no seq to resume from (the tail is a live tap, never a replay buffer)"
         }
       ]
     },
@@ -298,6 +308,11 @@
       "index": 2,
       "name": "Log",
       "payload": "{ record: string }"
+    },
+    {
+      "index": 3,
+      "name": "StateChange",
+      "payload": "{ node: NodeKeyV1, checked: CheckedStateV1 } — a node's checked fact moved (the m20 record's named event): the wire Action path's check vocabulary landed and the tri-state actually moved — the subscription answers instead of a tree poll; an action that lands without moving the fact publishes nothing"
     }
   ],
   "framing": {
