@@ -296,6 +296,15 @@ m0_measurable = true
 sample = "viewer_live_sync"
 
 [[budget]]
+id = "overlay_replay_plan"
+name = "Deep-inspect overlay replay (1k nodes)"
+p50_us = 150
+p95_us = 750
+notes = "the m8 viewer-gap replay: one deep-inspect plan rebuilt from an archived 1k-node snapshot through the live session's from_facts cost model — emit-time (HTML export), not per frame; budgets mirror inspect_overlay_plan (the same plan build, the archived facts)"
+m0_measurable = true
+sample = "overlay_replay_plan"
+
+[[budget]]
 id = "checked_assert"
 name = "Kit: one to_be_checked() assertion (resolve + evaluate)"
 p50_us = 100
