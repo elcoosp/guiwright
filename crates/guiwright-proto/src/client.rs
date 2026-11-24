@@ -1710,6 +1710,46 @@ pub trait ClientConn: Send + 'static {
         self.expect_count_with(selector, CountMatch::LessThan(max), timeout)
     }
 
+    /// The inclusive count comparator (m25's honest-list widening — the
+    /// kit's `expect(locator).to_have_count_at_least(...)` over any
+    /// door): satisfied while `min` **or more** nodes match, the bound
+    /// itself included, the same composition as [`Self::expect_count`]
+    /// with the comparison as the only difference. **No wire change**;
+    /// every [`ClientConn`] impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_count`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have count`.
+    fn expect_count_at_least(
+        &mut self,
+        selector: SelectorV1,
+        min: usize,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        self.expect_count_with(selector, CountMatch::AtLeast(min), timeout)
+    }
+
+    /// The inclusive count comparator's mirror (m25's honest-list
+    /// widening): satisfied while `max` **or fewer** nodes match, the
+    /// bound itself included. **No wire change**; every [`ClientConn`]
+    /// impl inherits it.
+    ///
+    /// # Errors
+    ///
+    /// The same boundary as [`Self::expect_count`]: protocol failures
+    /// propagate as-is; a spent budget answers [`GwpError::WaitTimeout`]
+    /// naming `have count`.
+    fn expect_count_at_most(
+        &mut self,
+        selector: SelectorV1,
+        max: usize,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<usize, GwpError>> + Send {
+        self.expect_count_with(selector, CountMatch::AtMost(max), timeout)
+    }
+
     /// The shared count-assertion composition (m59): the m54 loop shape
     /// over the M30 resolve-all round trip — one entry read, event-driven
     /// re-reads, the subscription window owned and dropped, the typed
