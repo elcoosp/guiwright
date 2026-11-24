@@ -1895,6 +1895,22 @@ pub(crate) mod core_expect {
         pub fn to_have_count_less_than(mut self, max: usize) -> Result<(), CoreError> {
             self.builder().to_have_count_less_than(max)
         }
+        /// `expect(locator).to_have_count_at_least(min)` (m25's
+        /// honest-list widening) — the reserved inclusive lower bound:
+        /// satisfied while `min` *or more* nodes match, the bound itself
+        /// included, same waiter, same waitable mismatch, same error
+        /// shape (`count >= 99 — …`). Composes with [`Self::not`].
+        pub fn to_have_count_at_least(mut self, min: usize) -> Result<(), CoreError> {
+            self.builder().to_have_count_at_least(min)
+        }
+        /// `expect(locator).to_have_count_at_most(max)` (m25's
+        /// honest-list widening) — the reserved inclusive upper bound:
+        /// satisfied while `max` *or fewer* nodes match, the bound
+        /// itself included, same waiter, same waitable mismatch, same
+        /// error shape (`count <= 3 — …`). Composes with [`Self::not`].
+        pub fn to_have_count_at_most(mut self, max: usize) -> Result<(), CoreError> {
+            self.builder().to_have_count_at_most(max)
+        }
 
         /// `expect(locator).to_have_screenshot(name, bless)` — the §16
         /// retry waiter over the §10 baseline flow (Playwright
