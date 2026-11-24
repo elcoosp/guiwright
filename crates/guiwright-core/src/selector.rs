@@ -172,6 +172,15 @@ pub enum Selector {
         has_not: Option<Box<Selector>>,
         nth: Option<Nth>,
     },
+    /// The selector-valued **positive** filter (the m34 record's named
+    /// follow-on — Playwright's `filter({ has })`): keep the source's
+    /// matches whose subtree (the node included) matches `inner`.
+    /// Distinct from the `All(chain)` descendant chain, which narrows to
+    /// the *descendant's* rows — `has` keeps the *ancestor* rows.
+    Has {
+        source: Box<Selector>,
+        has: Box<Selector>,
+    },
 }
 
 impl Selector {
@@ -254,6 +263,22 @@ impl Selector {
         }
     }
 
+    /// `locator.filter({ has })` sugar (the m34 record's named
+    /// follow-on) — the selector-valued **positive** filter: keep only
+    /// the matches whose subtree (the node included) matches `inner`,
+    /// the exact inverse of [`Self::has_not`] (both read the same
+    /// subtree walk with opposite verdicts). The inner selector is a
+    /// full [`Selector`]: a role+name constraint, a test id, a nested
+    /// chain — a text probe only when built as one. Distinct from
+    /// [`Self::then_descendant`], which narrows to the descendant's
+    /// rows; `has` keeps the ancestor's.
+    pub fn has(self, inner: Selector) -> Selector {
+        Selector::Has {
+            source: Box::new(self),
+            has: Box::new(inner),
+        }
+    }
+
     /// `locator.locator(child)` sugar (M34) — the chained-descendant
     /// narrowing in **composition order**: resolve `self`, then search
     /// each match's subtree for `inner` (§8.1 `Selector::All` chain,
@@ -311,6 +336,11 @@ impl Selector {
                     }
                     None => {}
                 }
+                s
+            }
+            Selector::Has { source, has } => {
+                let mut s = source.render();
+                let _ = write!(s, ".filter(has={})", has.render());
                 s
             }
         }
