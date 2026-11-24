@@ -597,3 +597,12 @@ p50_us = 120
 p95_us = 700
 notes = "one ElementHandle visit_descendants walk + bounds-containment nesting + SlintTreeBuilder::rebuild fold on the §4.4 glue path (m78); measured by the glue workspace's criterion suite (glue/slint/benches — release, 480×320, the m78 counter/form app at 27 semantic nodes); design target until the slint matrix enforcement pass lands, then enforced like the other framework rows"
 m0_measurable = false
+
+[[budget]]
+id = "shm_ring_frame_hop"
+name = "Shared-frame ring hop, same-host (publish 1280x800 RGBA + digest-validated read)"
+p50_us = 2500
+p95_us = 8000
+notes = "the §15.6 shared-frame ring (m88): one FrameRingWriter::publish of a 1280×800 RGBA8 frame (payload + record commit + header stats) followed by the reader's latest_into digest-validated read into a reused buffer — the same-host pixel path beside the blob side-channel (no socket hop, no framing, no LZ4; the CDP binary-socket shape); file-backed positioned I/O, the §10 scene-digest hash guarding every slot"
+m0_measurable = true
+sample = "shm_ring_frame_hop"
