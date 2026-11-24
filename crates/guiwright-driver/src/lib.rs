@@ -21,6 +21,10 @@
 //!   when the server opts in with [`server::ServerOptions::log_tail`].
 //! * [`gesture`] — gesture synthesis (§9, M7): the wire's high-level
 //!   `Gesture` vocabulary → raw `InputEvent` sequences, paced per adapter.
+//! * [`frame_ring`] — the session-side publisher behind the §15.6
+//!   shared-frame ring: presented frames land in a
+//!   [`guiwright_proto::shmring`] store so a same-host client reads pixels
+//!   outside the door (no wire change; m88).
 //! * [`mock`] — a scriptable adapter used by tests and benches (feature
 //!   `mock`).
 
@@ -29,6 +33,7 @@
 pub mod adapter;
 pub mod clock;
 pub mod events;
+pub mod frame_ring;
 pub mod gesture;
 pub mod log_tail;
 pub mod seams;
