@@ -382,6 +382,70 @@ pub fn viewer_timeline_replay() -> Duration {
     started.elapsed()
 }
 
+/// §13 overlay replay (m8's named viewer gaps): one deep-inspect plan
+/// rebuilt from an archived 1k-node snapshot through the same
+/// `OverlayPlan::from_facts` cost model the live session speaks — the
+/// replay's per-export cost is the live plan build's twin
+/// ([`crate::samples::inspect_overlay_plan`]), paid at HTML-export time,
+/// not per frame.
+pub fn overlay_replay_plan() -> Duration {
+    use guiwright_trace::schema::{AdapterRecord, TreeNode, TreeSnapshot};
+    use guiwright_trace::{TraceOptions, TraceRecorder};
+    use guiwright_viewer::overlay;
+    use guiwright_viewer::{Timeline, TraceArchive};
+    use std::time::Instant;
+
+    const ITERATIONS: u32 = 64;
+
+    let dir = std::env::temp_dir().join(format!("gw-bench-overlay-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("overlay.zip");
+
+    let options = TraceOptions {
+        output_path: path.clone(),
+        test: "bench".into(),
+        app: "bench".into(),
+        adapter: AdapterRecord {
+            name: "bench".into(),
+            framework: "fixture".into(),
+            framework_version: "0".into(),
+        },
+        seed: None,
+        resolution: (1280, 800),
+        scale: 1.0,
+        frame_budget_bytes: 64 * 1024 * 1024,
+        ring_capacity: 8192,
+    };
+    let mut recorder = TraceRecorder::start(options);
+    let nodes: Vec<TreeNode> = (0..1000)
+        .map(|i| TreeNode {
+            id: i,
+            parent: Some(0),
+            role: "Button".into(),
+            label: Some(format!("button-{i}")),
+            value: None,
+            bounds: Some([0.0, 0.0, 40.0, 20.0]),
+        })
+        .collect();
+    recorder.tree_snapshot(TreeSnapshot {
+        frame_seq: 1,
+        nodes,
+        focus: Some(0),
+    });
+    recorder.stop().expect("bench archive");
+
+    let archive = TraceArchive::open(&path).expect("open");
+    let timeline = Timeline::from_archive(&archive);
+
+    let started = Instant::now();
+    for _ in 0..ITERATIONS {
+        let plan = overlay::replay_plan_at(&timeline, 1).expect("bench replay");
+        assert_eq!(plan.badges.len(), 1000, "every bounds-carrying node badged");
+        assert!(plan.hover.is_some(), "the recorded focus outlined");
+    }
+    started.elapsed() / ITERATIONS
+}
+
 // --- M3 samples (remote TCP round-trip §7/§15.1; video dedup §10) -----------
 
 /// §15.1 `resolve_remote_tcp`: one Resolve round-trip over loopback TCP —
