@@ -17,6 +17,7 @@
     "build": "node scripts/build-check.ts",
     "test": "node --test test/codec.test.ts test/wait.test.ts test/expect.test.ts test/count.test.ts test/description.test.ts test/state.test.ts test/client.test.ts test/e2e-full-stack.test.ts",
     "e2e": "node scripts/e2e.ts",
+    "example:count": "node examples/count_assertions.ts",
     "example:identity": "node examples/identity_assertions.ts",
     "example:description": "node examples/description_assertions.ts",
     "example:describe-identity": "node examples/describe_identity.ts",
