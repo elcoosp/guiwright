@@ -393,6 +393,61 @@ try {
   await client.ping(); // the spent assertion left the door healthy
   console.log("✓ expectCount: the exact form + the comparator + the typed expiry — door healthy (m59/m60)");
 
+  // --- the inclusive count comparators over the door (m25 widening,
+  // the m60 mirror pattern) ---
+  const least = await client.expectCountAtLeast(
+    { kind: "role", role: "Button", name: null },
+    4,
+    2000,
+  );
+  assert.equal(least, 5, "the inclusive lower bound holds — 5 clears >= 4");
+  const most = await client.expectCountAtMost(
+    { kind: "role", role: "Button", name: null },
+    5,
+    2000,
+  );
+  assert.equal(most, 5, "the inclusive upper bound holds on the bound itself");
+  await assert.rejects(
+    () => client.expectCountAtLeast({ kind: "role", role: "Button", name: null }, 99, 200),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have count", "the static state word");
+      assert.match(timeout.lastEvaluation, /count is 5, expected >= 99/, "the inclusive form rides the line");
+      return true;
+    },
+  );
+  await client.ping(); // the spent assertion left the door healthy
+  console.log("✓ expectCountAtLeast/AtMost: the inclusive pair + the typed expiry — door healthy (m25 widening)");
+
+  // --- the range comparator over the door (m25 widening, the m60
+  // mirror pattern) ---
+  const between = await client.expectCountBetween(
+    { kind: "role", role: "Button", name: null },
+    3,
+    5,
+    2000,
+  );
+  assert.equal(between, 5, "the range holds within 3..=5, bounds included");
+  await assert.rejects(
+    () =>
+      client.expectCountBetween(
+        { kind: "role", role: "Button", name: null },
+        99,
+        120,
+        200,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof GwpWaitTimeout, "the typed assertion timeout");
+      const timeout = err as GwpWaitTimeout;
+      assert.equal(timeout.state, "have count", "the static state word");
+      assert.match(timeout.lastEvaluation, /count is 5, expected 99..=120/, "the range form rides the line");
+      return true;
+    },
+  );
+  await client.ping(); // the spent assertion left the door healthy
+  console.log("✓ expectCountBetween: the range + the typed expiry — door healthy (m25 widening)");
+
   // --- the identity assertions over the door (m62/m63) ---
   // The kit's `to_have_role` / `to_have_accessible_name` vocabulary (M38)
   // mirrored on the TS client (the m45/m60 one-milestone-per-surface
