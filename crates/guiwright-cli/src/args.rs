@@ -32,6 +32,26 @@ pub enum Command {
     Bless { dir: PathBuf, dry_run: bool },
     /// `guiwright install-deps [--run]` — the §11 CI provisioning printer.
     InstallDeps { run: bool },
+    /// `guiwright codegen [--uds <path> | --tcp <addr>] [--attach-ms N]
+    /// [--duration-ms N] [--out <path>] <app-cmd…>` — the §13 standalone
+    /// codegen session (the m4 §4 deferred row): spawn the app with the
+    /// §5.3 `GUIWRIGHT_DRIVER` launch-mode env, wait for its door, run
+    /// the overlay + recorder session, and hand the kit code back when
+    /// the window ends (deadline, Ctrl-C, or the app closing).
+    Codegen {
+        /// Door override; `None` picks a fresh temp UDS path.
+        door: Option<ConnectTarget>,
+        /// Door-wait deadline in ms (`--attach-ms`).
+        attach_ms: Option<u64>,
+        /// Capture window in ms (`--duration-ms`); `None` = until the
+        /// door closes (the Ctrl-C finish on unix).
+        duration_ms: Option<u64>,
+        /// Also write the generated kit code here (`--out`).
+        out: Option<PathBuf>,
+        /// The app command: `command[0]` is the program, the rest its
+        /// argv (everything after the first non-flag token).
+        command: Vec<String>,
+    },
     /// `guiwright test [PATHS…]` — the §16 v0.5 own runner: discovers
     /// `gwtest/v1` scenario specs and drives them over GWP with workers,
     /// retries, sharding and reports.
@@ -57,6 +77,10 @@ pub enum Command {
         reports: Vec<ReportKind>,
         /// Report output directory (default `guiwright-report/`).
         out: Option<PathBuf>,
+        /// Record a per-scenario trace (the M18 live feed over a second
+        /// connection, finalized as the M23 scrubber HTML) and deep-link
+        /// it from the reports (the m5 §4 deferral, closed).
+        trace: bool,
     },
 }
 
@@ -96,6 +120,16 @@ COMMANDS:
         [--dry-run]       (§10 GUIWRIGHT_BLESS flow, for CI artifacts).
     install-deps          Print the §11 CI provisioning commands for the
         [--run]           host OS (--run executes them).
+    codegen <app-cmd…>    Launch the app and record a §13 codegen
+        [--uds <path>]    session: the §5.3 GUIWRIGHT_DRIVER door env is
+        [--tcp <addr>]    injected, the launcher waits for the door
+        [--attach-ms N]   (--attach-ms, default 10000), enables the M8
+        [--duration-ms N] overlay + recorder, and stops when the window
+        [--out <path>]    ends — --duration-ms, Ctrl-C, or the app
+                          closing (the last one loses the server-side
+                          recording). Launcher flags precede the app
+                          command; everything after the app program
+                          belongs to the app (`--` ends them early).
     test [PATHS…]         Run gwtest/v1 scenario specs against a live app
                           (the §16 v0.5 own runner; default PATH:
                           tests/guiwright, scanned for *.spec.toml).
@@ -109,6 +143,8 @@ COMMANDS:
         [--report <kind>] list | json | junit | html (repeatable; files
                           written under --out).
         [--out <dir>]     Report directory (default guiwright-report/).
+        [--trace]         Record a per-scenario trace beside the reports
+                          and deep-link it (the m5 §4 deferral, closed).
         [-q | --quiet]    Suppress per-scenario progress lines.
     --help | --version
 
@@ -134,6 +170,7 @@ pub fn parse_args(argv: &[String]) -> Result<Command, CliError> {
         "live-html" => parse_live_html_args(&argv[1..]),
         "bless" => parse_bless_args(&argv[1..]),
         "install-deps" => parse_install_deps_args(&argv[1..]),
+        "codegen" => parse_codegen_args(&argv[1..]),
         "test" => parse_test_args(&argv[1..]),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
@@ -173,10 +210,13 @@ fn parse_live_html_args(rest: &[String]) -> Result<Command, CliError> {
             }
             other => {
                 // Bare target: uds:///…, tcp://…, ws://…, /path or host:port.
-                target =
-                    Some(ConnectTarget::parse(other).map_err(|_| {
-                        CliError::BadValue(format!("cannot parse target `{other}`"))
-                    })?);
+                // The typed parse error names the scheme that was wrong
+                // (`TargetParseError`, session.rs) — carried verbatim,
+                // the REPL parser's shape, never flattened to a generic
+                // "cannot parse" line.
+                target = Some(
+                    ConnectTarget::parse(other).map_err(|e| CliError::BadValue(e.to_string()))?,
+                );
                 rest = &rest[1..];
             }
         }
@@ -331,6 +371,71 @@ fn parse_install_deps_args(rest: &[String]) -> Result<Command, CliError> {
     }
 }
 
+/// `guiwright codegen [--uds <path> | --tcp <addr>] [--attach-ms N]
+/// [--duration-ms N] [--out <path>] <app-cmd…>` — the launcher flags
+/// precede the app command; once the first non-flag token appears, every
+/// remaining token (flags included) belongs to the app (the `env`-wrapper
+/// rule). A bare `--` ends the launcher flags explicitly, so an app
+/// program whose name starts with `-` still launches (m4 §4).
+fn parse_codegen_args(rest: &[String]) -> Result<Command, CliError> {
+    let mut door = None;
+    let mut attach_ms = None;
+    let mut duration_ms = None;
+    let mut out = None;
+    let mut command: Option<Vec<String>> = None;
+    let mut rest: &[String] = rest;
+    while command.is_none() {
+        let Some(flag) = rest.first() else {
+            break;
+        };
+        match flag.as_str() {
+            "--uds" | "--tcp" => {
+                if door.is_some() {
+                    return Err(CliError::Usage("--uds and --tcp are mutually exclusive"));
+                }
+                let (parsed, consumed) = parse_target_flag(flag, rest)?;
+                door = Some(parsed);
+                rest = &rest[consumed..];
+            }
+            "--attach-ms" | "--duration-ms" => {
+                let (usage, slot): (&'static str, &mut Option<u64>) = if flag == "--attach-ms" {
+                    ("--attach-ms needs milliseconds", &mut attach_ms)
+                } else {
+                    ("--duration-ms needs milliseconds", &mut duration_ms)
+                };
+                *slot = Some(parse_numeric_flag(rest, usage, "a deadline")?);
+                rest = &rest[2..];
+            }
+            "--out" => {
+                out = Some(PathBuf::from(flag_value(rest, "--out needs a path")?));
+                rest = &rest[2..];
+            }
+            "--" => {
+                command = Some(rest[1..].to_vec());
+                rest = &[];
+            }
+            other if other.starts_with('-') => {
+                return Err(CliError::UnknownCommand(other.to_string()));
+            }
+            _ => {
+                // The app command: this token and everything after it.
+                command = Some(rest.to_vec());
+                rest = &[];
+            }
+        }
+    }
+    let command = command.filter(|c| !c.is_empty()).ok_or(CliError::Usage(
+        "codegen needs an app command to launch: guiwright codegen <app-cmd…>",
+    ))?;
+    Ok(Command::Codegen {
+        door,
+        attach_ms,
+        duration_ms,
+        out,
+        command,
+    })
+}
+
 /// The value after a flag (`--workers 4`), or the usage error.
 fn flag_value<'a>(rest: &'a [String], usage: &'static str) -> Result<&'a String, CliError> {
     rest.get(1).ok_or(CliError::Usage(usage))
@@ -382,6 +487,7 @@ fn parse_test_args(rest: &[String]) -> Result<Command, CliError> {
         let mut quiet = false;
         let mut reports = Vec::new();
         let mut out: Option<PathBuf> = None;
+        let mut trace = false;
 
         while let Some(flag) = rest.first() {
             match flag.as_str() {
@@ -434,18 +540,16 @@ fn parse_test_args(rest: &[String]) -> Result<Command, CliError> {
                     rest = &rest[1..];
                 }
                 "--report" => {
-                    let value = flag_value(rest, "--report needs list|json|junit|html")?;
-                    let kind = ReportKind::parse(value).ok_or_else(|| {
-                        CliError::BadValue(format!(
-                            "`{value}` is not a report kind — list | json | junit | html"
-                        ))
-                    })?;
-                    reports.push(kind);
+                    reports.push(parse_report_flag(rest)?);
                     rest = &rest[2..];
                 }
                 "--out" => {
                     out = Some(PathBuf::from(flag_value(rest, "--out needs a directory")?));
                     rest = &rest[2..];
+                }
+                "--trace" => {
+                    trace = true;
+                    rest = &rest[1..];
                 }
                 other if !other.starts_with('-') => {
                     paths.push(PathBuf::from(other));
@@ -465,8 +569,21 @@ fn parse_test_args(rest: &[String]) -> Result<Command, CliError> {
             quiet,
             reports,
             out,
+            trace,
         })
     }
+}
+
+/// `--report <kind>`: the value after the flag, parsed into its kind —
+/// the usage error names the vocabulary, the bad-value error names what
+/// was given.
+fn parse_report_flag(rest: &[String]) -> Result<ReportKind, CliError> {
+    let value = flag_value(rest, "--report needs list|json|junit|html")?;
+    ReportKind::parse(value).ok_or_else(|| {
+        CliError::BadValue(format!(
+            "`{value}` is not a report kind — list | json | junit | html"
+        ))
+    })
 }
 
 /// `--shard k/n`: 1-indexed shard `k` of `n`.
@@ -651,6 +768,7 @@ mod tests {
                 quiet: true,
                 reports: vec![ReportKind::Junit, ReportKind::Html],
                 out: Some(PathBuf::from("ci-reports")),
+                trace: false,
             }
         );
     }
@@ -671,6 +789,7 @@ mod tests {
                 quiet: false,
                 reports: Vec::new(),
                 out: None,
+                trace: false,
             }
         );
     }
