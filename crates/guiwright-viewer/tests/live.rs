@@ -210,6 +210,119 @@ async fn live_feed_tracks_a_mid_session_rename() {
     handle.shutdown();
 }
 
+/// The §7 resume vocabulary (the m18 record's remaining-gaps list:
+/// *"The feed is one-shot per connection. After `Bye` the connection is
+/// done; a reconnecting viewer re-attaches (and re-dumps)"*): the feed
+/// rides one connection through a rename, the connection ends, and the
+/// reattach keeps the timeline it built — skipping the attach dump
+/// while the cursor is current, replaying the position (one auto-sync)
+/// once the session moved on. The first rename never leaves the model.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reattach_resumes_from_the_cursor_without_re_paying_the_dump() {
+    let shared: Arc<Mutex<Vec<TreeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+    let scripts = Arc::clone(&shared);
+    let (handle, connect) = GwpServerHandle::spawn_inprocess(
+        move || MockAdapter::with_fixture(&Fixture::buttons()).with_shared_scripts(scripts),
+        guiwright_driver::SeamRegistry::new(),
+    )
+    .expect("in-process server starts");
+
+    let client = DuplexClient::connect(&connect)
+        .await
+        .expect("client connects");
+    let mut feed = LiveFeed::new(client);
+    feed.attach("viewer-live-reattach/0.1")
+        .await
+        .expect("attach");
+    push_rename(&shared, "Save (renamed)");
+    wait_for_tree_change(&mut feed).await;
+    let cursor = feed.resume_cursor();
+    assert!(cursor.tree_seq >= 1, "the rename's seq rides the cursor");
+
+    // The m18 one-shot rule: `bye` ends the conversation.
+    feed.bye().await.expect("bye");
+
+    // The quiet reattach: the cursor names the current position, so the
+    // replay is empty and the attach dump is skipped — the snapshot
+    // count does not move.
+    let snapshots_before = feed.snapshot_count();
+    let client = DuplexClient::connect(&connect)
+        .await
+        .expect("second client connects");
+    feed.reattach(client, "viewer-live-reattach/0.1")
+        .await
+        .expect("the quiet reattach resumes");
+    assert_eq!(
+        feed.snapshot_count(),
+        snapshots_before,
+        "a current cursor replays nothing — no re-dump"
+    );
+    feed.bye().await.expect("bye");
+
+    // The missed change: the session moves on while nobody is attached.
+    push_rename(&shared, "Save (renamed twice)");
+
+    // The reattach after the change: the position replays past the
+    // cursor and the drain's auto-sync records exactly one dump.
+    let snapshots_before = feed.snapshot_count();
+    let client = DuplexClient::connect(&connect)
+        .await
+        .expect("third client connects");
+    feed.reattach(client, "viewer-live-reattach/0.1")
+        .await
+        .expect("the resume reattach replays the position");
+    assert_eq!(
+        feed.snapshot_count(),
+        snapshots_before + 1,
+        "the replayed position auto-syncs once — the replay is the \
+         position, not the missed history"
+    );
+
+    // The kept timeline answers at the newest frame with the second
+    // rename — the first connection's model survives the reattach.
+    let view = feed
+        .tree_at(feed.current_frame())
+        .expect("the newest frame resolves");
+    let label = view
+        .nodes
+        .iter()
+        .find(|n| n.role == "Button")
+        .and_then(|n| n.label.clone())
+        .expect("the renamed button");
+    assert_eq!(label, "Save (renamed twice)");
+
+    feed.bye().await.expect("bye");
+    handle.shutdown();
+}
+
+fn push_rename(shared: &Arc<Mutex<Vec<TreeUpdate>>>, label: &str) {
+    let mut save = Node::new(Role::Button);
+    save.set_label(label);
+    save.set_bounds(accesskit::Rect {
+        x0: 16.0,
+        y0: 16.0,
+        x1: 136.0,
+        y1: 48.0,
+    });
+    shared.lock().expect("scripts lock").push(TreeUpdate {
+        nodes: vec![(NodeId(2), save)],
+        tree: None,
+        tree_id: accesskit::TreeId::ROOT,
+        focus: accesskit::NodeId(2),
+    });
+}
+
+async fn wait_for_tree_change(feed: &mut LiveFeed<DuplexClient>) -> u64 {
+    for _ in 0..64 {
+        match feed.pump(Duration::from_secs(5)).await.expect("pump") {
+            Some(LiveChange::TreeChanged { frame }) => return frame,
+            Some(_) => {}
+            None => panic!("quiet window while a rename was pending"),
+        }
+    }
+    panic!("the TreeChanged event never arrived");
+}
+
 /// The session-less wire dance over any door: attach handshakes and
 /// subscribes, `sync_tree` fetches the dump once, the timeline resolves
 /// the scripted rows with rebuilt parent links, and a pump with nothing
