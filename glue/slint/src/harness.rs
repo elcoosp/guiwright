@@ -633,6 +633,22 @@ impl<C: ComponentHandle + 'static> FrameworkAdapter for SlintAdapter<C> {
                 self.fill_at(facts, &text)?;
                 format!("filled {text:?}")
             }
+            // The m89 select vocabulary rides the same fill path — the
+            // TestingBackend's `Window::dispatch_event` applies the
+            // value the same way it applies text (§4.4).
+            SemAction::SelectOption { option } => {
+                self.fill_at(facts, &option)?;
+                format!("selected {option:?}")
+            }
+            // The m90 scroll-into-view vocabulary: the TestingBackend's
+            // dispatch surface carries no scroll-into-view request —
+            // loud, like the other framework-native vocabulary here.
+            SemAction::ScrollIntoView => {
+                return Err(AdapterError::Unsupported(
+                    "scroll_into_view_if_needed (no scroll-into-view dispatch \
+                     on the TestingBackend event surface)",
+                ));
+            }
             SemAction::Focus => {
                 // Slint focuses focusable elements on click; there is no
                 // focus-without-activate path on the dispatch surface.
