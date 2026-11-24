@@ -419,6 +419,26 @@ impl FrameworkAdapter for EguiAdapter {
                 target_tree: accesskit::TreeId::ROOT,
                 data: None,
             },
+            // §8.4 select vocabulary (m89): a combobox's selected option
+            // IS its accessible value — the option rides SetValue's
+            // ActionData, the same request stock widgets honor for fill.
+            SemAction::SelectOption { option } => accesskit::ActionRequest {
+                action: accesskit::Action::SetValue,
+                target_node: node,
+                target_tree: accesskit::TreeId::ROOT,
+                data: Some(accesskit::ActionData::Value(
+                    option.clone().into_boxed_str(),
+                )),
+            },
+            // §8.4 scroll-into-view vocabulary (m90): AccessKit's native
+            // action — the framework's own scroll semantics (the
+            // scrollable-ancestor walk is egui's, not ours).
+            SemAction::ScrollIntoView => accesskit::ActionRequest {
+                action: accesskit::Action::ScrollIntoView,
+                target_node: node,
+                target_tree: accesskit::TreeId::ROOT,
+                data: None,
+            },
             // Hover/Scroll are real-input actions (§8.4): the session routes
             // them to `input()` with coordinates; reaching `act` means the
             // session has no bounds — report clearly.
