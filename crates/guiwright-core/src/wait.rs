@@ -279,6 +279,17 @@ pub enum CountMatch {
     /// At most `n` matches — the inclusive upper bound (the pair's
     /// mirror).
     AtMost(usize),
+    /// `min` through `max` matches, both ends inclusive — the range
+    /// shape the m25 honest list names beside the inclusive pair, on
+    /// the same `CountMatch`. A range whose `min` exceeds its `max`
+    /// never holds (the mismatch names the demanded range); the empty
+    /// set holds only a zero-bottomed range.
+    Between {
+        /// The inclusive lower bound.
+        min: usize,
+        /// The inclusive upper bound.
+        max: usize,
+    },
 }
 
 impl CountMatch {
@@ -294,13 +305,14 @@ impl CountMatch {
             CountMatch::LessThan(n) => found < n,
             CountMatch::AtLeast(n) => found >= n,
             CountMatch::AtMost(n) => found <= n,
+            CountMatch::Between { min, max } => found >= min && found <= max,
         }
     }
 
     /// The rendering used by descriptions and timeout headers
     /// (`count 4`, `count > 3`, `count < 5`, `count >= 4`,
-    /// `count <= 4`) — the exact form is the M22 header, byte-identical
-    /// through the shared path.
+    /// `count <= 4`, `count 3..=5`) — the exact form is the M22 header,
+    /// byte-identical through the shared path.
     pub fn describe(self) -> String {
         match self {
             CountMatch::Exact(n) => format!("count {n}"),
@@ -308,11 +320,14 @@ impl CountMatch {
             CountMatch::LessThan(n) => format!("count < {n}"),
             CountMatch::AtLeast(n) => format!("count >= {n}"),
             CountMatch::AtMost(n) => format!("count <= {n}"),
+            CountMatch::Between { min, max } => format!("count {min}..={max}"),
         }
     }
 
     /// The bound the comparison stands against (the count the assertion
-    /// names).
+    /// names). The single-bound forms answer their bound; the range
+    /// answers its lower bound — the range carries both ends in its
+    /// fields.
     pub fn bound(self) -> usize {
         match self {
             CountMatch::Exact(n)
@@ -320,6 +335,7 @@ impl CountMatch {
             | CountMatch::LessThan(n)
             | CountMatch::AtLeast(n)
             | CountMatch::AtMost(n) => n,
+            CountMatch::Between { min, max: _ } => min,
         }
     }
 }
@@ -1044,6 +1060,87 @@ mod tests {
         assert_eq!(waiter.describe(), "count >= 4 — getByRole(Button)");
         let waiter = CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtMost(4));
         assert_eq!(waiter.describe(), "count <= 4 — getByRole(Button)");
+    }
+
+    // --- The range comparator (m25's honest-list widening) ----------------
+    //
+    // Plan pin (docs/m25-count-comparators.md §5 "Remaining gaps", the
+    // same sentence the inclusive pair rode in on):
+    //   "`at_least`/`at_most` (inclusive forms) and a range/between shape
+    //    stay unreserved — add them only when a suite asks, on the same
+    //    `CountMatch`."
+    // The range lands on the same enum, the same waiter, no new
+    // machinery — both ends inclusive, the describe form the headers
+    // print (`count 3..=5`).
+
+    #[test]
+    fn between_holds_within_the_range_inclusive() {
+        let (tree, _) = setup();
+        // Exactly 4 buttons: the range 3..=5 holds, and both ends hold
+        // too — the inclusive range is the point.
+        let mut waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 3, max: 5 },
+        );
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("4 buttons hold 3..=5, got {other:?}"),
+        }
+        let mut waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 4, max: 4 },
+        );
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("4 buttons hold 4..=4, got {other:?}"),
+        }
+        // Outside the range stays waitable and names the found count.
+        let mut waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 5, max: 9 },
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.stuck_on().as_deref(), Some("found 4"));
+        let mut waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 0, max: 3 },
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.stuck_on().as_deref(), Some("found 4"));
+        // The empty set holds only a zero-bottomed range (absence is an
+        // answer like any other).
+        let tree = TreeService::new();
+        let mut waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 0, max: 2 },
+        );
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("0 buttons hold 0..=2, got {other:?}"),
+        }
+        let mut waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 1, max: 2 },
+        );
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+    }
+
+    #[test]
+    fn between_describes_the_comparison_and_reports_the_lower_bound() {
+        let waiter = CountWaiter::with_match(
+            Selector::role(Role::Button),
+            CountMatch::Between { min: 3, max: 5 },
+        );
+        assert_eq!(waiter.describe(), "count 3..=5 — getByRole(Button)");
+        // The single-bound accessor answers the range's lower bound — the
+        // range carries both ends in its fields.
+        assert_eq!(CountMatch::Between { min: 3, max: 5 }.bound(), 3);
     }
 
     // --- The negation decorator (§16 assertions row, M24) -----------------
