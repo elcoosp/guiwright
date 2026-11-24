@@ -32,8 +32,9 @@ use crate::expect::{
 use crate::schema::{
     AdapterInfoV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
     DescribedIdentityV1, DescribedV1, EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1,
-    InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, ScreenshotV1, SelectorV1,
-    SemActionV1, SnapshotNodeV1, SnapshotV1, TextMatchV1, VideoV1, WindowInfoV1, WindowV1,
+    InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, ResumeCursorV1,
+    ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1,
+    VideoV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 use guiwright_core::wait::CountMatch;
@@ -274,6 +275,34 @@ pub trait ClientConn: Send + 'static {
         &mut self,
         kinds: &[EventKindV1],
     ) -> impl Future<Output = Result<(), GwpError>> + Send;
+
+    /// Resume this connection's event stream from a re-attach cursor
+    /// (§7 resume vocabulary — the m18 record's named follow-on):
+    /// subscribe to `kinds`, and the driver replays the coalesced
+    /// position past `cursor` ahead of the ack (a current cursor replays
+    /// nothing — the reconnecting viewer skips the re-dump it used to pay
+    /// unconditionally). The replayed events answer through
+    /// [`Self::next_event`], before any live event.
+    fn subscribe_from(
+        &mut self,
+        kinds: &[EventKindV1],
+        cursor: ResumeCursorV1,
+    ) -> impl Future<Output = Result<(), GwpError>> + Send {
+        async move {
+            let ack = self
+                .request(RequestV1::Subscribe(SubscribeV1::Resume {
+                    kinds: kinds.to_vec(),
+                    cursor,
+                }))
+                .await?;
+            match ack {
+                ResponseV1::Subscribed { .. } => Ok(()),
+                other => Err(GwpError::Protocol(format!(
+                    "subscribe resume answered by {other:?}"
+                ))),
+            }
+        }
+    }
 
     /// Drop this connection's event subscription (§7, M12).
     fn unsubscribe(&mut self) -> impl Future<Output = Result<(), GwpError>> + Send;
@@ -1847,9 +1876,11 @@ async fn next_wake<C: ClientConn + ?Sized>(
                 match event {
                     EventV1::TreeChanged { .. } => return Ok(Some(Wake::Tree)),
                     EventV1::FramePresented { .. } => return Ok(Some(Wake::Frame)),
-                    // `Log` is never a wake: fall through to the next
-                    // wake window.
-                    EventV1::Log { .. } => {}
+                    // `Log` and `StateChange` are never wakes: fall
+                    // through to the next wake window (a state change is
+                    // a fact a subscribed client drains, not a wait
+                    // wake — the m20 event rides the same loop).
+                    EventV1::Log { .. } | EventV1::StateChange { .. } => {}
                 }
             }
             () = tokio::time::sleep_until(deadline) => return Ok(None),
