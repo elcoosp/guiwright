@@ -18,7 +18,10 @@
 //! * [`log_tail`] — the event channel's log half (the log-tail milestone):
 //!   the per-session `tracing` tap whose records stream as
 //!   [`guiwright_proto::schema::EventV1::Log`] frames to `Log` subscribers
-//!   when the server opts in with [`server::ServerOptions::log_tail`].
+//!   when the server opts in with [`server::ServerOptions::log_tail`] — or
+//!   rides the app's own tap via [`server::ServerOptions::log_tap`] (the
+//!   m14 record's named knob; the app feeds its own records onto the same
+//!   stream).
 //! * [`gesture`] — gesture synthesis (§9, M7): the wire's high-level
 //!   `Gesture` vocabulary → raw `InputEvent` sequences, paced per adapter.
 //! * [`frame_ring`] — the session-side publisher behind the §15.6
