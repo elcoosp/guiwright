@@ -118,6 +118,22 @@ pub enum SemAction {
     },
     Check,
     Uncheck,
+    /// Select an option by accessible name on a choice widget (§16
+    /// actions row's `select`, the m19 record's named §16 follow-on).
+    /// The option is the same string a text locator matches — the
+    /// adapter translates per framework (§8.4): a11y-first stacks take
+    /// it as the widget's value, pixel-first stacks resolve the option
+    /// row and click it.
+    SelectOption {
+        option: String,
+    },
+    /// Scroll the node into view (§16 actions row's scroll-into-view,
+    /// the m19 record's named §16 follow-on — the "scrollable ancestors"
+    /// vocabulary). The a11y-first honest form: the request rides the
+    /// framework's own `ScrollIntoView` semantic where the stack
+    /// carries it (egui/masonry/freya honor AccessKit's action);
+    /// adapters without the dispatch answer the typed `Unsupported`.
+    ScrollIntoView,
 }
 
 impl SemAction {
@@ -142,6 +158,8 @@ impl SemAction {
             SemAction::Scroll { dx, dy } => format!("scroll({dx},{dy})"),
             SemAction::Check => "check".into(),
             SemAction::Uncheck => "uncheck".into(),
+            SemAction::SelectOption { option } => format!("select_option({option:?})"),
+            SemAction::ScrollIntoView => "scroll_into_view_if_needed".into(),
         }
     }
 }
