@@ -105,7 +105,7 @@ async fn resume_replays_the_position_past_the_cursor() {
     let ack = client
         .request(RequestV1::Subscribe(SubscribeV1::Resume {
             kinds: vec![EventKindV1::TreeChanged],
-            cursor: cursor.clone(),
+            cursor,
         }))
         .await
         .expect("resume subscribes");
