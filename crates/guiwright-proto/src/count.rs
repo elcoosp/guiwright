@@ -100,7 +100,8 @@ impl CountTracker {
 
 /// The demanded comparison's render for the timeout's "expected" side
 /// (the core's `count 4` / `count > 3` / `count < 5` / `count >= 4` /
-/// `count <= 4` vocabulary, the exact form the kit's headers print).
+/// `count <= 4` / `count 3..=5` vocabulary, the exact form the kit's
+/// headers print).
 fn render_expected(comparison: CountMatch) -> String {
     match comparison {
         CountMatch::Exact(n) => n.to_string(),
@@ -108,6 +109,7 @@ fn render_expected(comparison: CountMatch) -> String {
         CountMatch::LessThan(n) => format!("< {n}"),
         CountMatch::AtLeast(n) => format!(">= {n}"),
         CountMatch::AtMost(n) => format!("<= {n}"),
+        CountMatch::Between { min, max } => format!("{min}..={max}"),
     }
 }
 
@@ -218,6 +220,42 @@ mod tests {
                 reason: "count is 5, expected <= 4".into()
             }
         );
+    }
+
+    /// The range comparator (m25's honest-list widening, the range
+    /// shape the same honest list names beside the inclusive pair):
+    /// both ends hold on the bound, the inside answers, and the
+    /// mismatch names the demanded range the kit's headers print.
+    #[test]
+    fn the_range_comparator_holds_within_the_bounds() {
+        let four = [row(2), row(3), row(6), row(7)];
+        let range = CountTracker::new(CountMatch::Between { min: 3, max: 5 });
+        assert_eq!(range.evaluate(&four), CountEval::Satisfied { found: 4 });
+        assert_eq!(
+            range.evaluate(&[row(2), row(3), row(6)]),
+            CountEval::Satisfied { found: 3 }
+        );
+        assert_eq!(
+            range.evaluate(&[]),
+            CountEval::Pending {
+                reason: "count is 0, expected 3..=5".into()
+            }
+        );
+        assert_eq!(
+            range.evaluate(&[row(2), row(3), row(6), row(7)]),
+            CountEval::Satisfied { found: 4 }
+        );
+        // One over the inclusive upper bound stays pending.
+        assert_eq!(
+            range.evaluate(&[row(2), row(3), row(6), row(7), row(8), row(9)]),
+            CountEval::Pending {
+                reason: "count is 6, expected 3..=5".into()
+            }
+        );
+        // The zero-bottomed range holds the empty set (absence is an
+        // answer like any other).
+        let zeroed = CountTracker::new(CountMatch::Between { min: 0, max: 2 });
+        assert_eq!(zeroed.evaluate(&[]), CountEval::Satisfied { found: 0 });
     }
 
     /// The state word the typed timeout names is stable (the m54
