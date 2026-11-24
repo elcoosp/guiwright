@@ -988,13 +988,14 @@ impl Repl {
         identity_line_description(outcome)
     }
 
-    /// The count-assertion row (m59 — the exact form and both
-    /// comparators): the locator resolves through the get vocabulary, the
-    /// comparison rides the seam's [`ClientConn::expect_count`] /
-    /// [`expect_count_greater_than`] / [`expect_count_less_than`] rows,
-    /// the found count renders as the answer — `found 0` included (the
-    /// m59 absence rule: an empty set is an answer, satisfying `is 0`
-    /// and every less-than).
+    /// The count-assertion row (m59 — the exact form and every
+    /// comparator, the inclusive pair included): the locator resolves
+    /// through the get vocabulary, the comparison rides the seam's
+    /// [`ClientConn::expect_count`] / [`expect_count_greater_than`] /
+    /// [`expect_count_less_than`] / [`expect_count_at_least`] /
+    /// [`expect_count_at_most`] rows, the found count renders as the
+    /// answer — `found 0` included (the m59 absence rule: an empty set
+    /// is an answer, satisfying `is 0` and every at-most).
     async fn assert_count_command(&mut self, tokens: &[String]) -> Result<Vec<Line>, String> {
         let (locator_tokens, spec) = split_at_is(assert_tail(tokens)?)?;
         let (selector, describe) = parse_selector(locator_tokens)?;
@@ -1017,6 +1018,16 @@ impl Repl {
             CountSpec::LessThan(max) => {
                 self.conn
                     .expect_count_less_than(selector, max, Duration::from_millis(self.timeout_ms))
+                    .await
+            }
+            CountSpec::AtLeast(min) => {
+                self.conn
+                    .expect_count_at_least(selector, min, Duration::from_millis(self.timeout_ms))
+                    .await
+            }
+            CountSpec::AtMost(max) => {
+                self.conn
+                    .expect_count_at_most(selector, max, Duration::from_millis(self.timeout_ms))
                     .await
             }
         };
@@ -1921,7 +1932,7 @@ fn parse_ms(value: Option<&String>) -> Result<u64, String> {
 const ASSERT_KINDS_USAGE: &str = "text | value | count | role | name | description | checked | enabled | focused (e.g. `assert count role Button is 4`)";
 
 /// The `assert count` expectation's forms (the m59 comparator shapes).
-const ASSERT_COUNT_USAGE: &str = "`is <N>` | `is > <N>` | `is < <N>`";
+const ASSERT_COUNT_USAGE: &str = "`is <N>` | `is > <N>` | `is < <N>` | `is >= <N>` | `is <= <N>`";
 
 /// The `assert checked` row's grammar (m74): the `is` separator plus the
 /// m68 four-way word the tri-state demand speaks — the kebab-cased
@@ -1976,6 +1987,8 @@ enum CountSpec {
     Exact(usize),
     GreaterThan(usize),
     LessThan(usize),
+    AtLeast(usize),
+    AtMost(usize),
 }
 
 /// The row-assertion answer line (m61/m62): the satisfying row rendered
@@ -2081,7 +2094,12 @@ fn parse_count_spec(spec: &[String]) -> Result<CountSpec, String> {
     }
     match spec {
         [one] => {
-            if let Some(rest) = one.strip_prefix('>') {
+            // The inclusive forms first — `>=4` starts with `>` too.
+            if let Some(rest) = one.strip_prefix(">=") {
+                Ok(CountSpec::AtLeast(count(rest)?))
+            } else if let Some(rest) = one.strip_prefix("<=") {
+                Ok(CountSpec::AtMost(count(rest)?))
+            } else if let Some(rest) = one.strip_prefix('>') {
                 Ok(CountSpec::GreaterThan(count(rest)?))
             } else if let Some(rest) = one.strip_prefix('<') {
                 Ok(CountSpec::LessThan(count(rest)?))
@@ -2092,6 +2110,8 @@ fn parse_count_spec(spec: &[String]) -> Result<CountSpec, String> {
         [op, n] => match op.as_str() {
             ">" => Ok(CountSpec::GreaterThan(count(n)?)),
             "<" => Ok(CountSpec::LessThan(count(n)?)),
+            ">=" => Ok(CountSpec::AtLeast(count(n)?)),
+            "<=" => Ok(CountSpec::AtMost(count(n)?)),
             other => Err(format!(
                 "unknown comparator `{other}` — `assert count` needs {ASSERT_COUNT_USAGE}"
             )),
