@@ -121,6 +121,9 @@ fn parse_role(name: &str) -> Role {
         "EmailInput" => Role::EmailInput,
         "NumberInput" => Role::NumberInput,
         "CheckBox" => Role::CheckBox,
+        // The m89 select vocabulary: the choice widget's role rides the
+        // wire beside the appended `SelectOption` action variant.
+        "ComboBox" => Role::ComboBox,
         "Switch" => Role::Switch,
         "RadioButton" => Role::RadioButton,
         "List" => Role::List,
