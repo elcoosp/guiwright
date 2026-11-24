@@ -374,6 +374,15 @@ m0_measurable = true
 sample = "editable_assert"
 
 [[budget]]
+id = "empty_assert"
+name = "Kit: one to_be_empty() assertion (resolve + evaluate)"
+p50_us = 100
+p95_us = 500
+notes = "the m28 honest-list empty assertion's steady-state cost on the empty fixture: one strict resolve (auto-wait index path) plus the two node reads the HasText check makes (label + value) through the session's zero-polling wait — the assertion completes on the initial evaluation, so this is the floor every empty assertion adds on top of a resolve; the same shape as the checked_assert and editable_assert rows (a composite check rides an existing waiter, no new machinery)"
+m0_measurable = true
+sample = "empty_assert"
+
+[[budget]]
 id = "text_contents"
 name = "Kit: one all_text_contents() read (resolve_all + per-node text)"
 p50_us = 400
