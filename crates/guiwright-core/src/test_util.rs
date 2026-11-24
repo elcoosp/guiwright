@@ -69,6 +69,10 @@ pub struct Fixture {
     /// [`Fixture::with_combobox`]; the same byte-stability rule as the
     /// checkbox trio applies to the base.
     pub combobox: Option<NodeId>,
+    /// The empty region (§8 check vocabulary, m28's honest-list
+    /// `to_be_empty` row) — `Some` only for [`Fixture::with_empty`]; the
+    /// same byte-stability rule as the checkbox trio applies to the base.
+    pub empty_region: Option<NodeId>,
     pub screen_size: (f64, f64),
 }
 
@@ -107,6 +111,7 @@ impl Fixture {
             readonly_input: None,
             described_button: None,
             combobox: None,
+            empty_region: None,
             screen_size: (480.0, 240.0),
         }
     }
@@ -232,6 +237,31 @@ impl Fixture {
         }
     }
 
+    /// The empty-region fixture (§8 check vocabulary, m28's honest-list
+    /// `to_be_empty` row): the `buttons()` base plus one bounded,
+    /// visible container under the group that carries **no** label and
+    /// **no** value —
+    ///
+    /// ```text
+    /// group (1)
+    /// ├── … the six buttons()/label/input nodes …
+    /// └── generic_container (16, no name, no value) @ 16,204 160×24
+    /// ```
+    ///
+    /// `NodeId(8)` stays reserved for [`Fixture::add_button_update`],
+    /// `NodeId(9..=11)` for [`Fixture::with_checkboxes`],
+    /// `NodeId(12..=13)` for [`Fixture::with_readonly`],
+    /// `NodeId(14)` for [`Fixture::with_description`] and
+    /// `NodeId(15)` for [`Fixture::with_combobox`]; this fixture
+    /// takes `NodeId(16)` so every constructor stays independent.
+    pub fn with_empty() -> Self {
+        Self {
+            expected_nodes: 9,
+            empty_region: Some(NodeId(16)),
+            ..Self::buttons()
+        }
+    }
+
     fn node(role: Role, name: Option<&str>) -> Node {
         let mut n = Node::new(role);
         if let Some(name) = name {
@@ -284,6 +314,28 @@ impl Fixture {
                     y1: y0 + 32.0,
                 });
                 (id, box_node)
+            })
+            .into_iter()
+            .collect()
+    }
+
+    /// The empty-region row of the extension band (`with_empty`, m28's
+    /// honest-list `to_be_empty` row): bounded and visible, deliberately
+    /// nameless and valueless — the factless node the empty assertion
+    /// reads. `first_extra` indexes the band rows the earlier extensions
+    /// already took.
+    fn empty_region_node(&self, first_extra: usize) -> Vec<(NodeId, Node)> {
+        self.empty_region
+            .map(|id| {
+                let y0 = 204.0 + 40.0 * first_extra as f64;
+                let mut region = Self::node(Role::GenericContainer, None);
+                region.set_bounds(Rect {
+                    x0: 16.0,
+                    y0,
+                    x1: 176.0,
+                    y1: y0 + 24.0,
+                });
+                (id, region)
             })
             .into_iter()
             .collect()
@@ -370,6 +422,10 @@ impl Fixture {
             nodes.push((slot, node));
         }
         for (slot, node) in self.combobox_pair(nodes.len()) {
+            children.push(slot);
+            nodes.push((slot, node));
+        }
+        for (slot, node) in self.empty_region_node(nodes.len()) {
             children.push(slot);
             nodes.push((slot, node));
         }
@@ -502,6 +558,30 @@ impl Fixture {
         let input = Self::input_node(name, value, read_only, y0);
         Some(TreeUpdate {
             nodes: vec![(node, input)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        })
+    }
+
+    /// Incremental update: re-state the empty region with an optional
+    /// label (m28's honest-list `to_be_empty` row — the scripted
+    /// "text arrives" flip the waitable-completion tests ride). The
+    /// value fact stays absent: the label is the only content the flip
+    /// carries. Fixture-scoped: `None` for ids outside the slot, so
+    /// callers decide how to fail.
+    pub fn region_label_update(&self, node: NodeId, label: Option<&str>) -> Option<TreeUpdate> {
+        self.empty_region.filter(|slot| *slot == node)?;
+        let y0 = 204.0;
+        let mut region = Self::node(Role::GenericContainer, label);
+        region.set_bounds(Rect {
+            x0: 16.0,
+            y0,
+            x1: 176.0,
+            y1: y0 + 24.0,
+        });
+        Some(TreeUpdate {
+            nodes: vec![(node, region)],
             tree: None,
             tree_id: TreeId::ROOT,
             focus: NodeId(0),
