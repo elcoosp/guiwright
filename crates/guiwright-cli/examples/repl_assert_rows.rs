@@ -85,6 +85,12 @@ fn main() {
         // survives it (the debugging tool outlives its failures).
         step(&mut repl, "timeout 150").await;
         step(&mut repl, "assert count role Button is < 5").await;
+        // The inclusive comparators (m25's honest-list widening): the
+        // bound itself holds, the grammar speaking `>=`/`<=` — the set
+        // stands at 5 here, so the inclusive bounds 4 and 5 both answer.
+        step(&mut repl, "timeout 2000").await;
+        step(&mut repl, "assert count role Button is >= 4").await;
+        step(&mut repl, "assert count role Button is <= 5").await;
         step(&mut repl, "ping").await;
 
         // The conversation's end (the §7 lifecycle).
