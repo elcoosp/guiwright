@@ -918,6 +918,8 @@ impl<A: FrameworkAdapter> Session<A> {
             SemAction::Scroll { .. } => return None,
             SemAction::Check => ("check", None),
             SemAction::Uncheck => ("uncheck", None),
+            SemAction::SelectOption { option } => ("select_option", Some(option.clone())),
+            SemAction::ScrollIntoView => ("scroll_into_view_if_needed", None),
         };
         let node = self.tree.node(key);
         let facts = guiwright_inspect::codegen::NodeFacts {
