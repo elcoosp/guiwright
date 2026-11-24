@@ -17,6 +17,11 @@ import { encodeRequest, decodeResponse } from "./codec.ts";
 
 /** The protocol version this client speaks. */
 export { PROTO_VERSION } from "./schema.ts";
+/** The typed filter composition (the m34 record's named TS pass): the
+ * `filter({ hasText, hasNot, has, nth })` rows and the m91 `has` variant,
+ * composed client-side. */
+export { filter, type FilterOpts } from "./filter.ts";
+export type { Nth, Selector, TextMatchV1 } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
 import { renderSelector, WaitTracker, type WaitState } from "./wait.ts";
 import {
