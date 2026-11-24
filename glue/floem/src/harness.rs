@@ -772,6 +772,25 @@ impl FrameworkAdapter for FloemAdapter {
                 self.fill_at(facts, &text)?;
                 format!("filled {text:?}")
             }
+            // The m89 select vocabulary rides the same gate the fill
+            // path documents (m80): a combobox fill focuses the widget
+            // the same way a text_input does, so the headless-IME
+            // blocker applies unchanged until the upstream patch lands.
+            SemAction::SelectOption { .. } => {
+                return Err(AdapterError::Unsupported(
+                    "select_option (floem combobox fill focuses the widget: \
+                     same headless-IME blocker as fill — window/mock.rs:262)",
+                ));
+            }
+            // The m90 scroll-into-view vocabulary: the harness's
+            // dispatch surface carries no scroll-into-view request —
+            // loud, like the other framework-native vocabulary here.
+            SemAction::ScrollIntoView => {
+                return Err(AdapterError::Unsupported(
+                    "scroll_into_view_if_needed (no scroll-into-view dispatch \
+                     on the HeadlessHarness event surface)",
+                ));
+            }
             SemAction::Focus => {
                 // floem focuses the hit element on pointer-down (§4.7
                 // "Down: moves keyboard focus to the hit element").
