@@ -3,9 +3,11 @@
 //! `<testsuite>` per spec file) and the self-contained HTML summary (the
 //! `trace.html` precedent). All renderers are pure functions over
 //! [`RunReport`] — file writing is the runner's job. The HTML report deep
-//! links each scenario's artifact paths (m82: the runner harvests the
-//! `shot:`/`video:` paths its own steps wrote; the files stay where the
-//! REPL command put them).
+//! links each scenario's artifact paths: with `--trace` the runner emits
+//! its own artifact — the per-scenario trace file beside the reports (the
+//! m5 §4 deferral, closed) — and the rest are the `shot:`/`video:` paths
+//! the scenario's steps wrote (m82; those files stay where the REPL
+//! command put them).
 
 use std::fmt::Write;
 
@@ -80,10 +82,12 @@ pub struct ScenarioRecord {
     pub duration_ms: u64,
     /// The last failure message (`None` when passed).
     pub error: Option<String>,
-    /// Artifact paths the scenario's own steps wrote (m82: harvested from
-    /// the `shot:` / `video:` Ok lines, in step order across all attempts).
-    /// The runner never emits artifacts itself — the REPL command wrote
-    /// each file; the record carries the path so reports can link it.
+    /// Artifact paths linked from the reports, in step order across all
+    /// attempts. With `--trace` the runner emits one artifact itself —
+    /// the per-scenario trace file beside the reports, recorded by file
+    /// name (the m5 §4 "the runner owns trace emission" deferral,
+    /// closed); the rest are the paths the scenario's own steps wrote
+    /// (m82: harvested from the `shot:` / `video:` Ok lines).
     pub artifacts: Vec<String>,
 }
 
