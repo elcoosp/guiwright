@@ -1624,6 +1624,10 @@ fn convert_action(action: &SemActionV1) -> SemAction {
         SemActionV1::Scroll { dx, dy } => SemAction::Scroll { dx: *dx, dy: *dy },
         SemActionV1::Check => SemAction::Check,
         SemActionV1::Uncheck => SemAction::Uncheck,
+        SemActionV1::SelectOption { option } => SemAction::SelectOption {
+            option: option.clone(),
+        },
+        SemActionV1::ScrollIntoView => SemAction::ScrollIntoView,
     }
 }
 
