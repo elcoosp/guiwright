@@ -225,6 +225,9 @@ export const SelectorV1 = {
   Value: 4,
   All: 5,
   Filter: 6,
+  /** The selector-valued positive filter (the m34 record's named
+   * follow-on): the appended variant, the `Filter` encodings unchanged. */
+  Has: 7,
 } as const;
 
 export const NthV1 = { First: 0, Last: 1, Index: 2 } as const;
@@ -460,7 +463,24 @@ export type Selector =
   | { kind: "text"; match: TextMatchV1 }
   | { kind: "test_id"; id: string }
   | { kind: "value"; match: TextMatchV1 }
-  | { kind: "all"; selectors: Selector[] };
+  | { kind: "all"; selectors: Selector[] }
+  /** The m34 filter narrowing: the string form (`has_text`), the
+   * inverted selector form (`has_not`) and the document-order pick
+   * (`nth`) in one row over the source's set. */
+  | {
+      kind: "filter";
+      source: Selector;
+      has_text: TextMatchV1 | null;
+      has_not: Selector | null;
+      nth: Nth | null;
+    }
+  /** The selector-valued positive filter (the m34 record's named
+   * follow-on): keep the source's matches whose subtree — the node
+   * included — matches `has`. The appended variant, index 7. */
+  | { kind: "has"; source: Selector; has: Selector };
+
+/** The document-order pick (`NthV1`): first / last / an index. */
+export type Nth = { kind: "first" } | { kind: "last" } | { kind: "index"; index: number };
 
 export type SemAction =
   | { kind: "click" }
