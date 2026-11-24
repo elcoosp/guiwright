@@ -1058,18 +1058,41 @@ pub enum NthV1 {
 }
 
 /// Wire form of [`guiwright_driver::SemAction`] (§8.4).
+///
+/// Append-only (§7): the m89 `SelectOption` variant rides at the end of
+/// the table, so every encoding the pre-m89 clients pinned is unchanged
+/// and an old client answers an unknown variant with a clean decode
+/// error.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SemActionV1 {
     Click,
     DoubleClick,
-    SetValue { text: String },
+    SetValue {
+        text: String,
+    },
     Focus,
     Blur,
     Hover,
-    Press { key: String, modifiers: Vec<String> },
-    Scroll { dx: f64, dy: f64 },
+    Press {
+        key: String,
+        modifiers: Vec<String>,
+    },
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
     Check,
     Uncheck,
+    /// The m89 select vocabulary (the m19 record's named §16
+    /// follow-on): the option rides by accessible name, the same string
+    /// a text locator matches.
+    SelectOption {
+        option: String,
+    },
+    /// The m90 scroll-into-view vocabulary (the m19 record's named §16
+    /// follow-on — the "scrollable ancestors" form): the a11y-first
+    /// request the L1 stacks honor natively.
+    ScrollIntoView,
 }
 
 /// Wire form of [`guiwright_driver::InputEvent`] (§9).
