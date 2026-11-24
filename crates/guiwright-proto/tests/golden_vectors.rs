@@ -23,7 +23,7 @@ use guiwright_proto::framing::encode_frame;
 use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1,
     DescribedIdentityStateV1, DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
-    GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, PointerButtonV1,
+    GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1,
     RequestV1, ResolvedMatchV1, ResponseV1, ResumeCursorV1, ScreenshotV1, SelectorV1, SemActionV1,
     SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1,
     WindowV1,
@@ -334,6 +334,59 @@ fn resolve_all_requests() -> Vec<(&'static str, RequestV1)> {
     )]
 }
 
+/// The `has` filter (the m34 record's named follow-on): the
+/// selector-valued positive filter rides its own appended variant — the
+/// `Filter` row's encodings stay byte-pinned, the widening is its own
+/// variant (the M64 rule).
+fn has_filter_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "resolve_has",
+        RequestV1::Resolve {
+            selector: SelectorV1::Has {
+                source: Box::new(SelectorV1::Role {
+                    role: "Group".into(),
+                    name: None,
+                }),
+                has: Box::new(SelectorV1::Role {
+                    role: "Button".into(),
+                    name: None,
+                }),
+            },
+            timeout_ms: 5000,
+        },
+    )]
+}
+
+/// The m34 filter row's byte pin (the m91 TS helper composes exactly
+/// this shape): one `Resolve` carrying the full `Filter` payload —
+/// `has_text`, `has_not` and the `nth` pick in one row. The `Filter`
+/// encodings predate the goldens' selector pins; this vector pins them
+/// now that a typed client surface speaks them.
+fn filter_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![(
+        "resolve_filter",
+        RequestV1::Resolve {
+            selector: SelectorV1::Filter {
+                source: Box::new(SelectorV1::Role {
+                    role: "Button".into(),
+                    name: None,
+                }),
+                has_text: Some(TextMatchV1 {
+                    text: "Save".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+                has_not: Some(Box::new(SelectorV1::Role {
+                    role: "TextInput".into(),
+                    name: None,
+                })),
+                nth: Some(NthV1::First),
+            },
+            timeout_ms: 5000,
+        },
+    )]
+}
+
 /// M32 (the hit-test read): the point request — physical px in the
 /// tree's bounds space, no timeout (the read is total, it never waits).
 fn hit_test_requests() -> Vec<(&'static str, RequestV1)> {
@@ -449,6 +502,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(service_requests())
         .chain(multi_window_gesture_requests())
         .chain(resolve_all_requests())
+        .chain(has_filter_requests())
+        .chain(filter_requests())
         .chain(hit_test_requests())
         .chain(describe_requests())
         .chain(describe_all_requests())
