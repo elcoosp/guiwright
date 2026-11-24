@@ -8,13 +8,19 @@
 //! # prints: GWP_TCP_ADDR=127.0.0.1:43210
 //! cargo run -p guiwright-driver --example gwp_demo_app -- --port 0 --ws
 //! # prints: GWP_WS_ADDR=127.0.0.1:43211
+//! cargo run -p guiwright-driver --example gwp_demo_app -- --port 0 --fixture combobox
+//! # the m89 select-vocabulary fixture (the ComboBox "Country" row) —
+//! # the appended-action sugar's demo/e2e leg (the TS selectOption())
 //! ```
 //!
 //! The app serves the state fixture (Save/Cancel + the Install button
 //! whose row carries `"Installs the latest build"` + the M20 checkbox
 //! trio the m68 state facts read answers), the virtual clock and
 //! two state seams — exactly the surface the TS client covers: handshake →
-//! resolve → act → clock → mock → bye.
+//! resolve → act → clock → mock → bye. `--fixture combobox` swaps in the
+//! m89 select-vocabulary fixture (the buttons() base + the ComboBox
+//! "Country" row on the NodeId(15) band, the base set byte-stable) for
+//! the appended-action conversations.
 
 use std::time::Duration;
 
@@ -36,6 +42,10 @@ fn main() {
         .flatten()
         .unwrap_or(0);
     let ws = args.iter().any(|flag| flag == "--ws");
+    let combobox = args
+        .windows(2)
+        .find_map(|w| (w[0] == "--fixture").then(|| w[1] == "combobox"))
+        .unwrap_or(false);
 
     let mut seams = guiwright_driver::SeamRegistry::new();
     seams.register("reset_state", |ctx, scope| {
@@ -64,8 +74,15 @@ fn main() {
     let handle = runtime.block_on(async {
         let adapter = move || {
             // Scripted pixels give the adapter the §6.2 pixel row, so
-            // the video domain works end to end (§10).
-            MockAdapter::with_fixture(&Fixture::with_state())
+            // the video domain works end to end (§10). The fixture is
+            // the state fixture by default; `--fixture combobox` serves
+            // the m89 select vocabulary instead.
+            let fixture = if combobox {
+                Fixture::with_combobox()
+            } else {
+                Fixture::with_state()
+            };
+            MockAdapter::with_fixture(&fixture)
                 .with_frame_pixels(32, 16, vec![64u8; 32 * 16 * 4])
                 .with_state(DemoState {
                     rows: 9,
