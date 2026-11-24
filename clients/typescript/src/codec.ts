@@ -233,6 +233,28 @@ function encodeSubscribeCmd(enc: Encoder, cmd: SubscribeCmd): void {
     case "off":
       enc.u32(SubscribeV1.Off);
       break;
+    case "resume": {
+      // The re-attach cursor (the m18 record's named §7 follow-on):
+      // the `On` shape's kinds, then the two u64 varint seqs.
+      enc.u32(SubscribeV1.Resume);
+      enc.u32(cmd.kinds.length);
+      for (const kind of cmd.kinds) {
+        switch (kind) {
+          case "tree_changed":
+            enc.u32(EventKindV1.TreeChanged);
+            break;
+          case "frame_presented":
+            enc.u32(EventKindV1.FramePresented);
+            break;
+          case "log":
+            enc.u32(EventKindV1.Log);
+            break;
+        }
+      }
+      enc.u64(cmd.cursor.tree_seq);
+      enc.u64(cmd.cursor.frame_seq);
+      break;
+    }
   }
 }
 
@@ -725,6 +747,13 @@ function decodeEventV1(dec: Decoder): EventV1 {
     case 2: {
       const record = dec.str();
       return { kind: "log", record };
+    }
+    case 3: {
+      // The m20 record's named event: the node and its post-action
+      // tri-state — the subscription answers instead of a tree poll.
+      const node = decodeNodeKey(dec);
+      const checked = decodeCheckedState(dec);
+      return { kind: "state_change", node, checked };
     }
     default:
       throw new Error(`unknown event variant ${variant}`);
