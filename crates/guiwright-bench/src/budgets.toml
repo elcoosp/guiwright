@@ -399,6 +399,15 @@ m0_measurable = true
 sample = "all_values"
 
 [[budget]]
+id = "content_getter_read"
+name = "Kit: one single-node content getter read (strict resolve + fact read)"
+p50_us = 100
+p95_us = 500
+notes = "the m19 record's remaining-gaps content getters' steady-state cost on the button fixture (the all_text_contents/all_values readers' single-node sibling): one strict auto-wait resolve (the describe surface's single-node path) plus the value-fact read — the count_assert row's resolve shape with the fact accessor in place of the set walk; inner_text() rides the same surface (the label-or-value accessor over the identical resolve), so one number covers both getters' cost shape"
+m0_measurable = true
+sample = "content_getter_read"
+
+[[budget]]
 id = "hit_test_wire"
 name = "Hit-test read, in-process door (Save center)"
 p50_us = 500
