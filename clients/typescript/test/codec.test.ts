@@ -113,6 +113,14 @@ test("golden manifest is the expected shape", () => {
     golden.responses.some((v: any) => v.name === "described_all_identity_state_checkboxes"),
     "the M70 set-width identity-state reply is pinned",
   );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "action_select_option"),
+    "the m89 select-vocabulary request is pinned",
+  );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "action_scroll_into_view"),
+    "the m90 scroll-into-view request is pinned",
+  );
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -154,6 +162,26 @@ test("requests encode byte-identical to the Rust wire", () => {
       action: { kind: "press", key: "Enter", modifiers: ["Shift"] },
       force: true,
       timeout_ms: 1000,
+    }),
+    // The m89 select vocabulary: the appended SemActionV1 variant's
+    // bytes pin the published table against the Rust codec.
+    action_select_option: () => ({
+      kind: "action",
+      node: { kind: "accesskit", tree: "0".repeat(32), node: 4 },
+      generation: 0,
+      action: { kind: "select_option", option: "France" },
+      force: false,
+      timeout_ms: 5000,
+    }),
+    // The m90 scroll-into-view vocabulary: the appended variant's
+    // bytes pin the table.
+    action_scroll_into_view: () => ({
+      kind: "action",
+      node: { kind: "accesskit", tree: "0".repeat(32), node: 2 },
+      generation: 0,
+      action: { kind: "scroll_into_view_if_needed" },
+      force: false,
+      timeout_ms: 5000,
     }),
     input_pointer: () => ({
       kind: "input",
