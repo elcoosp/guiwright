@@ -81,6 +81,18 @@ pub struct ServerOptions {
     /// keep the process subscriber, and the tail is a bounded live tap
     /// (§15.6), never a replay buffer.
     pub log_tail: bool,
+    /// The app's own tap (the m14 record's named knob): the session's log
+    /// tail rides THIS tap instead of a private one — the app keeps
+    /// clones of it and feeds its own records onto the same
+    /// `EventV1::Log` stream (`LogTap::new` builds one). Setting it
+    /// implies the tail is enabled; `log_tail` stays the server-created
+    /// form and yields to this knob. Only the tap `LogTap::new` returned
+    /// can spawn (clones are feeders): a tap reused across sessions
+    /// refuses at spawn with the typed `GwpError::Protocol`, never a
+    /// silent tail-less session. An app that also wants the session
+    /// thread's records in its own subscriber composes the two
+    /// explicitly (the thread-local dispatcher rule this knob inherits).
+    pub log_tap: Option<crate::log_tail::LogTap>,
     /// The §15.6 shared-frame ring: the path a same-host client opens to
     /// read presented frames outside the door (zero-copy-pixels posture).
     /// When `None`, the `GUIWRIGHT_FRAME_RING` env var names the path
@@ -93,6 +105,7 @@ impl std::fmt::Debug for ServerOptions {
         f.debug_struct("ServerOptions")
             .field("seams", &self.seams)
             .field("log_tail", &self.log_tail)
+            .field("log_tap", &self.log_tap.is_some())
             .field("frame_ring", &self.frame_ring)
             .finish()
     }
@@ -285,12 +298,7 @@ where
 {
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
-    Ok(GwpServerHandle::start(
-        listener,
-        Endpoint::Uds(path),
-        make_adapter,
-        options,
-    ))
+    GwpServerHandle::start(listener, Endpoint::Uds(path), make_adapter, options)
 }
 
 impl GwpServerHandle {
@@ -367,12 +375,7 @@ impl GwpServerHandle {
         listener.set_nonblocking(true)?;
         let bound = listener.local_addr()?;
         let listener = TcpListener::from_std(listener)?;
-        Ok(GwpServerHandle::start(
-            listener,
-            Endpoint::Tcp(bound),
-            make_adapter,
-            options,
-        ))
+        GwpServerHandle::start(listener, Endpoint::Tcp(bound), make_adapter, options)
     }
 
     /// Spawn the remote-mode stack over **WebSocket** (§7's third door,
@@ -414,12 +417,12 @@ impl GwpServerHandle {
         listener.set_nonblocking(true)?;
         let bound = listener.local_addr()?;
         let listener = TcpListener::from_std(listener)?;
-        Ok(GwpServerHandle::start(
+        GwpServerHandle::start(
             WsListener(listener),
             Endpoint::Ws(bound),
             make_adapter,
             options,
-        ))
+        )
     }
 
     /// Spawn the remote-mode stack over the **in-process door** (§7's
@@ -455,7 +458,7 @@ impl GwpServerHandle {
         F: FnOnce() -> A + Send + 'static,
     {
         let (listener, connect) = guiwright_proto::duplex::channel();
-        let handle = GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options);
+        let handle = GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options)?;
         Ok((handle, connect))
     }
 
@@ -475,31 +478,39 @@ impl GwpServerHandle {
         F: FnOnce() -> A + Send + 'static,
         L: Transport,
     {
-        Ok(GwpServerHandle::start(
-            listener,
-            Endpoint::InProcess,
-            make_adapter,
-            options,
-        ))
+        GwpServerHandle::start(listener, Endpoint::InProcess, make_adapter, options)
     }
 
     /// Shared stack bring-up: session thread + accept loop bridged over
-    /// one command queue (§5.1).
+    /// one command queue (§5.1). The app-fed log tap's tail (the m14
+    /// record's named knob) leaves its tap here — one take, on the
+    /// caller's thread, so a reused tap refuses with the typed error
+    /// instead of a silent tail-less session.
     fn start<A, F, L>(
         listener: L,
         endpoint: Endpoint,
         make_adapter: F,
-        options: ServerOptions,
-    ) -> GwpServerHandle
+        mut options: ServerOptions,
+    ) -> Result<GwpServerHandle, GwpError>
     where
         A: FrameworkAdapter,
         F: FnOnce() -> A + Send + 'static,
         L: Transport,
     {
+        let preset_tail = match options.log_tap.as_mut() {
+            Some(tap) => Some(tap.take_tail().ok_or_else(|| {
+                GwpError::Protocol(
+                    "the log_tap knob's tail was already taken — one tap serves one \
+                     session (clones are feeders, not spawners)"
+                        .into(),
+                )
+            })?),
+            None => None,
+        };
         let (cmd_tx, cmd_rx) = mpsc::channel::<Internal>(64);
         let session_thread = std::thread::Builder::new()
             .name("guiwright-session".into())
-            .spawn(move || run_session_thread(cmd_rx, make_adapter(), options))
+            .spawn(move || run_session_thread(cmd_rx, make_adapter(), options, preset_tail))
             .expect("spawn session thread");
 
         let bridge_tx = cmd_tx.clone();
@@ -509,12 +520,12 @@ impl GwpServerHandle {
                 .await;
         });
 
-        GwpServerHandle {
+        Ok(GwpServerHandle {
             cmd_tx,
             serve_task,
             session_thread,
             endpoint,
-        }
+        })
     }
 }
 
@@ -629,6 +640,7 @@ fn run_session_thread<A: FrameworkAdapter>(
     cmd_rx: mpsc::Receiver<Internal>,
     adapter: A,
     options: ServerOptions,
+    preset_tail: Option<LogTail>,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -637,7 +649,18 @@ fn run_session_thread<A: FrameworkAdapter>(
     // The per-session tracing tap (the log-tail milestone): a thread-local
     // dispatcher whose only layer feeds the tail. Other threads keep the
     // process subscriber; the guard lives exactly as long as the thread.
-    let (tail, _tap_guard) = if options.log_tail {
+    // The app's own tap (the m14 record's named knob) rides first: the
+    // paired tail left the tap at spawn (validated in `start`), the app
+    // holds clones and feeds its own records onto the same stream, and
+    // the knob implies the tail — `log_tail` stays the server-created
+    // form and yields to it.
+    let (tail, _tap_guard) = if let Some(tap) = options.log_tap {
+        let tail = preset_tail.expect("start() validated the tap's tail");
+        let guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(LogTapLayer::new(tap)),
+        );
+        (Some(tail), Some(guard))
+    } else if options.log_tail {
         let (tail, tap) = LogTail::new(LOG_TAIL_CAPACITY);
         let guard = tracing::subscriber::set_default(
             tracing_subscriber::registry().with(LogTapLayer::new(tap)),
@@ -1789,6 +1812,7 @@ mod tests {
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
                 ServerOptions::default(),
+                None,
             );
         });
 
@@ -1829,6 +1853,7 @@ mod tests {
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
                 ServerOptions::default(),
+                None,
             );
         });
 
@@ -1885,6 +1910,7 @@ mod tests {
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
                 ServerOptions::default(),
+                None,
             );
         });
 
@@ -1921,6 +1947,7 @@ mod tests {
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
                 ServerOptions::default(),
+                None,
             );
         });
 
@@ -1969,6 +1996,7 @@ mod tests {
                     seams: app_seams(),
                     ..ServerOptions::default()
                 },
+                None,
             );
         });
 
@@ -2048,6 +2076,7 @@ mod tests {
                 cmd_rx,
                 MockAdapter::with_fixture(&Fixture::buttons()),
                 ServerOptions::default(),
+                None,
             );
         });
         let resp = send(
