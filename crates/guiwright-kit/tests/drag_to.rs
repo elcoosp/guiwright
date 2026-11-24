@@ -209,3 +209,149 @@ fn an_aim_that_no_longer_resolves_fails_the_drag() {
         "a failed aim synthesizes nothing"
     );
 }
+
+// --- The offset drags (m33's honest list) ------------------------------------
+//
+// Plan pin (docs/m33-locator-drag-to.md §5, remaining gaps):
+// *"No `target_position` / `source_position` offsets (Playwright's
+// optional drag-point options): the centers-plus-pacing synthesis covers
+// the recorded suites so far; offsets are a one-line widening of
+// `drag_center` when a suite asks."*
+//
+// The tests below are that ask: a position is a `(dx, dy)` offset from
+// the resolved node's bounds top-left (the Playwright padding-box-corner
+// shape), `None` keeps the center, and the synthesis ratchets between
+// the aimed points exactly as between the centers.
+
+#[test]
+fn offsets_aim_where_the_suite_asks() {
+    let mut app = fixture_app("kit_drag_to_offsets");
+
+    // Save: 16,16 → 136,48 (top-left 16,16); Cancel: 16,56 → 136,88
+    // (top-left 16,56). The offsets aim (24,24) and (136,64) — not the
+    // centers the plain drag picks.
+    let outcome = app
+        .get_by_role(Role::Button, "Save")
+        .drag_to_with_positions(
+            &Selector::role_named(Role::Button, "Cancel"),
+            Some((8.0, 8.0)),
+            Some((120.0, 8.0)),
+        )
+        .expect("the drag runs");
+
+    assert_eq!(
+        outcome.detail, "dragged (24, 24) → (136, 64) — 25 events",
+        "the detail names the aimed points"
+    );
+    let events: Vec<&InputEvent> = app
+        .session()
+        .adapter()
+        .window_events()
+        .iter()
+        .map(|(_, ev)| ev)
+        .collect();
+    assert_eq!(
+        events.first(),
+        Some(&InputEvent::PointerDown {
+            x: 24.0,
+            y: 24.0,
+            button: PointerButton::Primary,
+        })
+        .as_ref(),
+        "press at the source's asked point"
+    );
+    assert_eq!(
+        events.last(),
+        Some(&InputEvent::PointerUp {
+            x: 136.0,
+            y: 64.0,
+            button: PointerButton::Primary,
+        })
+        .as_ref(),
+        "release at the target's asked point"
+    );
+    // The pacing ratchet is unchanged (§9, ~5 px/tick): the aimed trip
+    // (24,24) → (136,64) is √(112² + 40²) ≈ 118.9 px → 23 ratchet moves,
+    // so down + 23 + up = 25 (the centers trip is 40 px → 10).
+    assert_eq!(events.len(), 25, "down + 23 ratchet moves + up");
+}
+
+#[test]
+fn a_none_offset_drag_is_the_centers_drag() {
+    let mut app = fixture_app("kit_drag_to_none_offsets");
+
+    let outcome = app
+        .get_by_role(Role::Button, "Save")
+        .drag_to_with_positions(&Selector::role_named(Role::Button, "Cancel"), None, None)
+        .expect("the drag runs");
+
+    assert_eq!(
+        outcome.detail, "dragged (76, 32) → (76, 72) — 10 events",
+        "`None` positions keep the M33 centers contract byte-identical"
+    );
+}
+
+#[test]
+fn a_one_sided_offset_aims_only_that_end() {
+    let mut app = fixture_app("kit_drag_to_one_offset");
+
+    // Only the source end carries an offset: the source aims where the
+    // suite asks, the target keeps its center.
+    let outcome = app
+        .get_by_role(Role::Button, "Save")
+        .drag_to_with_positions(
+            &Selector::role_named(Role::Button, "Cancel"),
+            Some((100.0, 30.0)),
+            None,
+        )
+        .expect("the drag runs");
+
+    assert_eq!(
+        outcome.detail, "dragged (116, 46) → (76, 72) — 10 events",
+        "the asked source point, the target center"
+    );
+}
+
+#[test]
+fn an_offset_drag_records_the_aimed_line() {
+    let mut app = fixture_app("kit_drag_to_offset_codegen");
+    app.enable_codegen();
+
+    app.get_by_role(Role::Button, "Save")
+        .drag_to_with_positions(
+            &Selector::role_named(Role::Button, "Cancel"),
+            Some((8.0, 8.0)),
+            Some((120.0, 8.0)),
+        )
+        .expect("the drag runs");
+
+    let (code, warnings) = app.codegen_code().expect("the recorder is on");
+    assert!(
+        code.contains("drag(24.0, 24.0, 136.0, 64.0)"),
+        "the raw §13-over-§9 kit line carries the aimed points: {code}"
+    );
+    assert!(warnings.is_empty(), "no strict-mode warnings: {warnings:?}");
+}
+
+#[test]
+fn an_offset_drag_outside_the_bounds_is_the_suite_s_ask() {
+    // Playwright validates nothing: the offsets are coordinates relative
+    // to the element's top-left, and the pipeline carries them as asked.
+    // The honest contract is "where you aimed is where the pointer went"
+    // — no clamp, no silent snap to the bounds.
+    let mut app = fixture_app("kit_drag_to_offset_free");
+
+    let outcome = app
+        .get_by_role(Role::Button, "Save")
+        .drag_to_with_positions(
+            &Selector::role_named(Role::Button, "Cancel"),
+            Some((200.0, 100.0)),
+            None,
+        )
+        .expect("the drag runs");
+
+    assert_eq!(
+        outcome.detail, "dragged (216, 116) → (76, 72) — 30 events",
+        "the pointer lands exactly where the offset aims"
+    );
+}
