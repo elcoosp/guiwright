@@ -117,11 +117,23 @@ export const SnapshotV1 = {
   Filtered: 1,
 } as const;
 
-/** §7 event channel (M12): the subscription domain. */
+/** §7 event channel (M12): the subscription domain. `Resume` is the
+ * re-attach cursor (the m18 record's named §7 follow-on): subscribe and
+ * replay the coalesced position past the cursor — a current cursor
+ * replays nothing, so the reconnecting viewer skips the re-dump. */
 export const SubscribeV1 = {
   On: 0,
   Off: 1,
+  Resume: 2,
 } as const;
+
+/** The reconnect cursor (§7 resume vocabulary): the seqs the client
+ * last saw per coalesced topic — the values its previous connection's
+ * `TreeChanged` / `FramePresented` events reported. */
+export type ResumeCursor = {
+  tree_seq: number;
+  frame_seq: number;
+};
 
 /** §7 event kinds (M12): mirrors `EventV1`'s variant order. */
 export const EventKindV1 = {
@@ -135,6 +147,13 @@ export const EventKindV1 = {
    * filter).
    */
   Log: 2,
+  /**
+   * A node's checked fact moved (the m20 record's named event): the
+   * wire Action path's check vocabulary landed and the tri-state
+   * actually moved — the subscription answers instead of a tree poll,
+   * and an action that lands without moving the fact publishes nothing.
+   */
+  StateChange: 3,
 } as const;
 
 // --- Response variants -------------------------------------------------------
@@ -536,19 +555,31 @@ export type SnapshotCmd =
   | { kind: "full" }
   | { kind: "filtered"; selector: Selector; timeout_ms: number };
 
-/** §7 event channel (M12): turn this connection into a subscriber. */
+/** §7 event channel (M12): turn this connection into a subscriber.
+ * `resume` carries the re-attach cursor (the m18 record's named §7
+ * follow-on) — the driver replays the coalesced position past it. */
 export type SubscribeCmd =
   | { kind: "on"; kinds: EventKind[] }
-  | { kind: "off" };
+  | { kind: "off" }
+  | { kind: "resume"; kinds: EventKind[]; cursor: ResumeCursor };
 
 /** §7 event kinds (M12): mirrors `EventV1`'s variant order. */
-export type EventKind = "tree_changed" | "frame_presented" | "log";
+export type EventKind = "tree_changed" | "frame_presented" | "log" | "state_change";
 
 /** §7 server-push event payload (the `events` table vocabulary). */
 export type EventV1 =
   | { kind: "tree_changed"; seq: number }
   | { kind: "frame_presented"; seq: number; hash: number }
-  | { kind: "log"; record: string };
+  | { kind: "log"; record: string }
+  | {
+      /** A node's checked fact moved (the m20 record's named event): the
+       * wire Action path's check vocabulary landed and the tri-state
+       * actually moved — the subscription answers instead of a tree
+       * poll. */
+      kind: "state_change";
+      node: NodeKey;
+      checked: CheckedState;
+    };
 
 export type GwpResponse =
   | ({ kind: "welcome" } & Welcome)
