@@ -14,17 +14,27 @@
 //! connection per attempt; N apps per host (one `--uds`/`--tcp` per CI
 //! shard) scale linearly. Isolation between scenarios that mutate app
 //! state is the §14 reset-seam story: a `mock reset <scope>` step.
+//!
+//! With `--trace`, the runner also owns per-scenario trace emission (the
+//! m5 §4 deferral, closed): the M18 live feed rides a second connection
+//! per attempt — subscribed, so the server pushes tree/frame events to
+//! it while the attempt's steps run on the first — and the last
+//! attempt's capture finalizes as the M23 scrubber HTML under the report
+//! directory, its file name riding the record's artifacts beside the m82
+//! `shot:`/`video:` step-written paths.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use guiwright_viewer::LiveFeed;
 
 use crate::report::{
     ReportKind, RunReport, ScenarioRecord, ScenarioStatus, render_html, render_json, render_junit,
 };
-use crate::session::ConnectTarget;
+use crate::session::{ConnectTarget, Connection};
 use crate::spec::{Spec, SpecError};
 
 /// The default spec directory when `guiwright test` gets no paths (§11's
@@ -78,9 +88,25 @@ pub struct TestOptions {
     pub quiet: bool,
     /// File reports to write.
     pub reports: Vec<crate::report::ReportKind>,
-    /// Report output directory (default `guiwright-report/`).
+    /// Report output directory (default [`DEFAULT_REPORT_DIR`]).
     pub out: Option<PathBuf>,
+    /// Record a per-scenario trace and deep-link it from the reports
+    /// (the m5 §4 deferral, closed — "clickable links wait for the
+    /// runner to own trace emission"): the M18 live feed rides a second
+    /// connection per attempt, the last attempt finalizes as the M23
+    /// scrubber HTML under the report directory, and the file name rides
+    /// the record's artifacts beside the m82 `shot:`/`video:` paths.
+    pub trace: bool,
 }
+
+/// The default report (and trace) directory.
+pub const DEFAULT_REPORT_DIR: &str = "guiwright-report";
+
+/// The per-step trace pump window: one short pump per step boundary
+/// collects what the step produced on the feed's own connection — the
+/// event pushes ride the server's per-connection channel, so a step's
+/// tree changes are queued by the time the step's reply came back.
+const TRACE_PUMP_WINDOW: Duration = Duration::from_millis(25);
 
 /// The live-progress callback (`run`'s `on_finish`): every finished
 /// scenario record, in completion order.
@@ -275,6 +301,7 @@ pub async fn run(
     let queue = Arc::new(AtomicUsize::new(0));
     let slots: Arc<Vec<Mutex<Option<ScenarioRecord>>>> =
         Arc::new((0..cases.len()).map(|_| Mutex::new(None)).collect());
+    let trace_paths = trace_paths_for(opts, &cases);
     let cases = Arc::new(cases);
     let target = target.clone();
 
@@ -285,6 +312,7 @@ pub async fn run(
         let queue = Arc::clone(&queue);
         let on_finish = on_finish.clone();
         let target = target.clone();
+        let trace_paths = trace_paths.clone();
         handles.push(tokio::spawn(async move {
             loop {
                 let index = queue.fetch_add(1, Ordering::SeqCst);
@@ -292,7 +320,8 @@ pub async fn run(
                     break;
                 }
                 let case = &cases[index];
-                let record = run_case(&target, case).await;
+                let trace_path = trace_paths.as_ref().map(|paths| paths[index].as_path());
+                let record = run_case(&target, case, trace_path).await;
                 if let Some(on_finish) = &on_finish {
                     on_finish(&record);
                 }
@@ -328,11 +357,17 @@ pub async fn run(
     })
 }
 
-/// One scenario with its retry loop.
-async fn run_case(target: &ConnectTarget, case: &Case) -> ScenarioRecord {
+/// One scenario with its retry loop. `trace_path` (when `--trace` is on)
+/// is the scenario's trace file; the LAST attempt's capture is the one
+/// that persists — the attempt the record's status reflects.
+async fn run_case(
+    target: &ConnectTarget,
+    case: &Case,
+    trace_path: Option<&Path>,
+) -> ScenarioRecord {
     let case_started = Instant::now();
     let (attempts, error, artifacts) =
-        run_with_retries(case.retries, || run_attempt(target, case)).await;
+        run_with_retries(case.retries, || run_attempt(target, case, trace_path)).await;
     let status = match (&error, attempts) {
         (None, 1) => ScenarioStatus::Passed,
         (None, _) => ScenarioStatus::Flaky,
@@ -377,23 +412,43 @@ where
 
 /// One attempt: connect → handshake → steps → bye. The first error line
 /// fails the attempt; the remaining steps do not run. Artifact paths
-/// written by steps before the failure still ride home (`shot:` / `video:`
-/// Ok lines, m82) — the attempt result pairs the outcome with whatever the
-/// steps emitted.
-async fn run_attempt(target: &ConnectTarget, case: &Case) -> (Result<(), String>, Vec<String>) {
+/// written by steps before the failure still ride home (`shot:` /
+/// `video:` Ok lines, m82) — the attempt result pairs the outcome with
+/// whatever the steps emitted.
+///
+/// With a `trace_path`, the attempt attaches the M18 live feed on a
+/// second connection (subscribe + initial dump), pumps one short window
+/// per step boundary, and finalizes the scrubber HTML after the attempt
+/// — success or failure; a failing scenario's trace is the valuable one.
+/// An attach failure degrades to no trace (the scenario's own steps
+/// still run; the artifacts list then carries no trace link) — the
+/// runner never fails a scenario for its sidecar's sake.
+async fn run_attempt(
+    target: &ConnectTarget,
+    case: &Case,
+    trace_path: Option<&Path>,
+) -> (Result<(), String>, Vec<String>) {
+    let mut feed = match trace_path {
+        Some(_) => attach_trace_feed(target, case).await.ok(),
+        None => None,
+    };
+    let mut artifacts = Vec::new();
     let mut repl = match crate::repl::Repl::connect(target).await {
         Ok(repl) => repl,
         Err(err) => {
+            finalize_trace(&mut feed, trace_path, &mut artifacts).await;
             return (
                 Err(format!("cannot connect to {target:?}: {err}")),
-                Vec::new(),
+                artifacts,
             );
         }
     };
     repl.set_timeout_ms(case.timeout_ms);
-    let mut artifacts = Vec::new();
     for step in &case.steps {
         let outcome = repl.step(step).await;
+        if let Some(feed) = feed.as_mut() {
+            let _ = feed.pump(TRACE_PUMP_WINDOW).await;
+        }
         for line in &outcome.lines {
             match line {
                 crate::repl::Line::Ok(text) => {
@@ -401,7 +456,10 @@ async fn run_attempt(target: &ConnectTarget, case: &Case) -> (Result<(), String>
                         artifacts.push(path);
                     }
                 }
-                crate::repl::Line::Err(message) => return (Err(message.clone()), artifacts),
+                crate::repl::Line::Err(message) => {
+                    finalize_trace(&mut feed, trace_path, &mut artifacts).await;
+                    return (Err(message.clone()), artifacts);
+                }
                 crate::repl::Line::Info(_) | crate::repl::Line::Warn(_) => {}
             }
         }
@@ -409,7 +467,131 @@ async fn run_attempt(target: &ConnectTarget, case: &Case) -> (Result<(), String>
     // The runner owns the session lifecycle: close cleanly. A failed Bye
     // races the disconnect — the session ends either way.
     let _ = repl.step("bye").await;
+    finalize_trace(&mut feed, trace_path, &mut artifacts).await;
     (Ok(()), artifacts)
+}
+
+/// Attach the M18 live feed on a second connection for the attempt's
+/// trace capture: handshake as the runner's trace agent, subscribe
+/// (tree + frame events), initial dump, and the scenario id as the
+/// emitter's test label (`<file> :: <name>`, the report's own id).
+async fn attach_trace_feed(
+    target: &ConnectTarget,
+    case: &Case,
+) -> Result<LiveFeed<Connection>, guiwright_viewer::ViewerError> {
+    let connection = Connection::connect(target).await?;
+    let mut feed = LiveFeed::new(connection);
+    feed.attach(&format!("{} (trace)", crate::AGENT)).await?;
+    feed.set_test(format!("{} :: {}", case.file, case.name));
+    Ok(feed)
+}
+
+/// Finalize the attempt's trace into the M23 scrubber HTML (stamped
+/// `gwtrace/v1 (live)`, the scenario id in the header). The file name —
+/// the report links artifacts by it, and the trace lives beside the
+/// reports — rides home in `artifacts` when the write succeeded.
+async fn finalize_trace(
+    feed: &mut Option<LiveFeed<Connection>>,
+    trace_path: Option<&Path>,
+    artifacts: &mut Vec<String>,
+) {
+    let (Some(feed), Some(path)) = (feed.as_mut(), trace_path) else {
+        return;
+    };
+    let html = feed.render_html();
+    let _ = feed.bye().await;
+    if let Some(dir) = path.parent() {
+        if let Err(_sidecar) = std::fs::create_dir_all(dir) {
+            return;
+        }
+    }
+    if let Err(_sidecar) = std::fs::write(path, html) {
+        return;
+    }
+    // The report links artifacts by the recorded string; the trace file
+    // lives beside the reports, so its file name is the honest link.
+    let name = path.file_name().and_then(|name| name.to_str()).map_or_else(
+        || path.display().to_string(),
+        std::string::ToString::to_string,
+    );
+    artifacts.push(name);
+}
+
+/// The run's per-scenario trace paths (`--trace`): the report directory
+/// plus one sanitized file per case. The files are named up front —
+/// discovery order, deterministic even under sharding — so parallel
+/// workers never race a name.
+fn trace_paths_for(opts: &TestOptions, cases: &[Case]) -> Option<Vec<PathBuf>> {
+    if !opts.trace {
+        return None;
+    }
+    let dir = opts
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_REPORT_DIR));
+    let mut used = std::collections::HashSet::new();
+    Some(
+        cases
+            .iter()
+            .map(|case| trace_file_path(&dir, case, &mut used))
+            .collect(),
+    )
+}
+
+/// The per-scenario trace file: `<spec-stem>.<scenario>.trace.html`
+/// under the report directory. The spec stem drops the `.spec.toml`
+/// suffix (the file name is `login.spec.toml`; the stem is `login`).
+/// Spec paths and scenario names are user data, so the
+/// report-unfriendly characters collapse (consecutive separators
+/// included) and same-name scenarios disambiguate with a `-2`-style
+/// run-order suffix.
+fn trace_file_path(
+    dir: &Path,
+    case: &Case,
+    used: &mut std::collections::HashSet<String>,
+) -> PathBuf {
+    let file_name = Path::new(&case.file)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("spec");
+    let spec_stem = file_name
+        .strip_suffix(crate::spec::SPEC_SUFFIX)
+        .unwrap_or_else(|| {
+            Path::new(file_name)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("spec")
+        });
+    let base = format!(
+        "{}.{}",
+        sanitize_trace_part(spec_stem),
+        sanitize_trace_part(&case.name)
+    );
+    let mut file = format!("{base}.trace.html");
+    let mut suffix = 1_u32;
+    while !used.insert(file.clone()) {
+        suffix += 1;
+        file = format!("{base}-{suffix}.trace.html");
+    }
+    dir.join(file)
+}
+
+/// Report-filename-safe form of one trace-name part: alphanumeric,
+/// `_` and `.` survive; every other character (path separators and
+/// drive prefixes included) collapses to `-`, runs included.
+fn sanitize_trace_part(part: &str) -> String {
+    let mut out = String::with_capacity(part.len());
+    let mut last_separator = false;
+    for ch in part.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+            out.push(ch);
+            last_separator = false;
+        } else if !last_separator {
+            out.push('-');
+            last_separator = true;
+        }
+    }
+    out.trim_matches('-').to_owned()
 }
 
 /// The artifact path an artifact-emitting Ok line reports (§10 capture):
@@ -561,6 +743,57 @@ mod tests {
         // Degenerate shapes harvest nothing.
         assert_eq!(artifact_from_line("shot: "), None);
         assert_eq!(artifact_from_line("video:  (no path)"), None);
+    }
+
+    #[test]
+    fn trace_file_paths_sanitize_and_disambiguate() {
+        // A plain spec + scenario: stem and name, separated, under the
+        // report directory.
+        let mut used = std::collections::HashSet::new();
+        let dir = Path::new(DEFAULT_REPORT_DIR);
+        let case = Case {
+            file: "specs/login.spec.toml".into(),
+            name: "happy path".into(),
+            steps: Vec::new(),
+            timeout_ms: 1,
+            retries: 0,
+        };
+        let path = trace_file_path(dir, &case, &mut used);
+        assert_eq!(
+            path,
+            Path::new("guiwright-report/login.happy-path.trace.html")
+        );
+
+        // User data collapses: separators, spaces, unicode, and drive
+        // prefixes never reach a report file name.
+        let weird = Case {
+            file: "C:\\ci\\specs\\a&b.spec.toml".into(),
+            name: "шаг / второй".into(),
+            steps: Vec::new(),
+            timeout_ms: 1,
+            retries: 0,
+        };
+        let path = trace_file_path(dir, &weird, &mut used);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("ascii name");
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+            "report-unfriendly characters collapse: {name}"
+        );
+        assert!(name.ends_with(".trace.html"));
+
+        // Same-name scenarios in one run disambiguate deterministically.
+        let mut used = std::collections::HashSet::new();
+        let first = trace_file_path(dir, &case, &mut used);
+        let second = trace_file_path(dir, &case, &mut used);
+        assert_ne!(first, second);
+        assert_eq!(
+            second.file_name().and_then(|n| n.to_str()),
+            Some("login.happy-path-2.trace.html")
+        );
     }
 
     #[test]
