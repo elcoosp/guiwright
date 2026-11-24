@@ -84,8 +84,11 @@ pub fn normalize(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// The text itself. Regex support lands with the codegen milestone
-/// (architecture keeps the enum open).
+/// The text itself. The codegen milestone has since shipped (m87)
+/// without asking for regex — the cost model emits exact/fuzzy strings
+/// only — so the enum stays `Str`-shaped until a consumer actually asks
+/// (the m34 record's standing note; the architecture keeps the enum
+/// open).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextPattern {
     Str(String),
