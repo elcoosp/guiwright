@@ -130,6 +130,10 @@
       "name": "subscribe_off"
     },
     {
+      "frame_hex": "07000000000f0201000c22",
+      "name": "subscribe_resume"
+    },
+    {
       "frame_hex": "020000000009",
       "name": "bye"
     },
@@ -719,6 +723,22 @@
       },
       "frame_hex": "2800000000110224766964656f207772697465722064726f70706564203220737461746963206672616d6573",
       "name": "event_log"
+    },
+    {
+      "decoded": {
+        "event": {
+          "checked": "checked",
+          "kind": "state_change",
+          "node": {
+            "kind": "accesskit",
+            "node": 10,
+            "tree": "00000000000000000000000000000000"
+          }
+        },
+        "kind": "event"
+      },
+      "frame_hex": "1600000000110300000000000000000000000000000000000a02",
+      "name": "event_state_change"
     },
     {
       "decoded": {
