@@ -16,7 +16,8 @@ use guiwright_core::test_util::Fixture;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::{Endpoint, GwpServerHandle};
 use guiwright_driver::{
-    SeamRegistry, ServerOptions, spawn_session_server, spawn_session_server_with,
+    LOG_TAIL_CAPACITY, LogTap, SeamRegistry, ServerOptions, spawn_session_server,
+    spawn_session_server_with,
 };
 use guiwright_proto::GwpError;
 use guiwright_proto::schema::{
@@ -435,5 +436,137 @@ async fn events_flow_over_tcp_too() {
         "{first:?}"
     );
 
+    handle.shutdown();
+}
+
+// The m14 record's named knob (docs/m14-log-tail.md §5): *"App-fed
+// records: `LogTap` is public (tests, benches, custom hosts), but a
+// spawned server's tap is created internally — an app-side
+// `ServerOptions.log_tap(tap)` knob is a later append if a consumer
+// shows up."* The app builds the tap, keeps a clone to feed its own
+// records, and spawns with `ServerOptions.log_tap`: the session adopts
+// the paired tail (the knob implies it — `log_tail` stayed `false`), so
+// the session's own `tracing` records AND the app's fed records ride the
+// same `EventV1::Log` stream, one `logs.ndjson`-shape JSON line each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_fed_tap_rides_the_session_log_stream() {
+    let path = socket_path("events-log-tap.sock");
+    let tap = LogTap::new(LOG_TAIL_CAPACITY);
+    let feeder = tap.clone();
+    let handle = spawn_session_server_with(
+        path.clone(),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        ServerOptions {
+            log_tap: Some(tap),
+            ..ServerOptions::default()
+        },
+    )
+    .expect("the tap's tail serves the spawn");
+    let mut client = Client::connect(&path).await.expect("client connects");
+    client.handshake("guiwright-tests/0.1").await.unwrap();
+
+    // The knob implies the tail: the Log kind is served, not the honest
+    // `Unsupported` the tail-less session answers.
+    let ack = client
+        .request(RequestV1::Subscribe(SubscribeV1::On {
+            kinds: vec![EventKindV1::Log],
+        }))
+        .await
+        .expect("the app-fed tap implies the tail");
+    assert_eq!(
+        ack,
+        ResponseV1::Subscribed {
+            kinds: vec![EventKindV1::Log]
+        },
+        "the ack echoes the filter"
+    );
+
+    // The session's own record first (the subscription lifecycle emits
+    // it on the subscribe pump — the m14 flow), then the app's fed
+    // record through the retained producer end.
+    let first = tokio::time::timeout(Duration::from_secs(5), client.next_event())
+        .await
+        .expect("the session's record arrives")
+        .expect("event frame");
+    match first {
+        GwpEvent::V1(EventV1::Log { record }) => {
+            let parsed: serde_json::Value = serde_json::from_str(&record).expect("one JSON line");
+            assert_eq!(parsed["message"], "event subscription registered");
+        }
+        other => panic!("expected the session's log record, got {other:?}"),
+    }
+
+    // Lossy by contract: `send` never blocks, a full tail drops and
+    // counts — the app record here lands well inside the bound.
+    feeder.send(
+        serde_json::json!({
+            "ts_ns": 0u64,
+            "level": "INFO",
+            "target": "my_app::lifecycle",
+            "pid": std::process::id(),
+            "message": "the app's own milestone"
+        })
+        .to_string(),
+    );
+
+    let second = tokio::time::timeout(Duration::from_secs(5), client.next_event())
+        .await
+        .expect("the app-fed record arrives")
+        .expect("event frame");
+    match second {
+        GwpEvent::V1(EventV1::Log { record }) => {
+            let parsed: serde_json::Value = serde_json::from_str(&record).expect("one JSON line");
+            assert_eq!(
+                parsed["message"], "the app's own milestone",
+                "the app's record rides the same stream: {parsed}"
+            );
+            assert_eq!(parsed["target"], "my_app::lifecycle");
+        }
+        other => panic!("expected the app's log record, got {other:?}"),
+    }
+
+    handle.shutdown();
+}
+
+// The take-once rule, honest at the typed surface: a tap's tail leaves
+// at the first spawn — a clone (born without a tail, the feeder form)
+// passed to a second spawn refuses with `GwpError::Protocol` instead of
+// running a silent tail-less session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reused_log_tap_refuses_at_spawn() {
+    let dir = Box::leak(Box::new(tempfile::tempdir().expect("tmpdir")));
+    let tap = LogTap::new(LOG_TAIL_CAPACITY);
+
+    let message = match spawn_session_server_with(
+        dir.path().join("first.sock"),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        ServerOptions {
+            log_tap: Some(tap.clone()),
+            ..ServerOptions::default()
+        },
+    ) {
+        Err(GwpError::Protocol(message)) => message,
+        Err(other) => panic!("expected the typed refusal, got {other:?}"),
+        Ok(handle) => {
+            handle.shutdown();
+            panic!("a clone carries no tail to give the session");
+        }
+    };
+    assert!(
+        message.contains("already taken") || message.contains("clones are feeders"),
+        "the refusal names the take-once contract: {message}"
+    );
+
+    // The original serves the real spawn (the app keeps `feeder` clones
+    // for feeding).
+    let handle = spawn_session_server_with(
+        dir.path().join("second.sock"),
+        || MockAdapter::with_fixture(&Fixture::buttons()),
+        ServerOptions {
+            log_tap: Some(tap),
+            ..ServerOptions::default()
+        },
+    )
+    .expect("the original's tail serves the spawn");
     handle.shutdown();
 }
