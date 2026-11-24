@@ -156,6 +156,10 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("client_bye", crate::samples::client_bye),
     ("client_count_assert", crate::samples::client_count_assert),
     ("shm_ring_frame_hop", crate::samples::shm_ring_frame_hop),
+    (
+        "remote_to_self_resolve",
+        crate::samples::remote_to_self_resolve,
+    ),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
