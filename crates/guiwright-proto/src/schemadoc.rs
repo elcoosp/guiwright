@@ -232,6 +232,11 @@ const EVENTS: &[Variant] = &[
     v(0, "TreeChanged", "{ seq: u64 varint }"),
     v(1, "FramePresented", "{ seq: u64 varint, hash: u64 varint }"),
     v(2, "Log", "{ record: string }"),
+    v(
+        3,
+        "StateChange",
+        "{ node: NodeKeyV1, checked: CheckedStateV1 } — a node's checked fact moved (the m20 record's named event): the wire Action path's check vocabulary landed and the tri-state actually moved — the subscription answers instead of a tree poll; an action that lands without moving the fact publishes nothing",
+    ),
 ];
 
 fn variants(table: &[Variant]) -> serde_json::Value {
@@ -312,11 +317,13 @@ fn domains_json() -> serde_json::Value {
             "subscribe": domain_table("SubscribeV1", &[
                 (0, "On", "{ kinds: seq<EventKindV1> } → Subscribed; subscribe (or re-subscribe) this connection to the named event kinds — all-or-nothing: naming an unsupported kind fails the whole request with Error { Unsupported } (M12)"),
                 (1, "Off", "— → Subscribed { kinds: [] }; drop the connection's subscription"),
+                (2, "Resume", "{ kinds: seq<EventKindV1>, cursor: ResumeCursorV1 { tree_seq: u64 varint, frame_seq: u64 varint } } → Subscribed after a position replay; resume the event stream from a re-attach cursor (the m18 record's named §7 follow-on): for each seq topic the filter names, the session pushes the coalesced current-seq event when it stands past the cursor — a current cursor replays nothing (the reconnecting viewer skips the re-dump); the Log kind has no seq to resume from (the tail is a live tap, never a replay buffer)"),
             ]),
             "event_kind": domain_table("EventKindV1", &[
                 (0, "TreeChanged", "the logical tree changed (the seq space TreeSnapshot/TreeDump report)"),
                 (1, "FramePresented", "a frame was presented { seq, hash } — the same vocabulary the trace recorder dedups on (§15.5)"),
                 (2, "Log", "a log record — one logs.ndjson-shape JSON line per record, streamed from the session thread's per-session tracing tap; the tap is opt-in (ServerOptions::log_tail), and a session spawned without it still rejects the kind with Error { Unsupported } (the log-tail milestone)"),
+                (3, "StateChange", "a node's checked fact moved (the m20 record's named event) — the wire Action path's check vocabulary landed and the tri-state actually moved; the subscription answers instead of a tree poll, and an action that lands without moving the fact publishes nothing"),
             ]),
             "checked_state": domain_table("CheckedStateV1", &[
                 (0, "NotCheckable", "the node exposes no checked state (not a checkable role) — a total fact on the M68 identity-state row, never an Error"),
