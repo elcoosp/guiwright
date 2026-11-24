@@ -22,6 +22,7 @@ use guiwright_core::wait::{
 };
 use guiwright_core::{CoreError, NodeKey, Selector};
 use guiwright_proto::schema::CheckedStateV1;
+use guiwright_proto::shmring::{RingConfig, RingStats};
 
 use crate::adapter::{
     ActionOutcome, AdapterError, FrameDeadline, FrameStamp, FrameworkAdapter, InputEvent, SemAction,
@@ -340,6 +341,10 @@ pub struct Session<A: FrameworkAdapter> {
     /// Video recording service (§10, M3): present-frame capture riding
     /// the pump loop. `None` = not recording.
     video: Option<VideoRecorder>,
+    /// The §15.6 shared-frame ring publisher: every presented frame is
+    /// offered to the ring so a same-host client reads pixels outside the
+    /// door. `None` = not publishing (the default).
+    frame_ring: Option<crate::frame_ring::FrameRingPublisher>,
     /// Remote codegen recorder (§13, M4): active while a GWP client has
     /// issued `Inspect::StartRecording`. Embedded sessions never touch it
     /// — the kit records through its own locator taps (`App::codegen`).
@@ -367,6 +372,7 @@ impl<A: FrameworkAdapter> Session<A> {
             seam_overrides: BTreeMap::new(),
             reset_seam: "reset_state".into(),
             video: None,
+            frame_ring: None,
             codegen: None,
             overlay_active: false,
             highlight: None,
@@ -454,6 +460,18 @@ impl<A: FrameworkAdapter> Session<A> {
             }
         }
 
+        // The §15.6 shared-frame ring: every presented frame is offered to
+        // the publisher (the same last_frame tap the video recorder uses),
+        // so a same-host client reads pixels outside the door. Declines
+        // and ring errors never disturb the session (the publisher counts
+        // and logs them).
+        if let Some(ring) = self.frame_ring.as_mut() {
+            for stamp in &outcome.frames {
+                let frame = self.adapter.last_frame();
+                ring.offer(stamp.seq, frame.as_ref());
+            }
+        }
+
         summary.quiescent = outcome.is_quiescent();
 
         // Inspector overlay refresh (§13, M8): while a session runs, the
@@ -524,6 +542,65 @@ impl<A: FrameworkAdapter> Session<A> {
     /// Is a recording currently running?
     pub fn recording(&self) -> bool {
         self.video.is_some()
+    }
+
+    // --- Shared-frame ring (§15.6) ------------------------------------------
+
+    /// Start publishing presented frames into the §15.6 shared-frame ring
+    /// at `path` (the same `last_frame` tap the video recorder rides).
+    /// The ring materializes on the first publishable frame — its declared
+    /// geometry is that frame's dimensions. Requires no capability row:
+    /// pixel-less sessions publish nothing (the skip counter stays
+    /// honest).
+    ///
+    /// # Errors
+    /// [`CoreError::Other`] when a ring is already publishing (the SPSC
+    /// contract is single-writer).
+    pub fn frame_ring_start(&mut self, path: &Path) -> Result<(), CoreError> {
+        self.frame_ring_start_with(path, RingConfig::new())
+    }
+
+    /// [`Session::frame_ring_start`] with an explicit slot budget; the
+    /// slot size still follows the first frame's geometry.
+    ///
+    /// # Errors
+    /// As [`Session::frame_ring_start`].
+    pub fn frame_ring_start_with(
+        &mut self,
+        path: &Path,
+        config: RingConfig,
+    ) -> Result<(), CoreError> {
+        if self.frame_ring.is_some() {
+            return Err(CoreError::Other(
+                "a frame ring is already publishing".into(),
+            ));
+        }
+        self.frame_ring = Some(crate::frame_ring::FrameRingPublisher::with_config(
+            path.to_path_buf(),
+            config,
+        ));
+        Ok(())
+    }
+
+    /// Stop publishing and report the ring's counters. The committed
+    /// frames stay readable — the reader holds the inode open.
+    ///
+    /// # Errors
+    /// [`CoreError::Other`] when no ring is publishing (idempotence via
+    /// error, mirroring [`Session::video_stop`]).
+    pub fn frame_ring_stop(&mut self) -> Result<RingStats, CoreError> {
+        let publisher = self
+            .frame_ring
+            .take()
+            .ok_or(CoreError::Other("no frame ring is publishing".into()))?;
+        Ok(publisher.stats())
+    }
+
+    /// The publishing ring's counters, `None` when not publishing.
+    pub fn frame_ring_stats(&self) -> Option<RingStats> {
+        self.frame_ring
+            .as_ref()
+            .map(crate::frame_ring::FrameRingPublisher::stats)
     }
 
     // --- Screenshots (§7 render domain, §10 capture) ----------------------
