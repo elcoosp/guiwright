@@ -1466,11 +1466,40 @@ async fn assert_rows_satisfied_on_entry(repl: &mut Repl) {
         rendered(&repl.step("assert count role Button is <= 5").await),
         vec!["assert count — found 4 (Button)"],
     );
+    // The range comparator (m25's honest-list widening, the range shape
+    // the same honest list names beside the inclusive pair): the grammar
+    // speaks `between <A> and <B>`, both ends inclusive.
+    assert_eq!(
+        rendered(
+            &repl
+                .step("assert count role Button is between 3 and 5")
+                .await
+        ),
+        vec!["assert count — found 4 (Button)"],
+    );
+    assert_eq!(
+        rendered(
+            &repl
+                .step("assert count role Button is between 4 and 4")
+                .await
+        ),
+        vec!["assert count — found 4 (Button)"],
+    );
 
     // Absence is an answer for counts (the m59 parity rule): an empty
     // set satisfies `is 0` — unlike the content pair's pending.
     assert_eq!(
         rendered(&repl.step("assert count testid ghost is 0").await),
+        vec![r#"assert count — found 0 (testid "ghost")"#],
+    );
+    // The empty set holds a zero-bottomed range too (the same absence
+    // rule through the range form).
+    assert_eq!(
+        rendered(
+            &repl
+                .step("assert count testid ghost is between 0 and 2")
+                .await
+        ),
         vec![r#"assert count — found 0 (testid "ghost")"#],
     );
 
@@ -1497,6 +1526,11 @@ async fn assert_rows_validate_their_grammar(repl: &mut Repl) {
     assert_eq!(out.len(), 1, "{out:?}");
     assert!(out[0].contains("> <N>"), "{out:?}");
     assert!(out[0].contains("< <N>"), "{out:?}");
+    // The range form names its grammar when it is malformed too: a
+    // missing `and` falls to the usage line (the survival rule).
+    let out = rendered(&repl.step("assert count role Button is between 3 and").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(out[0].contains("between <A> and <B>"), "{out:?}");
     assert_eq!(rendered(&repl.step("ping").await), vec!["pong"]);
 }
 
