@@ -9,8 +9,10 @@ use crate::session::ConnectTarget;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     /// `guiwright repl --uds <path> | --tcp <addr>` — the §13 live session
-    /// debugger.
-    Repl { target: ConnectTarget },
+    /// debugger. `--json` switches the output mode to one machine-readable
+    /// JSON document per step (the m11/m13 records' named CLI milestone —
+    /// the lines carry their kind word, the exit flag rides the document).
+    Repl { target: ConnectTarget, json: bool },
     /// `guiwright show-trace <archive.zip> [--out <path>] [--open]` — the
     /// §12 deep-link target.
     ShowTrace {
@@ -107,6 +109,9 @@ COMMANDS:
                           <target>: uds:///path/to.sock | tcp://host:port
                                   | ws://host:port (bare paths and
                                   host:port also work)
+                          --json: one machine-readable JSON document per
+                                  step (the lines carry their kind word;
+                                  the m11/m13 records' output mode)
     show-trace <archive>  Render a gwtrace/v1 zip into trace.html (§12).
         [--out <path>]    Output path (default: next to the archive).
         [--open]          Open the rendered file with the platform opener.
@@ -262,6 +267,7 @@ fn parse_live_html_args(rest: &[String]) -> Result<Command, CliError> {
 fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
     {
         let mut target = None;
+        let mut json = false;
         let mut rest: &[String] = rest;
 
         while let Some(flag) = rest.first() {
@@ -287,6 +293,13 @@ fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
                     target = Some(ConnectTarget::Ws(value.clone()));
                     rest = &rest[2..];
                 }
+                "--json" => {
+                    // The machine-readable output mode (the m11/m13 records'
+                    // named CLI milestone): one JSON document per step, the
+                    // kind word carrying what the text mode prefixes.
+                    json = true;
+                    rest = &rest[1..];
+                }
                 other => {
                     // Bare target: uds:///…, tcp://…, ws://…, /path or host:port.
                     target = Some(
@@ -300,7 +313,7 @@ fn parse_repl_args(rest: &[String]) -> Result<Command, CliError> {
         let target = target.ok_or(CliError::Usage(
             "repl needs a target: --uds <path> | --tcp <addr> | --ws <addr> | <target>",
         ))?;
-        Ok(Command::Repl { target })
+        Ok(Command::Repl { target, json })
     }
 }
 
@@ -619,31 +632,67 @@ mod tests {
         assert_eq!(
             cmd,
             Command::Repl {
-                target: ConnectTarget::Uds(PathBuf::from("/tmp/a.sock"))
+                target: ConnectTarget::Uds(PathBuf::from("/tmp/a.sock")),
+                json: false,
             }
         );
         let cmd = parse_args(&args(&["repl", "--tcp", "127.0.0.1:9"])).unwrap();
         assert_eq!(
             cmd,
             Command::Repl {
-                target: ConnectTarget::Tcp("127.0.0.1:9".into())
+                target: ConnectTarget::Tcp("127.0.0.1:9".into()),
+                json: false,
             }
         );
         let cmd = parse_args(&args(&["repl", "uds:///x.sock"])).unwrap();
         assert_eq!(
             cmd,
             Command::Repl {
-                target: ConnectTarget::Uds(PathBuf::from("/x.sock"))
+                target: ConnectTarget::Uds(PathBuf::from("/x.sock")),
+                json: false,
             }
         );
         let cmd = parse_args(&args(&["repl", "--ws", "ws://127.0.0.1:9"])).unwrap();
         assert_eq!(
             cmd,
             Command::Repl {
-                target: ConnectTarget::Ws("ws://127.0.0.1:9".into())
+                target: ConnectTarget::Ws("ws://127.0.0.1:9".into()),
+                json: false,
             }
         );
         assert!(parse_args(&args(&["repl"])).is_err());
+    }
+
+    // The m11/m13 records' named CLI milestone (docs/m11-full-tree-snapshot.md
+    // §5: "a `--json` output mode for machine consumers rides the CLI's
+    // output-formatting milestones"): the flag rides the `repl` subcommand,
+    // target required as ever, and the no-flag form stays the text mode.
+    #[test]
+    fn repl_json_flag_pins_the_machine_readable_mode() {
+        let cmd = parse_args(&args(&["repl", "--uds", "/tmp/a.sock", "--json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Repl {
+                target: ConnectTarget::Uds(PathBuf::from("/tmp/a.sock")),
+                json: true,
+            }
+        );
+        let cmd = parse_args(&args(&["repl", "uds:///x.sock", "--json"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Repl {
+                target: ConnectTarget::Uds(PathBuf::from("/x.sock")),
+                json: true,
+            }
+        );
+        let cmd = parse_args(&args(&["repl", "--uds", "/tmp/a.sock"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Repl {
+                target: ConnectTarget::Uds(PathBuf::from("/tmp/a.sock")),
+                json: false,
+            }
+        );
     }
 
     #[test]
