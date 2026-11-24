@@ -51,6 +51,10 @@ impl From<Selector> for SelectorV1 {
                 has_not: has_not.map(|s| Box::new((*s).into())),
                 nth: nth.map(Into::into),
             },
+            Selector::Has { source, has } => SelectorV1::Has {
+                source: Box::new((*source).into()),
+                has: Box::new((*has).into()),
+            },
         }
     }
 }
@@ -77,6 +81,10 @@ impl From<SelectorV1> for Selector {
                 has_text: has_text.map(Into::into),
                 has_not: has_not.map(|s| Box::new((*s).into())),
                 nth: nth.map(Into::into),
+            },
+            SelectorV1::Has { source, has } => Selector::Has {
+                source: Box::new((*source).into()),
+                has: Box::new((*has).into()),
             },
         }
     }
@@ -164,6 +172,7 @@ mod tests {
             Selector::role(Role::Button).nth(2),
             Selector::role(Role::Window).has_text("Ada"),
             Selector::role(Role::Group).has_not(Selector::role(Role::TextInput)),
+            Selector::role(Role::Group).has(Selector::role(Role::Button)),
             Selector::role_named(Role::Button, "Save").descendant_of(Selector::role(Role::Window)),
             Selector::All(vec![
                 Selector::role(Role::Group),
