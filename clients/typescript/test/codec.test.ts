@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 
 import { encodeRequest, decodeResponse, isRejected } from "../src/codec.ts";
 import { encodeFrame, FrameReader, MAX_FRAME_BYTES } from "../src/framing.ts";
+import { filter } from "../src/filter.ts";
 import {
   ClockV1,
   ErrorCode,
@@ -121,6 +122,14 @@ test("golden manifest is the expected shape", () => {
     golden.requests.some((v: any) => v.name === "action_scroll_into_view"),
     "the m90 scroll-into-view request is pinned",
   );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "resolve_has"),
+    "the m91 has-filter request is pinned",
+  );
+  assert.ok(
+    golden.requests.some((v: any) => v.name === "resolve_filter"),
+    "the m34 filter-row request is pinned (the m91 helper speaks it)",
+  );
 });
 
 test("requests encode byte-identical to the Rust wire", () => {
@@ -146,6 +155,32 @@ test("requests encode byte-identical to the Rust wire", () => {
       kind: "resolve",
       selector: { kind: "test_id", id: "btn-save" },
       timeout_ms: 0,
+    }),
+    // The m91 has filter: the appended SelectorV1 variant's bytes pin
+    // the published table (source, then the inner selector).
+    resolve_has: () => ({
+      kind: "resolve",
+      selector: {
+        kind: "has",
+        source: { kind: "role", role: "Group", name: null },
+        has: { kind: "role", role: "Button", name: null },
+      },
+      timeout_ms: 5000,
+    }),
+    // The m34 filter row through the m91 typed helper: the helper's
+    // output (hasText default, hasNot, nth) encodes byte-identical to
+    // the Rust wire — the raw rows no suite assembles by hand.
+    resolve_filter: () => ({
+      kind: "resolve",
+      selector: filter(
+        { kind: "role", role: "Button", name: null },
+        {
+          hasText: "Save",
+          hasNot: { kind: "role", role: "TextInput", name: null },
+          nth: "first",
+        },
+      ),
+      timeout_ms: 5000,
     }),
     action_click: () => ({
       kind: "action",
