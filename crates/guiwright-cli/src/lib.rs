@@ -14,6 +14,11 @@
 //! * [`bless`] — `guiwright bless`: promotes `.new.png` screenshot
 //!   artifacts onto their baselines (the §10 `GUIWRIGHT_BLESS` flow as an
 //!   explicit command, for CI-artifact blessing outside a test run).
+//! * [`codegen`] — `guiwright codegen <app-cmd…>`: the §13 standalone
+//!   codegen session (the m4 §4 deferred row) — spawns the app with the
+//!   §5.3 `GUIWRIGHT_DRIVER` door env, waits for the door, runs the M8
+//!   overlay + recorder session, and hands the kit code back when the
+//!   window ends (`--duration-ms`, Ctrl-C, or the app closing).
 //! * [`deps`] — `guiwright install-deps`: prints the §11 CI provisioning
 //!   commands for the host OS.
 //! * [`runner`] — `guiwright test`: the own runner (M5, §16 v0.5) —
@@ -32,6 +37,7 @@
 
 pub mod args;
 pub mod bless;
+pub mod codegen;
 pub mod deps;
 pub mod live_html;
 pub mod repl;
@@ -43,6 +49,7 @@ pub mod spec;
 
 pub use args::{CliError, Command, help_text, parse_args};
 pub use bless::{BlessReport, bless_dir};
+pub use codegen::{CodegenError, CodegenLaunch, CodegenOutcome, codegen_launch};
 pub use deps::{install_deps_command, platform_deps};
 pub use live_html::{DEFAULT_CAPTURE_MS, LiveHtmlError, live_html};
 pub use repl::{Line, Repl, StepOutcome};
