@@ -272,6 +272,13 @@ pub enum CountMatch {
     GreaterThan(usize),
     /// Fewer than `n` matches (M25's `to_have_count_less_than`).
     LessThan(usize),
+    /// At least `n` matches — the inclusive lower bound (m25's
+    /// honest-list widening: the M22 record's reserved inclusive pair,
+    /// added on the same `CountMatch`).
+    AtLeast(usize),
+    /// At most `n` matches — the inclusive upper bound (the pair's
+    /// mirror).
+    AtMost(usize),
 }
 
 impl CountMatch {
@@ -285,17 +292,22 @@ impl CountMatch {
             CountMatch::Exact(n) => found == n,
             CountMatch::GreaterThan(n) => found > n,
             CountMatch::LessThan(n) => found < n,
+            CountMatch::AtLeast(n) => found >= n,
+            CountMatch::AtMost(n) => found <= n,
         }
     }
 
     /// The rendering used by descriptions and timeout headers
-    /// (`count 4`, `count > 3`, `count < 5`) — the exact form is the
-    /// M22 header, byte-identical through the shared path.
+    /// (`count 4`, `count > 3`, `count < 5`, `count >= 4`,
+    /// `count <= 4`) — the exact form is the M22 header, byte-identical
+    /// through the shared path.
     pub fn describe(self) -> String {
         match self {
             CountMatch::Exact(n) => format!("count {n}"),
             CountMatch::GreaterThan(n) => format!("count > {n}"),
             CountMatch::LessThan(n) => format!("count < {n}"),
+            CountMatch::AtLeast(n) => format!("count >= {n}"),
+            CountMatch::AtMost(n) => format!("count <= {n}"),
         }
     }
 
@@ -303,7 +315,11 @@ impl CountMatch {
     /// names).
     pub fn bound(self) -> usize {
         match self {
-            CountMatch::Exact(n) | CountMatch::GreaterThan(n) | CountMatch::LessThan(n) => n,
+            CountMatch::Exact(n)
+            | CountMatch::GreaterThan(n)
+            | CountMatch::LessThan(n)
+            | CountMatch::AtLeast(n)
+            | CountMatch::AtMost(n) => n,
         }
     }
 }
@@ -961,6 +977,73 @@ mod tests {
         assert_eq!(CountMatch::Exact(4).bound(), 4);
         assert_eq!(CountMatch::GreaterThan(3).bound(), 3);
         assert_eq!(CountMatch::LessThan(5).bound(), 5);
+        assert_eq!(CountMatch::AtLeast(4).bound(), 4);
+        assert_eq!(CountMatch::AtMost(4).bound(), 4);
+    }
+
+    // --- The inclusive comparators (m25's honest-list widening) ------------
+    //
+    // Plan pin (docs/m25-count-comparators.md §5 "Remaining gaps"):
+    //   "The comparator vocabulary stops at the one-sided pair the M22
+    //    record reserved: `at_least`/`at_most` (inclusive forms) and a
+    //    range/between shape stay unreserved — add them only when a suite
+    //    asks, on the same `CountMatch`."
+    // This is that widening: the inclusive pair on the same enum, the
+    // same waiter, no new machinery (the m25 record's own shape).
+
+    #[test]
+    fn at_least_holds_on_the_bound_inclusive() {
+        let (tree, _) = setup();
+        // Exactly 4 buttons: at least 4 holds ON the bound — the
+        // inclusive form is the point.
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtLeast(4));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("4 buttons hold at-least-4, got {other:?}"),
+        }
+        // One short stays waitable and names the found count.
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtLeast(5));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.stuck_on().as_deref(), Some("found 4"));
+        assert_eq!(waiter.expected(), 5);
+    }
+
+    #[test]
+    fn at_most_holds_on_the_bound_inclusive() {
+        let (tree, _) = setup();
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtMost(4));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(_) => {}
+            other => panic!("4 buttons hold at-most-4, got {other:?}"),
+        }
+        // One over stays waitable, never fail-fast.
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtMost(3));
+        waiter
+            .on_event(WaiterEvent::Initial, &tree)
+            .expect_pending();
+        assert_eq!(waiter.stuck_on().as_deref(), Some("found 4"));
+        // Zero matches hold at most zero (the inclusive empty set).
+        let tree = TreeService::new();
+        let mut waiter =
+            CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtMost(0));
+        match waiter.on_event(WaiterEvent::Initial, &tree) {
+            WaitOutcome::Satisfied(None) => {}
+            other => panic!("0 buttons hold at-most-0, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inclusive_comparators_describe_the_comparison() {
+        let waiter = CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtLeast(4));
+        assert_eq!(waiter.describe(), "count >= 4 — getByRole(Button)");
+        let waiter = CountWaiter::with_match(Selector::role(Role::Button), CountMatch::AtMost(4));
+        assert_eq!(waiter.describe(), "count <= 4 — getByRole(Button)");
     }
 
     // --- The negation decorator (§16 assertions row, M24) -----------------
