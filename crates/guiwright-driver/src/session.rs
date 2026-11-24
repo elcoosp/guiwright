@@ -2042,6 +2042,22 @@ impl<A: FrameworkAdapter> ExpectBuilder<'_, A> {
         self.run_count(CountMatch::LessThan(max))
     }
 
+    /// `expect(locator).to_have_count_at_least(min)` (m25's honest-list
+    /// widening): the reserved inclusive lower bound — satisfied while
+    /// `min` *or more* nodes match, the bound itself included, same
+    /// waiter, same error shape (`count >= 99 — …`).
+    pub fn to_have_count_at_least(self, min: usize) -> Result<(), CoreError> {
+        self.run_count(CountMatch::AtLeast(min))
+    }
+
+    /// `expect(locator).to_have_count_at_most(max)` (m25's honest-list
+    /// widening): the reserved inclusive upper bound — satisfied while
+    /// `max` *or fewer* nodes match, the bound itself included, same
+    /// waiter, same error shape (`count <= 3 — …`).
+    pub fn to_have_count_at_most(self, max: usize) -> Result<(), CoreError> {
+        self.run_count(CountMatch::AtMost(max))
+    }
+
     /// The shared count path (M22 exact + M25 comparators): the window
     /// scope resolves at act time (the M17 discipline), the comparator
     /// rides the zero-polling loop, the decorator wrapping under
@@ -2375,6 +2391,22 @@ mod tests {
             .expect(Selector::role(accesskit::Role::Button))
             .to_have_count_less_than(5)
             .expect("4 buttons sit below the < 5 bound");
+    }
+
+    #[test]
+    fn inclusive_count_comparators_run_on_session() {
+        // m25's honest-list widening: the bound itself holds on the
+        // session loop, same waiter, same shape.
+        let fixture = Fixture::buttons();
+        let mut session = settled_session(&fixture);
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .to_have_count_at_least(4)
+            .expect("4 buttons hold at-least-4 (inclusive)");
+        session
+            .expect(Selector::role(accesskit::Role::Button))
+            .to_have_count_at_most(4)
+            .expect("4 buttons hold at-most-4 (inclusive)");
     }
 
     #[test]
