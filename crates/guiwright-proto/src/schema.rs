@@ -933,9 +933,28 @@ pub struct ResolvedMatchV1 {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum EventV1 {
-    TreeChanged { seq: u64 },
-    FramePresented { seq: u64, hash: u64 },
-    Log { record: String },
+    TreeChanged {
+        seq: u64,
+    },
+    FramePresented {
+        seq: u64,
+        hash: u64,
+    },
+    Log {
+        record: String,
+    },
+    /// A node's checked fact moved (the m20 record's remaining-gaps
+    /// list: *"`setChecked`-state change events (assert via subscription
+    /// instead of polling the tree) would ride the M12 event channel
+    /// with a new `EventKindV1`"*): the acted-on node and the tri-state
+    /// it now carries, published when the wire `Action` path's check
+    /// vocabulary lands and the fact actually moved. Discrete (not
+    /// coalesced): a state change is a fact, not a position — the same
+    /// shape the `Log` records ride.
+    StateChange {
+        node: NodeKeyV1,
+        checked: CheckedStateV1,
+    },
 }
 
 /// Event-subscription vocabulary (§7 server-push events, M12). The kinds
@@ -957,6 +976,30 @@ pub enum EventKindV1 {
     /// rejects a `Log` subscription with [`ErrorCode::Unsupported`] — the
     /// honest capability answer, never a silent no-op filter.
     Log,
+    /// A node's checked fact moved (the m20 record's named event): the
+    /// wire `Action` path's check vocabulary landed and the tri-state
+    /// actually moved — the subscription answers instead of a tree
+    /// poll. The session-side emission is the honest contract's other
+    /// half: an action that lands without moving the fact publishes
+    /// nothing.
+    StateChange,
+}
+
+/// The reconnect cursor (§7 resume vocabulary): the seqs a
+/// re-attaching client last saw per coalesced topic — the values its
+/// previous connection's [`EventV1::TreeChanged`] / `TreeSnapshot` and
+/// [`EventV1::FramePresented`] events reported. The session replays the
+/// position past these, never the missed history (the events are
+/// "the tree/frame is at seq N now", so the current position is the
+/// summary of everything in between — §15.6 coalescing).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ResumeCursorV1 {
+    /// The tree seq the client last observed (`TreeSnapshot.tree_seq` or
+    /// the last `TreeChanged` event).
+    pub tree_seq: u64,
+    /// The frame seq the client last observed (the last `FramePresented`
+    /// event; `0` when it never saw one).
+    pub frame_seq: u64,
 }
 
 /// `Subscribe { On, Off }` (§7 event channel, M12). Re-subscribing
@@ -970,6 +1013,25 @@ pub enum SubscribeV1 {
     On { kinds: Vec<EventKindV1> },
     /// Drop the connection's subscription.
     Off,
+    /// Resume the event stream from a re-attach cursor (the m18 record's
+    /// remaining-gaps list — *"the session-side resume vocabulary (a
+    /// `Subscribe` replay cursor) stays a §7 follow-on"*): subscribe to
+    /// the named kinds and, for each seq topic the filter names, replay
+    /// the position the session stands at when it is **past** the
+    /// cursor — one coalesced [`EventV1::TreeChanged`] /
+    /// [`EventV1::FramePresented`] pushed into this connection's event
+    /// queue ahead of the ack. A cursor already naming the current
+    /// position replays nothing: the reconnecting viewer skips the
+    /// re-dump it used to pay unconditionally. A cursor from the future
+    /// (a restarted session's lower seqs) also replays nothing — the
+    /// next live change tells the client where the session stands. The
+    /// replay rides the same kind filter the live stream does, and the
+    /// [`EventKindV1::Log`] kind has no seq to resume from (the tail is
+    /// a live tap, never a replay buffer — the log-tail rule).
+    Resume {
+        kinds: Vec<EventKindV1>,
+        cursor: ResumeCursorV1,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1398,6 +1460,17 @@ mod tests {
             }),
             RequestV1::Subscribe(SubscribeV1::On { kinds: Vec::new() }),
             RequestV1::Subscribe(SubscribeV1::Off),
+            RequestV1::Subscribe(SubscribeV1::Resume {
+                kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
+                cursor: ResumeCursorV1 {
+                    tree_seq: 12,
+                    frame_seq: 34,
+                },
+            }),
+            RequestV1::Subscribe(SubscribeV1::Resume {
+                kinds: Vec::new(),
+                cursor: ResumeCursorV1::default(),
+            }),
         ];
         for req in requests {
             let bytes = postcard::to_allocvec(&req).expect("encode");
@@ -1409,6 +1482,15 @@ mod tests {
             GwpResponse::V1(ResponseV1::Event(EventV1::FramePresented {
                 seq: 7,
                 hash: 0xDEAD_BEEF,
+            })),
+            // The m20 record's named event: the state change rides the
+            // same event envelope, the node and its post-action tri-state.
+            GwpResponse::V1(ResponseV1::Event(EventV1::StateChange {
+                node: NodeKeyV1::AccessKit {
+                    tree: [0u8; 16],
+                    node: 10,
+                },
+                checked: CheckedStateV1::Checked,
             })),
             GwpResponse::V1(ResponseV1::Subscribed {
                 kinds: vec![EventKindV1::TreeChanged, EventKindV1::FramePresented],
@@ -2403,11 +2485,25 @@ mod tests {
             0
         );
         assert_eq!(discriminant(&SubscribeV1::Off), 1);
+        // The resume vocabulary (the m18 record's named §7 follow-on): the
+        // reconnect cursor appends after `Off` — never reorders the pair
+        // every pre-m18 client speaks.
+        assert_eq!(
+            discriminant(&SubscribeV1::Resume {
+                kinds: Vec::new(),
+                cursor: ResumeCursorV1::default(),
+            }),
+            2
+        );
         // The event-kind vocabulary mirrors `EventV1`'s variant order —
         // appended, never reordered.
         assert_eq!(discriminant(&EventKindV1::TreeChanged), 0);
         assert_eq!(discriminant(&EventKindV1::FramePresented), 1);
         assert_eq!(discriminant(&EventKindV1::Log), 2);
+        // The m20 record's named event: the state-change kind appends
+        // after `Log` — never reorders the pair every pre-m20 client
+        // speaks.
+        assert_eq!(discriminant(&EventKindV1::StateChange), 3);
         // M13 (§7 tree domain): the filtered-dump arm appends after `Full`.
         assert_eq!(
             discriminant(&SnapshotV1::Filtered {
