@@ -2279,6 +2279,7 @@ dependencies = [
  "accesskit 0.25.2",
  "guiwright-core",
  "guiwright-driver",
+ "guiwright-inspect",
  "guiwright-proto",
  "guiwright-trace",
  "lz4_flex",
