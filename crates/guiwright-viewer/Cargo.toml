@@ -22,6 +22,13 @@ serde.workspace = true
 serde_json.workspace = true
 zip = { version = "9.4.1", default-features = false, features = ["time"] }
 thiserror.workspace = true
+# The replayable §13 overlay (m8's named viewer gaps): the replay
+# rebuilds the deep-inspect plan through the framework-free
+# guiwright-inspect cost model (OverlayPlan::from_facts) — the plan is
+# data, so the viewer consumes it without any adapter edge. The replay
+# keys facts under replay-scoped logical NodeKeys (guiwright-core).
+guiwright-inspect.workspace = true
+guiwright-core.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -30,7 +37,6 @@ tempfile.workspace = true
 # `zip` / `guiwright-proto` / `tokio` are already dependencies; only the
 # test-only extras are declared here.
 guiwright-driver.workspace = true
-guiwright-core.workspace = true
 accesskit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
