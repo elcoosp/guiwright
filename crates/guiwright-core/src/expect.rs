@@ -197,6 +197,25 @@ impl ExpectBuilder {
         self.count_expectation(CountMatch::LessThan(max))
     }
 
+    /// The inclusive count comparator (m25's honest-list widening): the
+    /// M22 record's reserved `at_least` form, on the same
+    /// [`CountMatch`] — satisfied while `min` **or more** nodes match,
+    /// the bound itself included. Same waiter, same waitable mismatch,
+    /// same error shape (`count >= 99 — …`). Under [`Self::not`] the
+    /// decorator inverts the comparison.
+    pub fn to_have_count_at_least(self, min: usize) -> Expectation {
+        self.count_expectation(CountMatch::AtLeast(min))
+    }
+
+    /// The inclusive count comparator's mirror (m25's honest-list
+    /// widening): satisfied while `max` **or fewer** nodes match, the
+    /// bound itself included. Same waiter, same waitable mismatch, same
+    /// error shape (`count <= 3 — …`). Under [`Self::not`] the decorator
+    /// inverts the comparison.
+    pub fn to_have_count_at_most(self, max: usize) -> Expectation {
+        self.count_expectation(CountMatch::AtMost(max))
+    }
+
     /// The shared count-assertion assembly (M25): the M22 exact form and
     /// the comparators differ only in the [`CountMatch`] they hand the
     /// waiter (and the [`NotWaiter`] wrapper under `not()`); the exact
@@ -693,6 +712,55 @@ mod tests {
             .expect_err("4 buttons is not 99");
         assert!(
             err.to_string().contains("count 99 — getByRole(Button)"),
+            "{}",
+            err.to_string()
+        );
+    }
+
+    // --- The inclusive comparators (m25's honest-list widening) ------------
+    //
+    // Plan pin (docs/m25-count-comparators.md §5 "Remaining gaps"): the
+    // inclusive `at_least`/`at_most` pair rides "the same `CountMatch`"
+    // — one builder assembly, no new machinery, the same error shape.
+
+    #[test]
+    fn to_have_count_at_least_passes_on_the_bound() {
+        let tree = tree_with_fixture();
+        expect(Selector::role(Role::Button))
+            .to_have_count_at_least(4)
+            .check_now(&tree)
+            .expect("4 buttons hold at-least-4 (inclusive)");
+        expect(Selector::role_named(Role::Button, "Ghost"))
+            .to_have_count_at_least(0)
+            .check_now(&tree)
+            .expect("0 ghosts hold at-least-0");
+    }
+
+    #[test]
+    fn to_have_count_at_most_passes_on_the_bound() {
+        let tree = tree_with_fixture();
+        expect(Selector::role(Role::Button))
+            .to_have_count_at_most(4)
+            .check_now(&tree)
+            .expect("4 buttons hold at-most-4 (inclusive)");
+    }
+
+    #[test]
+    fn an_inclusive_comparator_timeout_names_the_inclusive_form() {
+        let tree = tree_with_fixture();
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count_at_least(99)
+            .check_now(&tree)
+            .expect_err("4 buttons never clear >= 99");
+        let msg = err.to_string();
+        assert!(msg.contains("count >= 99"), "{msg}");
+        assert!(msg.contains("found 4"), "{msg}");
+        let err = expect(Selector::role(Role::Button))
+            .to_have_count_at_most(3)
+            .check_now(&tree)
+            .expect_err("4 buttons never sit at-or-below <= 3");
+        assert!(
+            err.to_string().contains("count <= 3"),
             "{}",
             err.to_string()
         );
