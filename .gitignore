@@ -25,7 +25,3 @@ target/guiwright/
 ship.toml
 .github/pr-body.md
 docs/launch.md
-
-# ship hand-off artifacts (task 4: gitignored)
-ship.toml
-.github/pr-body.md
