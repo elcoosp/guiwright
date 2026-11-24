@@ -615,3 +615,12 @@ p95_us = 8000
 notes = "the §15.6 shared-frame ring (m88): one FrameRingWriter::publish of a 1280×800 RGBA8 frame (payload + record commit + header stats) followed by the reader's latest_into digest-validated read into a reused buffer — the same-host pixel path beside the blob side-channel (no socket hop, no framing, no LZ4; the CDP binary-socket shape); file-backed positioned I/O, the §10 scene-digest hash guarding every slot"
 m0_measurable = true
 sample = "shm_ring_frame_hop"
+
+[[budget]]
+id = "remote_to_self_resolve"
+name = "Kit remote-to-self resolve hop (typed handle over the embedded door)"
+p50_us = 600
+p95_us = 3000
+notes = "the m16 record's named follow-on, closed: one strict Resolve round-trip over the embedded door through the kit's remote-to-self handle — the kit-side launch (server + bridge + typed client, no socket, no filesystem), the core-selector → SelectorV1 bridge, the sync block_on wrapper and the resolve_remote_uds round-trip shape (marshalling + session-thread rendezvous); the UDS row without the socket, proving the door's byte-identical conversation costs the same"
+m0_measurable = true
+sample = "remote_to_self_resolve"
