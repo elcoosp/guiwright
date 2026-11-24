@@ -2054,6 +2054,18 @@ impl<A: FrameworkAdapter> ExpectBuilder<'_, A> {
         self.run(vec![Check::HasText(value.into())], "value")
     }
 
+    /// `expect(locator).toBeEmpty()` (§16 assertions row, m28's
+    /// honest-list row): the label/value composite — the node's own
+    /// label *and* value must both read absent-or-empty, the same node
+    /// reads the `HasText` check makes (never a subtree walk — the
+    /// m29/m31 reads' honest node-level scope). The mismatch is waitable
+    /// (text arrives with the node's restatement, Playwright parity),
+    /// and the timeout error names the assertion, the locator and the
+    /// facts the last evaluation found. Composes with [`Self::not`].
+    pub fn to_be_empty(self) -> Result<(), CoreError> {
+        self.run(vec![Check::Empty], "empty")
+    }
+
     /// `expect(locator).toHaveRole(role)` (§16 assertions row, M38): the
     /// identity family's role row — the node's AccessKit role equals the
     /// wanted role. The mismatch is waitable (a re-render can restate the
