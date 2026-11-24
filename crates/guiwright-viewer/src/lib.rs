@@ -14,7 +14,13 @@
 //!   ledger in one file (no server, no external assets, §12). The live
 //!   half (`render_live_html`) renders the same scrubber from a
 //!   running session's accumulated model (M23 — §12's recorded
-//!   follow-on).
+//!   follow-on). The emitted page carries the replayable §13 overlay
+//!   (the deep-inspect layer, [`overlay`]) beside the tree.
+//! * [`overlay`] — the replayable §13 overlay (m8's named viewer gaps):
+//!   [`overlay::replay_plan`] rebuilds the deep-inspect plan —
+//!   full-tree badges, the recorded focus outlined — from a resolved
+//!   tree view through the same [`OverlayPlan::from_facts`] cost model
+//!   the live session speaks.
 //! * [`live`] — the M18 live mode: [`live::LiveFeed`] attaches to a
 //!   running GWP session over any [`guiwright_proto::ClientConn`] door
 //!   and [`live::LiveTimeline`] accumulates the same scrubber model the
@@ -24,6 +30,7 @@
 //! let archive = TraceArchive::open("guiwright-login_flow-1.zip")?;
 //! let timeline = Timeline::from_archive(&archive);
 //! let tree = timeline.tree_at(frame_seq);      // resolved view
+//! let plan = overlay::replay_plan(&tree);      // deep-inspect replay
 //! std::fs::write("trace.html", viewer::render_html(&archive, &timeline))?;
 //! ```
 
@@ -32,9 +39,11 @@
 pub mod archive;
 pub mod html;
 pub mod live;
+pub mod overlay;
 pub mod timeline;
 
 pub use archive::{TraceArchive, ViewerError};
 pub use html::{render_html, render_live_html};
 pub use live::{LiveChange, LiveFeed, LiveInfo, LiveTimeline};
+pub use overlay::{replay_plan, replay_plan_at, snapshot_replay_plans};
 pub use timeline::{Timeline, TimelineTick, TreeView, TreeViewNode};
