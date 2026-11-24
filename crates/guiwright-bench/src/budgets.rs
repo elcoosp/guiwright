@@ -154,6 +154,7 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ("client_tree_snapshot", crate::samples::client_tree_snapshot),
     ("client_bye", crate::samples::client_bye),
     ("client_count_assert", crate::samples::client_count_assert),
+    ("shm_ring_frame_hop", crate::samples::shm_ring_frame_hop),
 ];
 
 fn parse_budgets() -> Vec<Budget> {
