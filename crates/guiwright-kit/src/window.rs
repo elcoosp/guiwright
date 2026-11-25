@@ -79,6 +79,26 @@ impl<A: FrameworkAdapter> WindowHandle<'_, A> {
         self.locator(Selector::text(text))
     }
 
+    /// `window.video()` — the §10 recording surface scoped to **this
+    /// window's stream** (the m6 §5/m7 §4 deferred half): every presented
+    /// frame crops to this window's subtree bounds (§10's element-crop
+    /// rule at window width, re-resolved per frame), a change outside the
+    /// window sheds its frames by the crop-digest dedup, and the typed
+    /// `UnknownWindow` refusal lands at start if the target has left the
+    /// tree since the handle was aimed.
+    pub fn video(&mut self) -> crate::app::VideoHandle<'_, A> {
+        crate::app::VideoHandle::scoped(self.app, Some(self.handle.clone()))
+    }
+
+    /// `window.enable_trace(path)` — start the session trace with this
+    /// window's tag: the archive's `meta.json` names the stream it
+    /// recorded (`window`, the m6 §5/m7 §4 handle vocabulary), so the
+    /// artifact carries its own provenance. Same one-recorder rule as
+    /// [`crate::App::enable_trace`].
+    pub fn enable_trace(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.app.start_trace(path, Some(self.handle.clone()));
+    }
+
     /// `window.get_by_test_id(...)` (§8.1 O(1) hash), this window only.
     pub fn get_by_test_id(&mut self, id: impl Into<String>) -> Locator<'_, A> {
         self.locator(Selector::test_id(id))
