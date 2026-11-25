@@ -19,7 +19,7 @@ use guiwright_proto::client::ClientConn;
 use guiwright_proto::schema::{
     AdapterInfoV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1, DescribedIdentityStateV1,
     DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1, GestureV1, GwpEvent,
-    InputEventV1, InspectV1, MockV1, NodeKeyV1, PointerButtonV1, RequestV1, ResponseV1,
+    InputEventV1, InspectV1, MockV1, NodeKeyV1, NthV1, PointerButtonV1, RequestV1, ResponseV1,
     ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1,
     VideoV1, WindowV1,
 };
@@ -1747,6 +1747,8 @@ impl Repl {
             "  get role <Role> [name]      resolve a locator (strict mode)",
             "  get text|label|value <text> resolve a locator (strict mode)",
             "  get testid <id>             resolve a locator (strict mode)",
+            "  … has_text <text> | has_not <locator> | has <locator> | first | last | nth <N>",
+            "                              the §8.1 filter words on every locator (m93)",
             "  hit <x> <y>                 which node occupies the point (M32 hit-test read)",
             "  describe <get-args…>        one node's identity facts (M37)",
             "  count <get-args…>           the set size, strict mode aside (M35 read pass)",
@@ -1893,11 +1895,50 @@ fn render_bulk_row(row: &DescribedV1, value_first: bool) -> String {
     format!("{} {content:?}", describe_node(&row.node))
 }
 
-/// Parse the `get`-shaped locator vocabulary shared by `get` (§8) and
-/// `snapshot under` (M13): one selector + its rendered form (the same
-/// describe both print). The tokens start at the locator kind — `role …`,
-/// `text …`, `label …`, `testid …`, `value …`.
+/// The §8.1 filter vocabulary's reserved words (the m93 grammar — the
+/// m91/m92 records' named standing gap: "the REPL's get-args vocabulary
+/// speaks no filter rows (`has_not` included)"). The words are postfix:
+/// the base locator tokens run to the first reserved word, the words
+/// fold left-to-right after it — source first, narrowing after, the kit
+/// locator DSL's composition order (`Locator::has_text(..).first()`).
+/// A name carrying one of these words needs a different phrasing (the
+/// same reserved-word trade-off every token grammar makes; the kit DSL
+/// has none — its arguments are values, the REPL's are tokens).
+const FILTER_WORDS: [&str; 6] = ["has_text", "has_not", "has", "first", "last", "nth"];
+
+/// The first reserved filter word's position in `tokens`, if any — the
+/// split point the grammar folds around.
+fn filter_word(tokens: &[String]) -> Option<usize> {
+    tokens
+        .iter()
+        .position(|t| FILTER_WORDS.contains(&t.as_str()))
+}
+
+/// Parse the `get`-shaped locator vocabulary shared by every get-args
+/// command (`get`, `count`, `all`, `texts`, `values`, `describe`,
+/// `snapshot under`, `wait`, `assert …`, `expect`, `inspect`): one
+/// selector — the base locator plus the §8.1 filter words — and its
+/// rendered form (the words the grammar speaks, so what you typed is
+/// what it prints). The tokens start at the locator kind — `role …`,
+/// `text …`, `label …`, `testid …`, `value …` — and may carry the
+/// narrowing words after it (`has_text <text…>`, `has_not <get-args…>`,
+/// `has <get-args…>`, `first`, `last`, `nth <N>`). `has`/`has_not` take
+/// a full locator, so they recurse on the remainder and end the fold
+/// (the wire nests `Filter` over `Has` over `Filter` already — the
+/// resolver owns the semantics, the REPL only composes the rows).
 fn parse_selector(tokens: &[String]) -> Result<(SelectorV1, String), String> {
+    let split = filter_word(tokens).unwrap_or(tokens.len());
+    let (base_tokens, rest) = tokens.split_at(split);
+    let selector = parse_base_selector(base_tokens)?;
+    let selector = fold_filters(selector, rest)?;
+    let describe = render_selector(&selector);
+    Ok((selector, describe))
+}
+
+/// The base locator arms — the grammar's `role | text | label | testid |
+/// value` forms, unchanged by the filter pass (m35's "nothing new to
+/// learn" holds: the narrowing words are additive, the base is).
+fn parse_base_selector(tokens: &[String]) -> Result<SelectorV1, String> {
     let sub = tokens
         .first()
         .ok_or("needs a locator — role | text | label | testid | value")?;
@@ -1931,8 +1972,99 @@ fn parse_selector(tokens: &[String]) -> Result<(SelectorV1, String), String> {
             ));
         }
     };
-    let describe = render_selector(&selector);
-    Ok((selector, describe))
+    Ok(selector)
+}
+
+/// The filter-word fold: each reserved word wraps the selector so far in
+/// its own wire row (`Filter { source, … }` / `Has { source, has }`),
+/// the same composition the kit sugars nest by value — every word speaks
+/// a row the wire has carried since M34/m91, so no driver sees a new
+/// shape. The fold consumes tokens up to the next reserved word (the
+/// `has_text` probe's text may span words); `has`/`has_not` recurse on
+/// the whole remainder and end it.
+fn fold_filters(selector: SelectorV1, tokens: &[String]) -> Result<SelectorV1, String> {
+    let mut selector = selector;
+    let mut rest = tokens;
+    while let Some(word) = rest.first().map(String::as_str) {
+        match word {
+            "has_text" => {
+                let split = filter_word(&rest[1..]).map_or(rest.len(), |i| i + 1);
+                let text = joined(Some(&rest[1..split]))
+                    .ok_or("`has_text` needs text — e.g. `count role Button has_text Save`")?;
+                selector = SelectorV1::Filter {
+                    source: Box::new(selector),
+                    has_text: Some(TextMatchV1 {
+                        text,
+                        exact: false,
+                        ignore_case: true,
+                    }),
+                    has_not: None,
+                    nth: None,
+                };
+                rest = &rest[split..];
+            }
+            "has_not" | "has" => {
+                let usage = match word {
+                    "has" => "`has` needs a locator — e.g. `count role Group has role Button`",
+                    _ => {
+                        "`has_not` needs a locator — e.g. `count role Button has_not text Confirm`"
+                    }
+                };
+                let tail = rest.get(1..).unwrap_or_default();
+                if tail.is_empty() {
+                    return Err(usage.to_string());
+                }
+                let inner = parse_selector(tail)?.0;
+                selector = if word == "has" {
+                    SelectorV1::Has {
+                        source: Box::new(selector),
+                        has: Box::new(inner),
+                    }
+                } else {
+                    SelectorV1::Filter {
+                        source: Box::new(selector),
+                        has_text: None,
+                        has_not: Some(Box::new(inner)),
+                        nth: None,
+                    }
+                };
+                rest = &[];
+            }
+            "first" | "last" => {
+                selector = SelectorV1::Filter {
+                    source: Box::new(selector),
+                    has_text: None,
+                    has_not: None,
+                    nth: Some(if word == "first" {
+                        NthV1::First
+                    } else {
+                        NthV1::Last
+                    }),
+                };
+                rest = &rest[1..];
+            }
+            "nth" => {
+                let index = rest
+                    .get(1)
+                    .ok_or("`nth` needs a 0-based index — e.g. `count role Button nth 1`")?;
+                let index = index
+                    .parse::<usize>()
+                    .map_err(|_| format!("not an index value: {index}"))?;
+                selector = SelectorV1::Filter {
+                    source: Box::new(selector),
+                    has_text: None,
+                    has_not: None,
+                    nth: Some(NthV1::Index(index)),
+                };
+                rest = &rest[2..];
+            }
+            // Unreachable by construction (the fold only starts on a
+            // reserved word), kept total so the match never panics: the
+            // grammar survives its user's mistakes, always.
+            other => return Err(format!("unknown filter word `{other}`")),
+        }
+    }
+    Ok(selector)
 }
 
 /// The one-line event rendering between commands (§7, M12): the kind, the
@@ -1967,14 +2099,23 @@ fn render_event(event: &GwpEvent) -> String {
 
 /// Render a server rejection the way the front-end prints it: the error
 /// code is part of the message (strict-mode violations, timeouts, stale
-/// generations are all debugging signals, §8.2).
+/// generations are all debugging signals, §8.2). Every code renders as
+/// its lowercase word — the raw debug enum never reaches the prompt (the
+/// m93 debt pass: the fallback arm printed `{code:?}`, so a rejection
+/// like `UnknownNode: …` arrived as a Rust identifier instead of the
+/// word the code means).
 fn render_gwp_error(err: &GwpError) -> String {
     match err {
         GwpError::Rejected { code, message } => match code {
             ErrorCode::StrictModeViolation => format!("strict-mode: {message}"),
             ErrorCode::Timeout => format!("timeout: {message}"),
             ErrorCode::StaleGeneration => format!("stale node: {message}"),
-            other => format!("{other:?}: {message}"),
+            ErrorCode::UnknownNode => format!("unknown node: {message}"),
+            ErrorCode::UnknownWindow => format!("unknown window: {message}"),
+            ErrorCode::Unsupported => format!("unsupported: {message}"),
+            ErrorCode::Internal => format!("internal: {message}"),
+            ErrorCode::NotHandshaked => format!("not handshaked: {message}"),
+            ErrorCode::UnsupportedVersion => format!("unsupported version: {message}"),
         },
         other => other.to_string(),
     }
@@ -2325,7 +2466,42 @@ fn render_selector(selector: &SelectorV1) -> String {
         SelectorV1::Label(m) => format!("label {:?}", m.text),
         SelectorV1::TestId(id) => format!("testid {id:?}"),
         SelectorV1::Value(m) => format!("value {:?}", m.text),
-        other => format!("{other:?}"),
+        // The REPL grammar speaks no chain tokens, but a pasted or
+        // recorded row can carry one — the core render's `>>` form.
+        SelectorV1::All(chain) => {
+            let parts: Vec<String> = chain.iter().map(render_selector).collect();
+            parts.join(" >> ")
+        }
+        // The filter grammar's renders speak the grammar's own words (m93):
+        // what you typed is what the describe prints — `Button has_text
+        // "Save"`, `Group has Button`, `Button nth 1` — the kit render's
+        // Playwright words (`filter(hasText=…)`) stay the codegen side.
+        SelectorV1::Filter {
+            source,
+            has_text,
+            has_not,
+            nth,
+        } => {
+            let mut rendered = render_selector(source);
+            if let Some(t) = has_text {
+                let _ = write!(rendered, " has_text {:?}", t.text);
+            }
+            if let Some(inner) = has_not {
+                let _ = write!(rendered, " has_not {}", render_selector(inner));
+            }
+            match nth {
+                Some(NthV1::First) => rendered.push_str(" first"),
+                Some(NthV1::Last) => rendered.push_str(" last"),
+                Some(NthV1::Index(i)) => {
+                    let _ = write!(rendered, " nth {i}");
+                }
+                None => {}
+            }
+            rendered
+        }
+        SelectorV1::Has { source, has } => {
+            format!("{} has {}", render_selector(source), render_selector(has))
+        }
     }
 }
 
