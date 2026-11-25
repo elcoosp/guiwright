@@ -570,7 +570,7 @@ Waiters are state machines woken by `TreeChanged`/`FramePresented`. There is no 
 
 - UDS + postcard (2×-5× smaller than JSON, zero-copy-friendly); LZ4 frame compression only for blobs > 4 KiB; `MSG_MORE`-style batching of event flushes per frame.
 - Backpressure everywhere: bounded channels (default 64 messages, 8 blob slots); slow clients degrade to "tree snapshots only" (frames dropped by hash), never block the UI thread — the UI thread's only costs are the tap hooks (a queue push each).
-- Roadmap optimization (unshipped, no version promise): a shared-memory frame ring for same-host clients (zero-copy pixels), mirroring CDP's binary socket philosophy.
+- Shared-memory frame ring for same-host clients (m88, `guiwright_proto::shmring`): positioned `read_at`/`write_at` I/O — newest-wins slots, the §10 scene-digest hash guarding every slot, the reader costing one page-cache copy (`latest_into` reusing the caller's buffer), the driver publisher riding the video recorder's `last_frame` tap; the mapping-backed borrow stays the recorded follow-up, gated on the workspace's `unsafe` forbid (`memmap2`'s file mappings are `unsafe fn` constructors), mirroring CDP's binary socket philosophy.
 
 ### 15.7 Benchmark suite (`guiwright-bench`)
 
