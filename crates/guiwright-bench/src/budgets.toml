@@ -642,3 +642,12 @@ p95_us = 3000
 notes = "the m16 record's named follow-on, closed: one strict Resolve round-trip over the embedded door through the kit's remote-to-self handle — the kit-side launch (server + bridge + typed client, no socket, no filesystem), the core-selector → SelectorV1 bridge, the sync block_on wrapper and the resolve_remote_uds round-trip shape (marshalling + session-thread rendezvous); the UDS row without the socket, proving the door's byte-identical conversation costs the same"
 m0_measurable = true
 sample = "remote_to_self_resolve"
+
+[[budget]]
+id = "window_scoped_video_push"
+name = "Window-scoped video push (crop + digest, 1280x800 frame)"
+p50_us = 5
+p95_us = 20
+notes = "the per-window recording pass (the m6 record's deferred half, m7 §4's reiteration): one pump's window-scoped capture hop on the §15.1 bench frame — the presented frame's crop to the window subtree's bounds union (the §10 element-crop rule at window width, re-resolved per pump), the crop's own strided FNV-1a digest (the adapter's whole-frame stamp cannot vouch for a sub-rect) and the recorder push; measured by the session-level sample on the two-window fixture"
+m0_measurable = true
+sample = "window_scoped_video_push"
