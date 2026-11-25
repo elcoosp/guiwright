@@ -350,7 +350,7 @@ async fn repl_screenshot_domain() {
     let miss = rendered(&bare_repl.step("screenshot").await);
     assert_eq!(miss.len(), 1, "{miss:?}");
     assert!(
-        miss[0].starts_with("error:") && miss[0].contains("Unsupported"),
+        miss[0].starts_with("error:") && miss[0].contains("unsupported"),
         "{miss:?}"
     );
     bare_handle.shutdown();
@@ -1100,7 +1100,7 @@ async fn codegen_recording(repl: &mut Repl) {
     let stop_again = repl.step("codegen stop").await;
     assert_eq!(
         rendered(&stop_again),
-        vec!["error: Internal: no codegen recording is active"]
+        vec!["error: internal: no codegen recording is active"]
     );
 
     // The gesture vocabulary records too (§13 over §9): the REPL's mouse /
@@ -2334,6 +2334,152 @@ async fn repl_json_output_mode_is_machine_readable() {
     let doc = repl.step("bye").await.to_json_string();
     let parsed: serde_json::Value = serde_json::from_str(&doc).expect("one JSON document");
     assert_eq!(parsed["exit"], serde_json::Value::Bool(true));
+
+    handle.shutdown();
+}
+
+/// The REPL filter grammar (m93 — the m91/m92 records' named standing
+/// gap: "the REPL's get-args vocabulary speaks no filter rows (`has_not`
+/// included)"). The §8.1 narrowing words ride the shared get-args parse
+/// as postfix words — `has_text <text…>`, `has_not <get-args…>`,
+/// `has <get-args…>`, `first` / `last` / `nth <N>` — composed in order
+/// (source first, narrowing after, the kit locator DSL's composition
+/// order), so every get-args command speaks them: the reads, the strict
+/// `get`, the assertion rows. No wire change (the `Filter`/`Has` rows
+/// shipped with M34/m91 and the resolver nests them already).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_filter_rows_in_get_args() {
+    let path = socket_path("repl-filter.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // `has_text`: the positive text probe over the set read — the fuzzy
+    // default (substring, case-insensitive) is the TextMatch default the
+    // kit sugar and the m92 TS helper speak.
+    assert_eq!(
+        rendered(&repl.step("count role Button has_text Save").await),
+        vec!["1 match (Button has_text \"Save\")"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button has_text save").await),
+        vec!["1 match (Button has_text \"save\")"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button has_text Ghost").await),
+        vec!["0 matches (Button has_text \"Ghost\")"],
+    );
+
+    // `has`: the m91 positive selector filter — the ancestor keeps
+    // itself (the group whose subtree holds a button answers; the
+    // `All` chain answers the buttons, the m91 record's distinction).
+    assert_eq!(
+        rendered(&repl.step("count role Group has role Button").await),
+        vec!["1 match (Group has Button)"],
+    );
+
+    // `has_not`: the m34 inverted filter — the buttons that hold no
+    // text "Confirm" (Save, Cancel, Invisible), and the leaf rule: a
+    // button's subtree is itself, so `has_not role Button` excludes
+    // every button (the m34 leaf pin at the prompt).
+    assert_eq!(
+        rendered(&repl.step("count role Button has_not text Confirm").await),
+        vec!["3 matches (Button has_not text \"Confirm\")"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button has_not role Button").await),
+        vec!["0 matches (Button has_not Button)"],
+    );
+
+    // The nth forms: document order (Save, Cancel, Invisible, Confirm),
+    // 0-based `nth N` (the resolver's pick — `ordered.nth(i)`).
+    assert_eq!(
+        rendered(&repl.step("count role Button first").await),
+        vec!["1 match (Button first)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button last").await),
+        vec!["1 match (Button last)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button nth 1").await),
+        vec!["1 match (Button nth 1)"],
+    );
+
+    // The fold composes in order — the `has_text` probe first, the nth
+    // pick after (the kit's `.has_text(..).first()` composition order).
+    let out = rendered(&repl.step("all role Button has_text Save first").await);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(
+        out[0].starts_with("Button \"Save\" (generation 0)"),
+        "{out:?}"
+    );
+
+    // The strict `get` rides the grammar: the filtered resolve stores
+    // the current node and the action vocabulary aims it — the full
+    // click-what-you-see loop speaks filters.
+    let get = repl.step("get role Button has_text Save").await;
+    assert!(
+        ok_line(&get).starts_with("resolved Button has_text \"Save\" (generation 0)"),
+        "{get:?}"
+    );
+    let click = repl.step("click").await;
+    // The action row renders the stored describe — the composed form the
+    // filtered get resolved (what you aimed with is what it prints).
+    assert!(
+        ok_line(&click).starts_with(r#"Button has_text "Save": clicked (frame "#),
+        "{click:?}"
+    );
+
+    // The assertion rows ride the same grammar (the m61 family): the
+    // count assert's locator resolves through the filter words.
+    assert_eq!(
+        rendered(
+            &repl
+                .step("assert count role Button has_text Save is 1")
+                .await
+        ),
+        vec!["assert count — found 1 (Button has_text \"Save\")"],
+    );
+
+    // Error honesty: every filter word demands its argument, a reserved
+    // word alone is not a locator, and a non-numeric index names the
+    // usage (the grammar's own words, not the base locator's).
+    assert_eq!(
+        rendered(&repl.step("count role Button has_text").await),
+        vec!["error: `has_text` needs text — e.g. `count role Button has_text Save`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button nth").await),
+        vec!["error: `nth` needs a 0-based index — e.g. `count role Button nth 1`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button nth soon").await),
+        vec!["error: not an index value: soon"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button has").await),
+        vec!["error: `has` needs a locator — e.g. `count role Group has role Button`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button has_not").await),
+        vec!["error: `has_not` needs a locator — e.g. `count role Button has_not text Confirm`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count first").await),
+        vec!["error: needs a locator — role | text | label | testid | value"],
+    );
+
+    // Discoverability: the help carries the filter words (one row).
+    let help = rendered(&repl.step("help").await).join("\n");
+    assert!(
+        help.contains("has_text"),
+        "the help lists the filter vocabulary: {help}"
+    );
 
     handle.shutdown();
 }
