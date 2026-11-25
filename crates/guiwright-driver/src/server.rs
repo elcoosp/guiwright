@@ -973,7 +973,7 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Clock(cmd) => clock_response(session, cmd),
         RequestV1::Mock(cmd) => mock_response(session, cmd),
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
-        RequestV1::Video(cmd) => video_response(session, cmd),
+        RequestV1::Video(cmd) => video_response(session, cmd, window),
         RequestV1::Window(cmd) => window_response(session, cmd),
         RequestV1::Screenshot(cmd) => screenshot_response(session, cmd, window),
         RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd, window),
@@ -1496,12 +1496,27 @@ fn window_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: WindowV1)
 /// video service — frames ride the pump loop (§15.4), dedup + encoding
 /// happen off the session thread. The client owns the artifact dir
 /// (Playwright parity): `VideoOptsV1.dir` overrides the driver default.
-fn video_response<A: FrameworkAdapter>(session: &mut Session<A>, cmd: VideoV1) -> ResponseV1 {
+/// The connection's active window target scopes the recording (the m6
+/// §5/m7 §4 deferred half — "window-tagged streams ride the same handle
+/// vocabulary"): a scoped connection's stream is that window's crop, an
+/// unscoped one keeps the byte-compat whole-frame shape — no new wire
+/// shape, the same ride every scope-narrowed read takes.
+fn video_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    cmd: VideoV1,
+    window: Option<&str>,
+) -> ResponseV1 {
     match cmd {
         VideoV1::Start(opts) => {
             let result = match opts.dir.as_deref() {
-                Some(dir) => session.video_start_in(std::path::Path::new(dir), opts.fps),
-                None => session.video_start(opts.fps),
+                Some(dir) => {
+                    session.video_start_scoped(std::path::Path::new(dir), opts.fps, window)
+                }
+                None => {
+                    let dir = std::env::var_os("GUIWRIGHT_VIDEO_DIR")
+                        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+                    session.video_start_scoped(&dir, opts.fps, window)
+                }
             };
             match result {
                 Ok(()) => ResponseV1::Pong,
