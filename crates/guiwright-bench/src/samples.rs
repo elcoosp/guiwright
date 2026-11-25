@@ -215,6 +215,7 @@ pub fn trace_write_amplification() -> Duration {
             framework: "fixture".into(),
             framework_version: "0".into(),
         },
+        window: None,
         seed: None,
         resolution: (1280, 800),
         scale: 1.0,
@@ -344,6 +345,7 @@ pub fn viewer_timeline_replay() -> Duration {
             framework: "fixture".into(),
             framework_version: "0".into(),
         },
+        window: None,
         seed: None,
         resolution: (1280, 800),
         scale: 1.0,
@@ -410,6 +412,7 @@ pub fn overlay_replay_plan() -> Duration {
             framework: "fixture".into(),
             framework_version: "0".into(),
         },
+        window: None,
         seed: None,
         resolution: (1280, 800),
         scale: 1.0,
@@ -800,6 +803,42 @@ pub fn video_frame_dedup() -> Duration {
     let measured = started.elapsed() / u32::try_from(FRAMES).expect("frames fit u32");
 
     recorder.stop().expect("bench recording finalized");
+    let _ = std::fs::remove_dir_all(&dir);
+    measured.max(Duration::from_nanos(1))
+}
+
+/// §15.7 micro-suite guard (per-window recording, the m6 §5/m7 §4 deferred
+/// half): one pump's window-scoped capture hop on the 1280×800 bench
+/// frame — the presented frame's crop to the window subtree's bounds (the
+/// §10 element-crop rule at window width, re-resolved per pump), the
+/// crop's own strided digest (the adapter's whole-frame stamp cannot
+/// vouch for a sub-rect) and the recorder push. The session-side cost of
+/// a window-scoped recording; encoding stays on the writer thread (§15.4).
+pub fn window_scoped_video_push() -> Duration {
+    const PUMPS: u32 = 64;
+    use guiwright_core::test_util::MultiWindowFixture;
+    use guiwright_driver::Session;
+    use guiwright_driver::mock::MockAdapter;
+    use std::time::Instant;
+
+    let fx = MultiWindowFixture::default();
+    let frame = vec![9u8; 1280 * 800 * 4];
+    let mut session =
+        Session::new(MockAdapter::with_multi_window(&fx).with_frame_pixels(1280, 800, frame));
+    session.settle(Instant::now() + Duration::from_secs(2));
+    let dir = std::env::temp_dir().join(format!("gw-bench-window-video-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    session
+        .video_start_in_window(&dir, 25, &fx.w1.0.to_string())
+        .expect("scoped recording starts");
+
+    let started = Instant::now();
+    for _ in 0..PUMPS {
+        session.pump();
+    }
+    let measured = started.elapsed() / PUMPS;
+
+    session.video_stop().expect("bench recording finalized");
     let _ = std::fs::remove_dir_all(&dir);
     measured.max(Duration::from_nanos(1))
 }
