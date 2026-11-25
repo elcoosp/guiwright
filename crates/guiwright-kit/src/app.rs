@@ -1044,11 +1044,17 @@ impl<A: FrameworkAdapter> App<A> {
     /// Enable tracing with an explicit archive path (the env-driven path
     /// is `GW_TRACE=1`; tests pin the path for determinism, §12).
     pub fn enable_trace(&mut self, path: impl Into<PathBuf>) {
+        self.start_trace(path, None);
+    }
+
+    /// The shared trace start (the window handle's scoped surface rides
+    /// it with the tag set, the m6 §5/m7 §4 deferred half).
+    pub(crate) fn start_trace(&mut self, path: impl Into<PathBuf>, window: Option<String>) {
         if self.trace.is_some() {
             return;
         }
         let path = path.into();
-        let options = TraceOptions::new(
+        let mut options = TraceOptions::new(
             path.clone(),
             &self.context.test_name,
             AdapterRecord {
@@ -1057,6 +1063,9 @@ impl<A: FrameworkAdapter> App<A> {
                 framework_version: self.session.adapter().meta().framework_version.clone(),
             },
         );
+        if let Some(handle) = window {
+            options = options.with_window(handle);
+        }
         self.trace = Some(TraceRecorder::start(options));
     }
 
@@ -1261,7 +1270,7 @@ impl<A: FrameworkAdapter> App<A> {
     /// the two calls (hash-equality dedup collapses static spans) and
     /// finalizes a `.webm` (ffmpeg) or PNG frame folder on stop.
     pub fn video(&mut self) -> VideoHandle<'_, A> {
-        VideoHandle { app: self }
+        VideoHandle::scoped(self, None)
     }
 
     /// The raw input surface (§9): `app.mouse().click(x, y)`,
@@ -1801,9 +1810,14 @@ impl<A: FrameworkAdapter> MockHandle<'_, A> {
     }
 }
 
-/// `app.video()` — the §10 video surface (M3).
+/// `app.video()` — the §10 video surface (M3). Born from a window
+/// handle (`app.window(h)?.video()`), the recording rides that window's
+/// scope: every presented frame crops to the window subtree's bounds and
+/// a change outside the scope sheds its frames (the m6 §5/m7 §4 deferred
+/// half). `App::video()` stays the whole-session surface.
 pub struct VideoHandle<'a, A: FrameworkAdapter> {
     app: &'a mut App<A>,
+    window: Option<String>,
 }
 
 impl<A: FrameworkAdapter> std::fmt::Debug for VideoHandle<'_, A> {
@@ -1813,22 +1827,49 @@ impl<A: FrameworkAdapter> std::fmt::Debug for VideoHandle<'_, A> {
 }
 
 impl<A: FrameworkAdapter> VideoHandle<'_, A> {
+    /// The constructor surface (the window handle's scoped half rides it;
+    /// fields stay private to the kit).
+    pub(crate) fn scoped(app: &'_ mut App<A>, window: Option<String>) -> VideoHandle<'_, A> {
+        VideoHandle { app, window }
+    }
+
     /// `video.start_in(dir, fps)` — record presented frames into `dir`
     /// (the client/test owns the artifact dir, Playwright parity). The
     /// adapter must expose a pixel path (§6.2); `fps = 0` selects the
-    /// driver default (25).
+    /// driver default (25). A window-scoped handle records that window's
+    /// stream: the scope is validated at start (a dead handle is the
+    /// typed `UnknownWindow`, never a mid-stream failure).
     pub fn start_in(&mut self, dir: &std::path::Path, fps: u32) -> Result<(), KitError> {
-        self.app.session.video_start_in(dir, fps)?;
         self.app
-            .record_event("video", format!("start(dir={}, fps={fps})", dir.display()));
+            .session
+            .video_start_scoped(dir, fps, self.window.as_deref())?;
+        let scope = self
+            .window
+            .as_ref()
+            .map(|handle| format!(" @ window {handle}"))
+            .unwrap_or_default();
+        self.app.record_event(
+            "video",
+            format!("start(dir={}, fps={fps}){scope}", dir.display()),
+        );
         Ok(())
     }
 
     /// `video.start(fps)` — record into the OS temp dir (the stop reply
-    /// carries the finalized path).
+    /// carries the finalized path). The window scope rides, same as
+    /// [`Self::start_in`].
     pub fn start(&mut self, fps: u32) -> Result<(), KitError> {
-        self.app.session.video_start(fps)?;
-        self.app.record_event("video", format!("start(fps={fps})"));
+        match self.window.as_deref() {
+            None => self.app.session.video_start(fps)?,
+            Some(handle) => self.app.session.video_start_window(fps, handle)?,
+        }
+        let scope = self
+            .window
+            .as_ref()
+            .map(|handle| format!(" @ window {handle}"))
+            .unwrap_or_default();
+        self.app
+            .record_event("video", format!("start(fps={fps}){scope}"));
         Ok(())
     }
 
