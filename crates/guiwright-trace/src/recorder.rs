@@ -39,6 +39,10 @@ pub struct TraceOptions {
     pub test: String,
     pub app: String,
     pub adapter: AdapterRecord,
+    /// The window the stream records (the m6 §5/m7 §4 deferred half —
+    /// "window-tagged streams ride the same handle vocabulary"):
+    /// `None` = the whole session (the pre-tag shape).
+    pub window: Option<String>,
     pub seed: Option<u64>,
     pub resolution: (u32, u32),
     pub scale: f32,
@@ -53,12 +57,21 @@ impl TraceOptions {
             test: test.to_string(),
             app: String::new(),
             adapter,
+            window: None,
             seed: None,
             resolution: (1280, 800),
             scale: 1.0,
             frame_budget_bytes: DEFAULT_FRAME_BUDGET_BYTES,
             ring_capacity: DEFAULT_RING_CAPACITY,
         }
+    }
+
+    /// Tag the stream with one window target (the embedded half rides
+    /// `App::window(handle).enable_trace`): the archive's `meta.json`
+    /// names the window, so the artifact carries its own provenance.
+    pub fn with_window(mut self, handle: impl Into<String>) -> Self {
+        self.window = Some(handle.into());
+        self
     }
 }
 
@@ -420,6 +433,7 @@ impl Writer {
             test: self.options.test.clone(),
             app: self.options.app.clone(),
             adapter: self.options.adapter.clone(),
+            window: self.options.window.clone(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             seed: self.options.seed,
