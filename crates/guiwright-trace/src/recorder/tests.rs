@@ -17,6 +17,7 @@ fn options(path: std::path::PathBuf) -> TraceOptions {
             framework: "egui".into(),
             framework_version: "0.37.0".into(),
         },
+        window: None,
         seed: Some(7),
         resolution: (320, 200),
         scale: 2.0,
@@ -244,4 +245,70 @@ fn sink_logs_from_another_thread() {
     handle.join().expect("producer thread");
     let file = rec.stop().expect("stop");
     assert_eq!(file.stats.log_lines, 1);
+}
+
+/// The window tag (the m6 §5/m7 §4 deferred half): a scoped recorder
+/// stamps the archive's `meta.json` with the window handle it recorded —
+/// the artifact names the stream, the viewer renders the provenance.
+#[test]
+fn a_scoped_recorder_names_its_window_in_the_meta() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("scoped.zip");
+    let options = options(path).with_window("a6000000-0000-0000-0000-000000000001");
+    let rec = TraceRecorder::start(options);
+    let file = rec.stop().expect("stop");
+
+    let bytes = std::fs::read(&file.path).expect("zip");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let meta: serde_json::Value =
+        serde_json::from_slice(&member_bytes(&mut archive, "meta.json")).expect("meta json");
+    assert_eq!(
+        meta.get("window").and_then(|w| w.as_str()),
+        Some("a6000000-0000-0000-0000-000000000001"),
+        "the archive names the window it recorded: {meta}"
+    );
+}
+
+/// An untagged recorder keeps the pre-tag metadata shape: no `window`
+/// key in the meta at all (skipped when absent), so older readers see
+/// byte-identical metadata.
+#[test]
+fn an_untagged_recorder_has_no_window_key() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let path = dir.path().join("untagged.zip");
+    let rec = TraceRecorder::start(options(path));
+    let file = rec.stop().expect("stop");
+
+    let bytes = std::fs::read(&file.path).expect("zip");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let meta: serde_json::Value =
+        serde_json::from_slice(&member_bytes(&mut archive, "meta.json")).expect("meta json");
+    assert!(
+        meta.get("window").is_none(),
+        "an untagged archive carries no window key: {meta}"
+    );
+}
+
+/// The meta is forward-compatible: an archive written before the tag
+/// (no `window` field) still deserializes — `serde(default)` keeps the
+/// old bytes readable, the §12 "versioned & forward-compatible" rule.
+#[test]
+fn a_pre_tag_meta_still_deserializes() {
+    let meta: crate::schema::TraceMeta = serde_json::from_str(
+        r#"{
+            "schema": "gwtrace/v1",
+            "test": "login_flow",
+            "app": "demo-app",
+            "adapter": { "name": "egui", "framework": "egui", "framework_version": "0.37.0" },
+            "os": "linux",
+            "arch": "x86_64",
+            "resolution": [1280, 800],
+            "scale": 1.0,
+            "frame_codec": "png",
+            "frames_evicted": 0,
+            "records_dropped": 0
+        }"#,
+    )
+    .expect("the pre-tag meta parses");
+    assert_eq!(meta.window, None, "the absent tag reads as unscoped");
 }
