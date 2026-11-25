@@ -368,6 +368,28 @@ impl TreeService {
         walk_descendants(node, visit);
     }
 
+    /// The subtree's bounds union (the §10 crop rule's geometry read):
+    /// `None` when no node in the subtree carries bounds — a subtree of
+    /// pure geometry-less rows has no rect to crop a frame by, and the
+    /// caller answers honestly (the counted skip) instead of guessing.
+    pub fn subtree_bounds(&self, root: &NodeKey) -> Option<accesskit::Rect> {
+        let mut acc = self.node(root).and_then(|node| node.bounding_box());
+        self.descendants(root, &mut |_key, node| {
+            if let Some(bounds) = node.bounding_box() {
+                acc = Some(match acc {
+                    Some(current) => accesskit::Rect {
+                        x0: current.x0.min(bounds.x0),
+                        y0: current.y0.min(bounds.y0),
+                        x1: current.x1.max(bounds.x1),
+                        y1: current.y1.max(bounds.y1),
+                    },
+                    None => bounds,
+                });
+            }
+        });
+        acc
+    }
+
     // ------------------------------------------------------------------
     // Windows (§16 v0.4 multi-window, M6)
 
