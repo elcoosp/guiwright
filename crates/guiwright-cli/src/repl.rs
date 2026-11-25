@@ -1536,7 +1536,15 @@ impl Repl {
                 let dir = tokens.get(3).cloned();
                 self.request(RequestV1::Video(VideoV1::Start(VideoOptsV1 { fps, dir })))
                     .await?;
-                Ok(vec![Line::Ok("video: recording started".into())])
+                // The connection's window scope scopes the recording (the
+                // m6 §5/m7 §4 deferred half at the prompt): name the stream
+                // the way the start pins it — a scoped connection records
+                // that window's crop, an unscoped one the whole session.
+                let render = match &self.window {
+                    Some((handle, _)) => format!("video: recording started (window {handle})"),
+                    None => "video: recording started".into(),
+                };
+                Ok(vec![Line::Ok(render)])
             }
             Some("stop") => match self.request(RequestV1::Video(VideoV1::Stop)).await? {
                 ResponseV1::VideoFile {
