@@ -293,6 +293,47 @@ async fn repl_video_domain() {
     handle.shutdown();
 }
 
+/// The connection's window scope scopes the recording (the m6 §5/m7 §4
+/// deferred half at the prompt): `window use <handle>` then `video start`
+/// pins the recording to that window's subtree, and the start row names
+/// the stream it will record. The multi-window fixture supplies a second
+/// target so the scope is real.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_video_start_names_its_window_scope() {
+    let fx = MultiWindowFixture::new();
+    let scripted = fx.clone();
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let path = socket_path("repl-video-scoped.sock");
+    let handle = spawn_session_server(path.clone(), move || {
+        MockAdapter::with_multi_window(&scripted).with_frame_pixels(24, 12, vec![64; 24 * 12 * 4])
+    })
+    .expect("server binds");
+
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    let w1_handle = fx.w1.0.to_string();
+    let out = rendered(&repl.step(&format!("window use {w1_handle}")).await);
+    assert_eq!(out, vec![format!("now targeting {w1_handle} (Editor)")]);
+
+    let out = rendered(
+        &repl
+            .step(&format!("video start 25 {}", dir.path().display()))
+            .await,
+    );
+    assert_eq!(
+        out,
+        vec![format!("video: recording started (window {w1_handle})")],
+        "the scoped start names the stream it will record: {out:?}"
+    );
+
+    let stop = repl.step("video stop").await;
+    assert!(ok_line(&stop).starts_with("video: "), "{}", ok_line(&stop));
+
+    handle.shutdown();
+}
+
 /// The §7 render domain through the REPL (M10): `screenshot [path]` pulls
 /// the window PNG onto the client's filesystem — the client owns the
 /// artifact path (Playwright parity), the summary line carries the
