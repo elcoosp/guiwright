@@ -38,6 +38,12 @@ pub struct TraceMeta {
     /// Adapter metadata ([`AdapterRecord`]: name, framework, version,
     /// caps) — §18 "`AdapterMeta` reports versions in traces".
     pub adapter: AdapterRecord,
+    /// The window the stream records (the m6 §5/m7 §4 deferred half):
+    /// absent for a whole-session trace. `serde(default)` keeps the
+    /// pre-tag archives readable (§12 "versioned & forward-compatible");
+    /// skipped when absent, so untagged metadata stays byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
     pub os: String,
     pub arch: String,
     pub seed: Option<u64>,
@@ -209,6 +215,7 @@ mod tests {
     #[test]
     fn meta_json_roundtrip() {
         let meta = TraceMeta {
+            window: None,
             schema: SCHEMA.into(),
             test: "login_flow".into(),
             app: "demo".into(),
