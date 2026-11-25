@@ -25,7 +25,3 @@ target/guiwright/
 ship.toml
 .github/pr-body.md
 docs/launch.md
-
-# ship delivery artifacts (AI constraint)
-ship.toml
-.github/pr-body.md
