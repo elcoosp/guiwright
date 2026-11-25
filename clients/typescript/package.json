@@ -24,7 +24,8 @@
     "example:identity-state": "node examples/describe_identity_state.ts",
     "example:identity-state-all": "node examples/describe_identity_state_all.ts",
     "example:state-assertions": "node examples/state_assertions.ts",
-    "example:appended-actions": "node examples/appended_actions.ts"
+    "example:appended-actions": "node examples/appended_actions.ts",
+    "example:filter": "node examples/filter.ts"
   },
   "keywords": [
     "guiwright",
