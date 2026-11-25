@@ -116,6 +116,7 @@ mod tests {
             output_path: path,
             test: "log_test".into(),
             app: "app".into(),
+            window: None,
             adapter: crate::schema::AdapterRecord {
                 name: "mock".into(),
                 framework: "fixture".into(),
