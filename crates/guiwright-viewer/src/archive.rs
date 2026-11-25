@@ -217,14 +217,6 @@ impl TraceArchive {
     pub fn frame_png(&self, seq: u64) -> Option<&[u8]> {
         self.frames.get(&seq).map(Vec::as_slice)
     }
-
-    /// The last presented frame's payload (the scrubber's end state).
-    pub fn last_frame_png(&self) -> Option<(u64, &[u8])> {
-        self.frames
-            .iter()
-            .next_back()
-            .map(|(seq, png)| (*seq, png.as_slice()))
-    }
 }
 
 fn read_string(
