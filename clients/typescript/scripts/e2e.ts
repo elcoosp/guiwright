@@ -910,7 +910,7 @@ const [selHost, selPort] = selectDemo.addr.split(":");
 await waitForTcp({ host: selHost, port: Number(selPort) });
 
 try {
-  const selectClient = await GwpClient.connectTcp(`127.0.0.1:${selectDemo.addr}`);
+  const selectClient = await GwpClient.connectTcp(selectDemo.addr);
   const selectWelcome = await selectClient.handshake("ts-e2e-m89/0.1");
   assert.equal(selectWelcome.adapter.name, "mock");
 
