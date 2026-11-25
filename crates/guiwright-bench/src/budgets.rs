@@ -89,6 +89,10 @@ const SAMPLES: &[(&str, SampleFn)] = &[
     ),
     ("resolve_remote_tcp", crate::samples::resolve_remote_tcp),
     ("video_frame_dedup", crate::samples::video_frame_dedup),
+    (
+        "window_scoped_video_push",
+        crate::samples::window_scoped_video_push,
+    ),
     ("gesture_synthesis", crate::samples::gesture_synthesis),
     ("kit_input_click", crate::samples::kit_input_click),
     ("inspect_overlay_plan", crate::samples::inspect_overlay_plan),
