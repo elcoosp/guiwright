@@ -341,6 +341,12 @@ pub struct Session<A: FrameworkAdapter> {
     /// Video recording service (§10, M3): present-frame capture riding
     /// the pump loop. `None` = not recording.
     video: Option<VideoRecorder>,
+    /// The window scope the recording was started under (the m6 §5/m7 §4
+    /// deferred half — "window-tagged streams ride the same handle
+    /// vocabulary"): the scope root the presented frames crop to.
+    /// `None` = the whole-session whole-frame shape (the pre-scope
+    /// byte-compat behavior, and `main`, which is the whole tree).
+    video_scope: Option<NodeKey>,
     /// The §15.6 shared-frame ring publisher: every presented frame is
     /// offered to the ring so a same-host client reads pixels outside the
     /// door. `None` = not publishing (the default).
@@ -372,6 +378,7 @@ impl<A: FrameworkAdapter> Session<A> {
             seam_overrides: BTreeMap::new(),
             reset_seam: "reset_state".into(),
             video: None,
+            video_scope: None,
             frame_ring: None,
             codegen: None,
             overlay_active: false,
@@ -444,18 +451,51 @@ impl<A: FrameworkAdapter> Session<A> {
         // Video capture (§10, M3): every presented frame is offered to the
         // recorder — hash-equality dedup drops static spans, the ring is
         // bounded, and encoding happens on the writer thread (§15.4: the
-        // UI thread only hands over an `Arc` clone).
+        // UI thread only hands over an `Arc` clone). A window-scoped
+        // recording (m6 §5/m7 §4) crops each frame to the window subtree's
+        // bounds first: the stream is that window's, the adapter's
+        // whole-frame stamp digest cannot vouch for a sub-rect, so the
+        // dedup digest is the crop's own (§10's strided-sample rule applied
+        // to the crop), and a scope with no bounds answers the counted
+        // skip — never a guessed rect.
         if self.video.is_some() {
             for stamp in &outcome.frames {
                 let frame = self.adapter.last_frame();
                 if let (Some(rec), Some(frame)) = (self.video.as_mut(), frame) {
-                    rec.push_frame(
-                        stamp.seq,
-                        stamp.hash,
-                        frame.size.0,
-                        frame.size.1,
-                        frame.pixels.as_ref(),
-                    );
+                    match (&self.video_scope, &self.tree) {
+                        (Some(root), tree) => match tree.subtree_bounds(root) {
+                            Some(rect) => {
+                                if let Some((width, height, cropped, digest)) =
+                                    crop_to_rect(&frame, rect)
+                                {
+                                    rec.push_frame(
+                                        stamp.seq,
+                                        digest,
+                                        width,
+                                        height,
+                                        Some(&cropped),
+                                    );
+                                } else {
+                                    // Empty/degenerate crop: a counted skip,
+                                    // the honest shape the recorder already
+                                    // speaks for pixel-less frames.
+                                    rec.push_frame(stamp.seq, stamp.hash, 0, 0, None);
+                                }
+                            }
+                            None => {
+                                rec.push_frame(stamp.seq, stamp.hash, 0, 0, None);
+                            }
+                        },
+                        (None, _) => {
+                            rec.push_frame(
+                                stamp.seq,
+                                stamp.hash,
+                                frame.size.0,
+                                frame.size.1,
+                                frame.pixels.as_ref(),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -494,6 +534,41 @@ impl<A: FrameworkAdapter> Session<A> {
     /// `render_frame`); refuses when a recording is already running.
     /// `fps = 0` selects the driver default (25).
     pub fn video_start_in(&mut self, dir: &Path, fps: u32) -> Result<(), CoreError> {
+        self.video_start_scoped(dir, fps, None)
+    }
+
+    /// Start recording **one window's stream** (the m6 §5/m7 §4 deferred
+    /// half — "the trace/video services record the session;
+    /// window-tagged streams ride the same handle vocabulary in a
+    /// follow-up"): the handle is validated against the tree's live
+    /// targets before the recorder exists (an unknown handle is the typed
+    /// [`CoreError::UnknownWindow`], never a mid-stream failure), and
+    /// every presented frame is cropped to that window's subtree bounds
+    /// (§10's element-crop rule at window width — the same
+    /// clip-by-resolved-rect contract, re-resolved per frame so a moving
+    /// or resizing window stays honest). A frame whose scope carries no
+    /// bounds is a counted skip. `main` is the whole tree: the recording
+    /// keeps the byte-compat whole-frame shape.
+    pub fn video_start_in_window(
+        &mut self,
+        dir: &Path,
+        fps: u32,
+        window: &str,
+    ) -> Result<(), CoreError> {
+        self.video_start_scoped(dir, fps, Some(window))
+    }
+
+    /// The shared start (the wire's ride and the kit's scoped handle both
+    /// land here): `window = Some(handle)` validates the handle against the
+    /// tree's live targets and pins the scope root the pump's capture loop
+    /// crops to — an empty handle is the unscoped whole-frame shape — while
+    /// `None` records the session whole-frame (the byte-compat default).
+    pub fn video_start_scoped(
+        &mut self,
+        dir: &Path,
+        fps: u32,
+        window: Option<&str>,
+    ) -> Result<(), CoreError> {
         let caps = self.adapter.meta().caps;
         if !caps.last_frame && !caps.render_frame {
             return Err(CoreError::Unsupported(
@@ -505,6 +580,15 @@ impl<A: FrameworkAdapter> Session<A> {
                 "a video recording is already running".into(),
             ));
         }
+        let scope = match window {
+            None | Some("") => None,
+            Some(handle) => {
+                // The tree is the source of truth (§16 v0.4): validation
+                // happens here, at start — `main` answers the whole tree
+                // (no crop), a grafted handle answers its subtree root.
+                self.window_scope(handle)?
+            }
+        };
         let path = dir.join(format!(
             "guiwright-video-{}-{}.webm",
             std::process::id(),
@@ -513,6 +597,7 @@ impl<A: FrameworkAdapter> Session<A> {
         let recorder = VideoRecorder::start(path, &VideoOptions::new(fps))
             .map_err(|e| CoreError::Other(format!("video start: {e}")))?;
         self.video = Some(recorder);
+        self.video_scope = scope;
         Ok(())
     }
 
@@ -520,9 +605,23 @@ impl<A: FrameworkAdapter> Session<A> {
     /// or the OS temp dir) — the remote-mode default, since the client
     /// learns the finalized path from the `VideoFile` reply (§7).
     pub fn video_start(&mut self, fps: u32) -> Result<(), CoreError> {
-        let dir =
-            std::env::var_os("GUIWRIGHT_VIDEO_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+        let dir = Self::default_video_dir();
         self.video_start_in(&dir, fps)
+    }
+
+    /// Start recording **one window's stream** into the default directory:
+    /// the kit's `app.window(h).video().start(fps)` surface — the same
+    /// scope contract [`Self::video_start_in_window`] pins, with the
+    /// remote-mode default dir.
+    pub fn video_start_window(&mut self, fps: u32, window: &str) -> Result<(), CoreError> {
+        let dir = Self::default_video_dir();
+        self.video_start_in_window(&dir, fps, window)
+    }
+
+    /// The artifact dir for default-dir starts (`GUIWRIGHT_VIDEO_DIR` or
+    /// the OS temp dir).
+    fn default_video_dir() -> PathBuf {
+        std::env::var_os("GUIWRIGHT_VIDEO_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
     }
 
     /// Stop and finalize the recording; one final pump lands the last
@@ -534,6 +633,7 @@ impl<A: FrameworkAdapter> Session<A> {
         }
         self.pump();
         let recorder = self.video.take().expect("checked above");
+        self.video_scope = None;
         recorder
             .stop()
             .map_err(|e| CoreError::Other(format!("video stop: {e}")))
@@ -2179,6 +2279,69 @@ impl<A: FrameworkAdapter> ExpectBuilder<'_, A> {
         self.session.clear_resolve_scope();
         result
     }
+}
+
+/// Crop a presented frame to a window subtree's bounds rect (the §10
+/// element-crop rule at window width): the rect clamps to the frame, an
+/// empty/degenerate intersection answers `None` (the caller's counted
+/// skip), and the crop is its own `Arc` so the writer thread owns the
+/// bytes the moment the session hands them over (§15.4). Returns the
+/// crop's `(width, height, rgba, digest)` — the digest is the crop's own
+/// §10 strided-sample hash (FNV-1a 64 over every 8th row's first 64
+/// bytes per row), because the adapter's whole-frame stamp cannot vouch
+/// for a sub-rect.
+fn crop_to_rect(
+    frame: &crate::adapter::FrameRef,
+    rect: accesskit::Rect,
+) -> Option<(u32, u32, std::sync::Arc<[u8]>, u64)> {
+    let (width, height) = frame.size;
+    let clamp = |v: f64, max: u32| -> u32 {
+        let rounded = v.round().clamp(0.0, f64::from(max)) as i64;
+        u32::try_from(rounded).unwrap_or(max)
+    };
+    let x0 = clamp(rect.x0, width);
+    let y0 = clamp(rect.y0, height);
+    let x1 = clamp(rect.x1, width);
+    let y1 = clamp(rect.y1, height);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let pixels = frame.pixels.as_ref()?;
+    let stride = usize::try_from(width).ok()? * 4;
+    let crop_w = usize::try_from(x1 - x0).ok()?;
+    let crop_h = usize::try_from(y1 - y0).ok()?;
+    let mut out = Vec::with_capacity(crop_w * crop_h * 4);
+    for y in y0..y1 {
+        let row = usize::try_from(y).ok()? * stride + usize::try_from(x0).ok()? * 4;
+        let end = row + crop_w * 4;
+        out.extend_from_slice(&pixels[row..end]);
+    }
+    let digest = strided_digest(&out, crop_w);
+    Some((
+        u32::try_from(crop_w).ok()?,
+        u32::try_from(crop_h).ok()?,
+        std::sync::Arc::from(out.into_boxed_slice()),
+        digest,
+    ))
+}
+
+/// The §10 strided-sample digest for crops (FNV-1a 64): samples every
+/// 8th row of the crop, 64 bytes per row — cheap enough for the per-frame
+/// hot path, discriminating enough that any change inside the window's
+/// rect moves the digest (the property the crop dedup leans on).
+fn strided_digest(rgba: &[u8], crop_width: usize) -> u64 {
+    let stride = crop_width * 4;
+    let row_bytes = 64.min(stride);
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut row = 0usize;
+    while row * stride < rgba.len() {
+        for byte in &rgba[row * stride..row * stride + row_bytes] {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        row += 8;
+    }
+    hash
 }
 
 #[cfg(test)]
