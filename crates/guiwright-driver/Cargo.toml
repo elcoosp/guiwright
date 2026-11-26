@@ -32,6 +32,9 @@ serde_json.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "time", "test-util"] }
 tempfile.workspace = true
+# The §12 logs-tee tests read the finalized archive's `logs.ndjson` row
+# back — the same zip crate the recorder writes (the trace/viewer pin).
+zip = { version = "9.4.1", default-features = false, features = ["time"] }
 
 [lints.clippy]
 # The wire-conversation tests and demo examples read as one continuous
