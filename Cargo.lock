@@ -2135,6 +2135,8 @@ dependencies = [
  "iced_renderer",
  "iced_test",
  "iced_widget",
+ "masonry",
+ "masonry_core",
  "postcard",
  "serde",
  "tokio",
@@ -2191,6 +2193,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]
@@ -2222,6 +2225,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "zip",
 ]
 
