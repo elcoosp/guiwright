@@ -37,6 +37,7 @@ import {
   ScreenshotV1,
   SnapshotV1,
   SubscribeV1,
+  TraceV1,
   VideoV1,
   WindowV1,
 } from "../src/schema.ts";
@@ -461,7 +462,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
 
   const requests = schema.requests;
   assert.equal(names(requests), [...Array(requests.length).keys()].join(","));
-  assert.deepEqual(byName(requests).slice(-14), [
+  assert.deepEqual(byName(requests).slice(-15), [
     "Video",
     "Window",
     "Gesture",
@@ -476,6 +477,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "DescribeIdentity",
     "DescribeIdentityState",
     "DescribeAllIdentityState",
+    "Trace",
   ]);
   assert.deepEqual(
     Object.values(RequestV1),
@@ -483,7 +485,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   );
 
   const responses = schema.responses;
-  assert.deepEqual(byName(responses).slice(-15), [
+  assert.deepEqual(byName(responses).slice(-16), [
     "Windows",
     "WindowUsed",
     "GestureDone",
@@ -499,6 +501,7 @@ test("the vendored schema copy matches the compiled variant tables", () => {
     "DescribedIdentity",
     "DescribedIdentityState",
     "DescribedAllIdentityState",
+    "TraceFile",
   ]);
   assert.deepEqual(
     Object.values(ResponseV1),
@@ -517,6 +520,12 @@ test("the vendored schema copy matches the compiled variant tables", () => {
   assert.deepEqual(
     Object.values(VideoV1),
     domains.video.variants.map((v: any) => Number(v.index)),
+  );
+  // The M97 archive-control domain rides the published table too (the
+  // Start/Stop arms the M18 Attach arm completes).
+  assert.deepEqual(
+    Object.values(TraceV1),
+    domains.trace.variants.map((v: any) => Number(v.index)),
   );
   assert.deepEqual(
     Object.values(WindowV1),
