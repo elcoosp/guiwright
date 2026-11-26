@@ -18,6 +18,7 @@
 use guiwright_core::test_util::MultiWindowFixture;
 use guiwright_driver::mock::MockAdapter;
 use guiwright_kit::App;
+use std::io::Read as _;
 
 fn main() {
     let fx = MultiWindowFixture::default();
@@ -34,13 +35,17 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("gw-window-recording-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
 
-    let mut video = app
-        .window(&editor)
-        .expect("Editor is a live target")
-        .video();
-    video
-        .start_in(&dir, 25)
-        .expect("the scoped recording starts");
+    // The handle is a borrow-and-act view (the kit test's pattern): the
+    // start pins the Editor scope at the session (validated at aim
+    // time), the pumps ride `app.session()`, and a re-aimed handle
+    // finalizes — no live borrow spans the pumps.
+    {
+        app.window(&editor)
+            .expect("Editor is a live target")
+            .video()
+            .start_in(&dir, 25)
+            .expect("the scoped recording starts");
+    }
     println!(
         "video start_in({}) — scoped to window {editor} (validated at start)",
         dir.display()
@@ -50,7 +55,12 @@ fn main() {
     // Preview-only change would shed its frames here.
     app.session().pump();
     app.session().pump();
-    let summary = video.stop().expect("the scoped recording finalizes");
+    let summary = app
+        .window(&editor)
+        .expect("the Editor target stays live")
+        .video()
+        .stop()
+        .expect("the scoped recording finalizes");
     println!(
         "video stop → {} (frames {}, dropped {}, {}ms) — the Editor crop",
         summary.path.display(),
@@ -61,10 +71,20 @@ fn main() {
 
     // The same handle aimed at the other window answers with its own
     // stream shape — the scope, not the script, decides what is kept.
-    let mut preview_video = app.window(&preview).expect("Preview").video();
-    preview_video.start_in(&dir, 25).expect("starts");
+    {
+        app.window(&preview)
+            .expect("Preview")
+            .video()
+            .start_in(&dir, 25)
+            .expect("starts");
+    }
     app.session().pump();
-    let preview_summary = preview_video.stop().expect("finalizes");
+    let preview_summary = app
+        .window(&preview)
+        .expect("the Preview target stays live")
+        .video()
+        .stop()
+        .expect("finalizes");
     println!(
         "video stop → {} (frames {}, dropped {}, {}ms) — the Preview crop",
         preview_summary.path.display(),
@@ -90,14 +110,15 @@ fn main() {
     );
 
     // Read the tag back out of the archive's meta.
-    use std::io::Read as _;
-    let archive = zip::ZipArchive::new(std::fs::File::open(&trace_path).expect("zip"))
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&trace_path).expect("zip"))
         .expect("archive opens");
     let mut meta_member = archive
         .by_name("meta.json")
         .expect("the archive carries meta.json");
     let mut meta_bytes = Vec::new();
-    let _ = meta_member.read_to_end(&mut meta_bytes);
+    meta_member
+        .read_to_end(&mut meta_bytes)
+        .expect("the meta reads");
     let meta: serde_json::Value = serde_json::from_slice(&meta_bytes).expect("meta json parses");
     println!("meta.json window = {:?}", meta.get("window"));
 
