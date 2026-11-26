@@ -657,13 +657,13 @@ fn run_session_thread<A: FrameworkAdapter>(
     let (tail, _tap_guard) = if let Some(tap) = options.log_tap {
         let tail = preset_tail.expect("start() validated the tap's tail");
         let guard = tracing::subscriber::set_default(
-            tracing_subscriber::registry().with(LogTapLayer::new(tap)),
+            tracing_subscriber::registry().with(LogTapLayer::new(&tap)),
         );
         (Some(tail), Some(guard))
     } else if options.log_tail {
         let (tail, tap) = LogTail::new(LOG_TAIL_CAPACITY);
         let guard = tracing::subscriber::set_default(
-            tracing_subscriber::registry().with(LogTapLayer::new(tap)),
+            tracing_subscriber::registry().with(LogTapLayer::new(&tap)),
         );
         (Some(tail), Some(guard))
     } else {
@@ -868,7 +868,7 @@ fn handle_request<A: FrameworkAdapter>(
         },
         RequestV1::Subscribe(SubscribeV1::Resume { kinds, cursor }) => match events {
             Some((conn_id, tx)) => {
-                subscribe_resume(session, hub, conn_id, tx, kinds, cursor, tail_enabled)
+                subscribe_resume(session, hub, conn_id, &tx, kinds, cursor, tail_enabled)
             }
             None => ResponseV1::Error {
                 code: ErrorCode::Internal,
@@ -917,33 +917,7 @@ fn handle_request<A: FrameworkAdapter>(
             action,
             force,
             timeout_ms,
-        } => {
-            // The m20 record's named event (§5 honest list): the check
-            // vocabulary's state changes ride the subscription instead of
-            // a tree poll — the pre-action fact, the action, the
-            // post-action fact; a real move publishes `StateChange`.
-            let is_check = matches!(action, SemActionV1::Check | SemActionV1::Uncheck);
-            let before = if is_check {
-                checked_fact(session, &node)
-            } else {
-                None
-            };
-            let acted_on = is_check.then(|| node.clone());
-            let response = action_response(session, node, generation, &action, force, timeout_ms);
-            if let (Some(before), Some(acted_on), ResponseV1::ActionDone { .. }) =
-                (before, acted_on, &response)
-            {
-                if let Some(checked) = checked_fact(session, &acted_on) {
-                    if checked != before {
-                        hub.publish(&[GwpEvent::V1(EventV1::StateChange {
-                            node: acted_on,
-                            checked,
-                        })]);
-                    }
-                }
-            }
-            response
-        }
+        } => checked_action_response(session, hub, node, generation, &action, force, timeout_ms),
         RequestV1::Input { events } => {
             // Raw input over the wire (§9, M7): the connection's active
             // window target steers the coordinates (the M6 handoff —
@@ -979,6 +953,42 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd, window),
         RequestV1::Bye => ResponseV1::Bye,
     }
+}
+
+/// The wire `Action` with the m20 record's named event (§5 honest list):
+/// the check vocabulary's state changes ride the subscription instead of
+/// a tree poll — the pre-action fact, the action, the post-action fact; a
+/// real move publishes `StateChange`.
+fn checked_action_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    hub: &mut EventHub,
+    node: NodeKeyV1,
+    generation: u32,
+    action: &SemActionV1,
+    force: bool,
+    timeout_ms: u64,
+) -> ResponseV1 {
+    let is_check = matches!(action, SemActionV1::Check | SemActionV1::Uncheck);
+    let before = if is_check {
+        checked_fact(session, &node)
+    } else {
+        None
+    };
+    let acted_on = is_check.then(|| node.clone());
+    let response = action_response(session, node, generation, action, force, timeout_ms);
+    if let (Some(before), Some(acted_on), ResponseV1::ActionDone { .. }) =
+        (before, acted_on, &response)
+    {
+        if let Some(checked) = checked_fact(session, &acted_on) {
+            if checked != before {
+                hub.publish(&[GwpEvent::V1(EventV1::StateChange {
+                    node: acted_on,
+                    checked,
+                })]);
+            }
+        }
+    }
+    response
 }
 
 /// The connection's window scope as the resolve-scoping guard (§16 v0.4):
@@ -1508,15 +1518,12 @@ fn video_response<A: FrameworkAdapter>(
 ) -> ResponseV1 {
     match cmd {
         VideoV1::Start(opts) => {
-            let result = match opts.dir.as_deref() {
-                Some(dir) => {
-                    session.video_start_scoped(std::path::Path::new(dir), opts.fps, window)
-                }
-                None => {
-                    let dir = std::env::var_os("GUIWRIGHT_VIDEO_DIR")
-                        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
-                    session.video_start_scoped(&dir, opts.fps, window)
-                }
+            let result = if let Some(dir) = opts.dir.as_deref() {
+                session.video_start_scoped(std::path::Path::new(dir), opts.fps, window)
+            } else {
+                let dir = std::env::var_os("GUIWRIGHT_VIDEO_DIR")
+                    .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+                session.video_start_scoped(&dir, opts.fps, window)
             };
             match result {
                 Ok(()) => ResponseV1::Pong,
@@ -1678,7 +1685,7 @@ fn subscribe_resume<A: FrameworkAdapter>(
     session: &mut Session<A>,
     hub: &mut EventHub,
     conn_id: u64,
-    tx: mpsc::Sender<GwpEvent>,
+    tx: &mpsc::Sender<GwpEvent>,
     kinds: Vec<EventKindV1>,
     cursor: ResumeCursorV1,
     tail_enabled: bool,
