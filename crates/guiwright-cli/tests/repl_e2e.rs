@@ -2645,3 +2645,146 @@ async fn repl_chain_rows_in_get_args() {
 
     handle.shutdown();
 }
+
+/// The REPL regex text probes (the m34 record's second standing note,
+/// cashed at the prompt — the m93/m94 honest lists' first item: *"No
+/// regex `TextPattern` … the REPL's `has_text` word speaks the fuzzy
+/// `TextMatch` default only"*). One `/…/` literal — the token form, the
+/// `i` flag folding inline — speaks the appended regex rows through the
+/// shared get-args parse (the m93/m94 one-seam rule): the base words
+/// (`role` name, `text`, `label`, `value`), the `has_text` word, the
+/// `>>` chain segments and the `assert` family. The renders speak the
+/// literal's own words, the errors are typed at parse time (unclosed,
+/// unknown flags, uncompilable — the regex crate's message beside the
+/// usage), and the session survives them all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_regex_text_probes() {
+    let path = socket_path("repl-regex.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The text probe: partial by default, case-sensitive until the `i`
+    // flag rides — the pattern's own words decide.
+    assert_eq!(
+        rendered(&repl.step("count text /Save|Cancel/").await),
+        vec!["2 matches (text /Save|Cancel/)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count text /(?i)^save$/").await),
+        vec!["1 match (text /(?i)^save$/)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count text /^save$/").await),
+        vec!["0 matches (text /^save$/)"],
+        "case-sensitive without the flag — the JS convention the regex family pins"
+    );
+
+    // The base words speak the literal too: the role name, the label and
+    // the value probes.
+    assert_eq!(
+        rendered(&repl.step("count role Button /Save|Cancel/").await),
+        vec!["2 matches (Button /Save|Cancel/)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count label /Welcome.*Ada/").await),
+        vec!["1 match (label /Welcome.*Ada/)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count value /ada@example/").await),
+        vec!["1 match (value /ada@example/)"],
+    );
+
+    // The `has_text` word rides its own appended row (the M64 rule at
+    // selector width), the fuzzy form beside it untouched.
+    assert_eq!(
+        rendered(&repl.step("count role Button has_text /Sav/").await),
+        vec!["1 match (Button has_text /Sav/)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button has_text Save").await),
+        vec!["1 match (Button has_text \"Save\")"],
+    );
+
+    // The chain segments speak the literal (the m94 vocabulary, the
+    // regex probe inside each segment).
+    assert_eq!(
+        rendered(
+            &repl
+                .step("count role Group >> role Button /Save|Cancel/")
+                .await
+        ),
+        vec!["2 matches (Group >> Button /Save|Cancel/)"],
+    );
+
+    // The assertion rows ride the same grammar (the m61 family).
+    assert_eq!(
+        rendered(&repl.step("assert count text /Save|Cancel/ is 2").await),
+        vec!["assert count — found 2 (text /Save|Cancel/)"],
+    );
+
+    // The strict `get` + click loop speaks regex: the composed describe
+    // names what resolved, the action aims it.
+    let get = repl.step("get role Button /(?i)^cancel$/").await;
+    assert!(
+        ok_line(&get).starts_with("resolved Button /(?i)^cancel$/ (generation 0)"),
+        "{get:?}"
+    );
+    let click = repl.step("click").await;
+    assert!(
+        ok_line(&click).starts_with("Button /(?i)^cancel$/: clicked (frame "),
+        "{click:?}"
+    );
+
+    // Strict mode still refuses through the regex probe — the refusal
+    // names the composed render in the core's Playwright words.
+    let ambiguous = repl.step("get text /Save|Cancel/").await;
+    match ambiguous.lines.first() {
+        Some(Line::Err(text)) => {
+            assert!(text.contains("resolved to 2 nodes"), "{text}");
+            assert!(text.contains("getByText(/Save|Cancel/)"), "{text}");
+        }
+        other => panic!("expected the strict refusal, got {other:?}"),
+    }
+
+    // Error honesty at parse time: an unclosed literal, an unknown flag
+    // and an uncompilable pattern all name the usage (and the regex
+    // crate's own message when one exists) — the session survives them.
+    assert_eq!(
+        rendered(&repl.step("count text /unclosed").await),
+        vec![
+            "error: unclosed regex literal `/unclosed` — a regex literal is one token `/pattern/` with optional `i` flag — e.g. `text /save|cancel/i`"
+        ],
+    );
+    let bad_flags = rendered(&repl.step("count text /save/q").await);
+    assert!(
+        bad_flags[0].contains("unknown regex flags `q`"),
+        "{bad_flags:?}"
+    );
+    let bad_pattern = rendered(&repl.step("count text /[bad/").await);
+    assert!(
+        bad_pattern[0].contains("unclosed character class")
+            && bad_pattern[0].contains(REGEX_USAGE_TEXT),
+        "{bad_pattern:?}"
+    );
+    assert_eq!(
+        rendered(&repl.step("ping").await),
+        vec!["pong"],
+        "the session survives the grammar's error paths"
+    );
+
+    // Discoverability: the help carries the regex row (one line).
+    let help = rendered(&repl.step("help").await).join("\n");
+    assert!(
+        help.contains("/pattern/"),
+        "the help lists the regex literal: {help}"
+    );
+
+    handle.shutdown();
+}
+
+const REGEX_USAGE_TEXT: &str = "a regex literal is one token `/pattern/` with optional `i` flag";
