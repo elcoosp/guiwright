@@ -1148,6 +1148,35 @@ export class GwpClient {
     return { path: resp.path, frames: resp.frames, dropped: resp.dropped, duration_ms: resp.duration_ms };
   }
 
+  /** `trace.start(opts)` (§12 archive over the wire, M97) — the session records the gwtrace/v1 archive from its own taps. */
+  async traceStart(
+    opts: { test: string; dir: string | null } = { test: "trace", dir: null },
+  ): Promise<void> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "trace", cmd: { kind: "start", opts } });
+    if (resp.kind !== "pong") throw new Error(`expected Pong, got ${resp.kind}`);
+  }
+
+  /** `trace.stop()` — the finalized archive path plus the §12 recorder stats (M97). */
+  async traceStop(): Promise<{
+    path: string;
+    events: number;
+    frames: number;
+    records_dropped: number;
+    archive_bytes: number;
+  }> {
+    this.assertHandshaked();
+    const resp = await this.request({ kind: "trace", cmd: { kind: "stop" } });
+    if (resp.kind !== "trace_file") throw new Error(`expected TraceFile, got ${resp.kind}`);
+    return {
+      path: resp.path,
+      events: resp.events,
+      frames: resp.frames,
+      records_dropped: resp.records_dropped,
+      archive_bytes: resp.archive_bytes,
+    };
+  }
+
   /** `window.list` — the session's window targets (§16 v0.4, M6). */
   async windowList(): Promise<WindowInfoV1[]> {
     this.assertHandshaked();
