@@ -25,8 +25,8 @@ use guiwright_proto::schema::{
     DescribedIdentityStateV1, DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
     GestureV1, InputEventV1, InspectV1, MockV1, NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1,
     RequestV1, ResolvedMatchV1, ResponseV1, ResumeCursorV1, ScreenshotV1, SelectorV1, SemActionV1,
-    SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1, VideoOptsV1, VideoV1, WindowInfoV1,
-    WindowV1,
+    SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1, TraceOptsV1, TraceV1, VideoOptsV1,
+    VideoV1, WindowInfoV1, WindowV1,
 };
 
 const GOLDEN_PATH: &str = concat!(
@@ -495,6 +495,26 @@ fn describe_all_identity_state_requests() -> Vec<(&'static str, RequestV1)> {
 }
 
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
+/// The trace domain's byte pins (M97, §7 "Domain: trace & inspector" — the
+/// archive-control Start/Stop arms the M18 Attach arm completes): the
+/// client-owned opts row (test label + artifact dir) and the unit stop
+/// row. The TS client builds the same shapes through
+/// `traceStart()`/`traceStop()` — the two clients fail the build together
+/// on drift.
+fn trace_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![
+        (
+            "trace_start",
+            RequestV1::Trace(TraceV1::Start(TraceOptsV1 {
+                test: "e2e_trace".into(),
+                dir: Some("/tmp/gw-trace".into()),
+            })),
+        ),
+        ("trace_stop", RequestV1::Trace(TraceV1::Stop)),
+    ]
+}
+
+/// (name, hex of the **framed** request — 4-byte LE length + postcard body).
 /// The regex text probes' byte pins (the m34 standing note cashed — the
 /// m93/m94 honest lists' first item): the five appended `SelectorV1`
 /// rows, the pattern source riding as the payload. The string arms'
@@ -642,7 +662,8 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(describe_all_identity_requests())
         .chain(describe_identity_requests())
         .chain(describe_identity_state_requests())
-        .chain(describe_all_identity_state_requests());
+        .chain(describe_all_identity_state_requests())
+        .chain(trace_requests());
     requests
         .map(|(name, req)| {
             let frame = encode_frame(&guiwright_proto::GwpRequest::V1(req)).expect("encode");
@@ -1087,6 +1108,31 @@ fn describe_all_identity_state_responses() -> Vec<(&'static str, ResponseV1, ser
     )]
 }
 
+/// The trace domain's reply pin (M97): the finalized-archive carrier —
+/// the path plus the §12 recorder stats the reply names (the event rows,
+/// the hash-deduped frame set, the ring pressure, the zip size). The TS
+/// codec's `trace_file` row mirrors it.
+fn trace_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
+    vec![(
+        "trace_file",
+        ResponseV1::TraceFile {
+            path: "/tmp/gw-trace/guiwright-trace-4242-1764000000.zip".into(),
+            events: 12,
+            frames: 3,
+            records_dropped: 0,
+            archive_bytes: 4096,
+        },
+        serde_json::json!({
+            "kind": "trace_file",
+            "path": "/tmp/gw-trace/guiwright-trace-4242-1764000000.zip",
+            "events": 12,
+            "frames": 3,
+            "records_dropped": 0,
+            "archive_bytes": 4096,
+        }),
+    )]
+}
+
 /// Clock / mock / codegen / error service responses.
 fn service_responses() -> Vec<(&'static str, ResponseV1, serde_json::Value)> {
     vec![
@@ -1298,6 +1344,7 @@ fn response_vectors() -> Vec<(&'static str, String, serde_json::Value)> {
         .chain(describe_identity_responses())
         .chain(describe_identity_state_responses())
         .chain(describe_all_identity_state_responses())
+        .chain(trace_responses())
         .chain(service_responses())
         .chain(media_window_responses())
         .chain(tree_dump_responses())
