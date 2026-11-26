@@ -282,7 +282,7 @@ impl MockAdapter {
         self.meta.caps.render_frame = true;
         self.meta.caps.last_frame = true;
         self.pixels = Some((width, height, first.into()));
-        self.pixel_steps = steps.map(|rgba| rgba.into()).collect();
+        self.pixel_steps = steps.map(Into::into).collect();
         self
     }
 
