@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "node scripts/build-check.ts",
-    "test": "node --test test/codec.test.ts test/regex.test.ts test/wait.test.ts test/expect.test.ts test/count.test.ts test/description.test.ts test/state.test.ts test/client.test.ts test/e2e-full-stack.test.ts",
+    "test": "node --test test/codec.test.ts test/regex.test.ts test/getby.test.ts test/wait.test.ts test/expect.test.ts test/count.test.ts test/description.test.ts test/state.test.ts test/client.test.ts test/e2e-full-stack.test.ts",
     "e2e": "node scripts/e2e.ts",
     "example:count": "node examples/count_assertions.ts",
     "example:identity": "node examples/identity_assertions.ts",
@@ -26,7 +26,7 @@
     "example:state-assertions": "node examples/state_assertions.ts",
     "example:appended-actions": "node examples/appended_actions.ts",
     "example:filter": "node examples/filter.ts",
-    "example:regex": "node examples/regex_text.ts"
+    "example:getby": "node examples/getby_factories.ts"
   },
   "keywords": [
     "guiwright",
