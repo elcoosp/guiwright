@@ -39,6 +39,11 @@ import {
   GwpClient,
   GwpRejected,
   filter,
+  getByLabel,
+  getByRole,
+  getByTestId,
+  getByText,
+  getByValue,
   roleNameRegex,
   textRegex,
   labelRegex,
@@ -254,6 +259,53 @@ test("§8.1 TS regex rows: the pattern probes resolve and act over the real door
     // the total read, never an error.
     const ghosts = await client.resolveAll(labelRegex(/Ghost/));
     assert.equal(ghosts.length, 0);
+  } finally {
+    await client.close();
+  }
+});
+
+test("§8.1 TS getBy* factories: the kit's sugar mirror resolves and acts over the real door (m96)", async () => {
+  const client = await GwpClient.connectTcp(demo.addr);
+  try {
+    await client.handshake("ts-e2e-full-stack/0.1");
+
+    // The named role factory (the kit's get_by_role mirror): the fuzzy
+    // default resolves Save through the auto-waited strict read, and
+    // the action rides the same aim.
+    const save = await client.resolve(getByRole("Button", { name: "Save" }));
+    const done = await client.action(save.node, save.generation, { kind: "click" });
+    assert.equal(done.detail, "clicked", "getByRole's row aims and acts");
+
+    // The exact form beside it: case-sensitive whole-string — a wrong
+    // case stays pending, so the honest read is the unnamed role set.
+    const exact = await client.resolve(
+      getByRole("Button", { name: "Save", exact: true }),
+    );
+    assert.equal(exact.node.kind, "accesskit", "the exact form resolves too");
+
+    // The unnamed role factory (the kit's role_locator shape): the
+    // whole bucket — the fixture's five buttons, document order.
+    const buttons = await client.resolveAll(getByRole("Button"));
+    assert.equal(buttons.length, 5, "the fixture's five buttons answer");
+
+    // The text/label/value factories: the string rows and the regex
+    // rows over the same door — the label first (the source order),
+    // the form's value, the pattern probe.
+    const label = await client.resolve(getByLabel("Welcome, Ada"));
+    assert.equal(label.node.kind, "accesskit", "the label row resolves");
+    const text = await client.resolve(getByText(/Welcome/));
+    assert.equal(text.node.kind, "accesskit", "the text regex row resolves");
+    const input = await client.resolve(getByValue("ada@example.dev"));
+    assert.equal(input.node.kind, "accesskit", "the value row resolves");
+
+    // The test-id factory's row rides the O(1) hash probe (§8.1) —
+    // this mock door carries no test ids (they ride the logical-tree
+    // path), so the set read answers the honest empty set: the read is
+    // total, never an error.
+    const ghosts = await client.resolveAll(getByTestId("btn-save"));
+    assert.equal(ghosts.length, 0, "the door carries no test ids");
+    const noLabel = await client.resolveAll(getByLabel(/Ghost/));
+    assert.equal(noLabel.length, 0);
   } finally {
     await client.close();
   }
