@@ -35,7 +35,14 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GwpClient, GwpRejected, filter } from "../src/client.ts";
+import {
+  GwpClient,
+  GwpRejected,
+  filter,
+  roleNameRegex,
+  textRegex,
+  labelRegex,
+} from "../src/client.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolvePath(here, "..", "..", "..");
@@ -215,6 +222,38 @@ test("§8.1 TS filter(): the composed rows resolve against the real server (m34/
     );
     const clicked = await client.action(save.node, save.generation, { kind: "click" });
     assert.equal(clicked.detail, "clicked", "the has-filtered resolve acts");
+  } finally {
+    await client.close();
+  }
+});
+
+test("§8.1 TS regex rows: the pattern probes resolve and act over the real door (m95)", async () => {
+  const client = await GwpClient.connectTcp(demo.addr);
+  try {
+    await client.handshake("ts-e2e-full-stack/0.1");
+
+    // The role-name regex row (the typed builder, the /re/ flags folded
+    // inline): the role bucket narrows by the pattern over the real
+    // wire — the set read answers both buttons.
+    const buttons = await client.resolveAll(roleNameRegex("Button", /^(Save|Cancel)$/));
+    assert.equal(buttons.length, 2, "Save and Cancel answer the pattern");
+
+    // The text probe through its own row: the anchored form answers one.
+    const save = await client.resolve(textRegex(/^Save$/));
+    assert.equal(save.node.kind, "accesskit", "the anchored probe resolves Save");
+
+    // The regex filter through the helper: /Sav/ narrows the role set —
+    // the appended row over the door — and the action rides it.
+    const narrowed = await client.resolve(
+      filter({ kind: "role", role: "Button", name: null }, { hasText: /Sav/ }),
+    );
+    const done = await client.action(narrowed.node, narrowed.generation, { kind: "click" });
+    assert.equal(done.detail, "clicked", "the regex-filtered resolve acts");
+
+    // The honest empty read: a pattern nothing carries answers zero —
+    // the total read, never an error.
+    const ghosts = await client.resolveAll(labelRegex(/Ghost/));
+    assert.equal(ghosts.length, 0);
   } finally {
     await client.close();
   }
