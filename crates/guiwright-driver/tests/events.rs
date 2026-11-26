@@ -493,7 +493,7 @@ async fn an_app_fed_tap_rides_the_session_log_stream() {
             let parsed: serde_json::Value = serde_json::from_str(&record).expect("one JSON line");
             assert_eq!(parsed["message"], "event subscription registered");
         }
-        other => panic!("expected the session's log record, got {other:?}"),
+        GwpEvent::V1(other) => panic!("expected the session's log record, got {other:?}"),
     }
 
     // Lossy by contract: `send` never blocks, a full tail drops and
@@ -522,7 +522,7 @@ async fn an_app_fed_tap_rides_the_session_log_stream() {
             );
             assert_eq!(parsed["target"], "my_app::lifecycle");
         }
-        other => panic!("expected the app's log record, got {other:?}"),
+        GwpEvent::V1(other) => panic!("expected the app's log record, got {other:?}"),
     }
 
     handle.shutdown();
