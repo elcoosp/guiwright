@@ -514,6 +514,7 @@ fn response_kind(response: &ResponseV1) -> &'static str {
         ResponseV1::DescribedIdentity(_) => "DescribedIdentity",
         ResponseV1::DescribedIdentityState(_) => "DescribedIdentityState",
         ResponseV1::DescribedAllIdentityState { .. } => "DescribedAllIdentityState",
+        ResponseV1::TraceFile { .. } => "TraceFile",
     }
 }
 
