@@ -350,3 +350,107 @@ fn composite_inner_in_has_resolves() {
         .expect("the chain inner resolves");
     assert!(kept.is_empty(), "no button subtree holds a label");
 }
+
+// The regex text probes (the m34 record's second standing note, the
+// m93/m94 honest lists' first item — *"No regex `TextPattern`: the enum
+// stays open until the codegen milestone asks"*). The acceptance
+// criterion this file pins: the enum opens, and a regex probe resolves
+// through the same pipeline every string probe rides — no new resolver
+// seam, the `TextMatch::matches` arm owns the semantics.
+
+#[test]
+fn regex_text_probe_resolves_the_pattern_matches() {
+    let (svc, _) = tree();
+    // Playwright's getByText(/save|cancel/i) shape: the pattern speaks
+    // its own case rule (the `i` inline flag), the probe is partial by
+    // default (a regex `test`, not an anchored match).
+    let all = svc
+        .resolve_all(&Selector::text(TextMatch::regex("(?i)save|cancel")))
+        .expect("the regex set");
+    let ids: Vec<_> = all.iter().map(|r| node_id(r.key).0).collect();
+    assert_eq!(
+        ids,
+        vec![2, 3],
+        "Save and Cancel match; the label and input don't"
+    );
+}
+
+#[test]
+fn regex_probe_is_case_sensitive_without_inline_flags() {
+    let (svc, _) = tree();
+    // The JS convention the regex probe mirrors: case-sensitive unless
+    // the pattern carries (?i) — the `TextMatch` ignore_case field never
+    // applies to a regex (the wire regex rows carry the pattern only).
+    let all = svc
+        .resolve_all(&Selector::text(TextMatch::regex("^save$")))
+        .expect("the anchored pattern set");
+    assert!(all.is_empty(), "lowercase `save` never matches `Save`");
+    let all = svc
+        .resolve_all(&Selector::text(TextMatch::regex("^Save$")))
+        .expect("the anchored pattern set");
+    assert_eq!(
+        all.len(),
+        1,
+        "anchored — the exact button, the label doesn't"
+    );
+}
+
+#[test]
+fn regex_role_name_probe_resolves() {
+    let (svc, _) = tree();
+    let err = svc
+        .resolve(&Selector::role_named(
+            Role::Button,
+            TextMatch::regex("^(Save|Cancel)$"),
+        ))
+        .expect_err("two buttons answer the pattern — strict mode refuses");
+    assert!(matches!(err, CoreError::Ambiguous { .. }), "{err}");
+    let all = svc
+        .resolve_all(&Selector::role_named(
+            Role::Button,
+            TextMatch::regex("^Wel(Come)?,? Ada$"),
+        ))
+        .expect("no button is the Welcome label — honest empty");
+    assert!(all.is_empty());
+}
+
+#[test]
+fn regex_has_text_filter_narrows_the_set() {
+    let (svc, _) = tree();
+    // The m93 gap's own words: *"the REPL's `has_text` word speaks the
+    // fuzzy `TextMatch` default only"* — the filter's probe speaks the
+    // regex now, through the same Filter row (the widening is its own
+    // variant, the M64 rule at selector width).
+    let all = svc
+        .resolve_all(&Selector::role(Role::Button).has_text(TextMatch::regex("^(Save|Cancel)$")))
+        .expect("the regex-filtered set");
+    let ids: Vec<_> = all.iter().map(|r| node_id(r.key).0).collect();
+    assert_eq!(ids, vec![2, 3]);
+}
+
+#[test]
+fn an_uncompilable_pattern_matches_nothing_never_panics() {
+    let (svc, _) = tree();
+    // The resolver's total-read rule: a pattern the regex crate refuses
+    // answers the honest empty set (the callers validate at their own
+    // boundary — the resolver never panics, the fuzz rule holds).
+    let all = svc
+        .resolve_all(&Selector::text(TextMatch::regex("(unclosed[")))
+        .expect("the empty set");
+    assert!(all.is_empty(), "an invalid pattern matches nothing");
+}
+
+#[test]
+fn regex_probes_ride_the_chain() {
+    let (svc, _) = tree();
+    // The m94 chain vocabulary with regex segments: every segment speaks
+    // the pattern form — the label inside the group answers the probe,
+    // the walk unchanged.
+    let all = svc
+        .resolve_all(
+            &Selector::role(Role::Group)
+                .then_descendant(Selector::role_named(Role::Label, TextMatch::regex("Ada"))),
+        )
+        .expect("the label matches the pattern inside the group");
+    assert_eq!(all.len(), 1, "the group keeps its subtree match");
+}
