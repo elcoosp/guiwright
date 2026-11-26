@@ -2524,3 +2524,124 @@ async fn repl_filter_rows_in_get_args() {
 
     handle.shutdown();
 }
+
+/// The REPL chain tokens (the m93 record's honest-list gap): *"the REPL
+/// renders a pasted chain row (`a >> b`) but speaks no syntax for
+/// building one — the narrowing words are the prompt's vocabulary, the
+/// chain is the DSL's."* The `>>` binder joins full locator segments
+/// into the wire's `All` chain — composition order, source first and the
+/// descendants after (the kit `locator(child)` shape, M34), every
+/// segment speaking the m93 filter words, no wire change
+/// (`SelectorV1::All` shipped with M34 and the resolver walks it
+/// already). The m93 one-pass-per-surface rule carries: the chain split
+/// lives in the shared get-args parse, so every command speaks it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repl_chain_rows_in_get_args() {
+    let path = socket_path("repl-chain.sock");
+    let handle = spawn_session_server(path.clone(), || {
+        MockAdapter::with_fixture(&Fixture::buttons())
+    })
+    .expect("server binds");
+    let mut repl = Repl::connect(&ConnectTarget::Uds(path))
+        .await
+        .expect("repl attaches");
+
+    // The chain answers the descendants — the m91 record's distinction
+    // at the prompt: the ancestor `has` keeps the group, the `>>` chain
+    // answers the buttons inside its subtree.
+    assert_eq!(
+        rendered(&repl.step("count role Group has role Button").await),
+        vec!["1 match (Group has Button)"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Group >> role Button").await),
+        vec!["4 matches (Group >> Button)"],
+    );
+
+    // Subtree scope at chain width — the leaf rule: a label's subtree is
+    // itself, so the chain into it answers nothing (an honest 0, never
+    // an error — the m35 read rule).
+    assert_eq!(
+        rendered(&repl.step("count role Label >> role Button").await),
+        vec!["0 matches (Label >> Button)"],
+    );
+
+    // Segments speak the m93 narrowing words (the wire nests `Filter`
+    // inside `All` already).
+    assert_eq!(
+        rendered(
+            &repl
+                .step("count role Group >> role Button has_text Save")
+                .await
+        ),
+        vec!["1 match (Group >> Button has_text \"Save\")"],
+    );
+
+    // The `has` filter before the binder: the segment folds first, the
+    // chain rides the filtered source (`>>` binds at chain level — a
+    // `has`-inner carries no chain, the grammar's documented trade-off).
+    assert_eq!(
+        rendered(
+            &repl
+                .step("count role Group has role Button >> role Label")
+                .await
+        ),
+        vec!["1 match (Group has Button >> Label)"],
+    );
+
+    // The strict `get` rides the grammar: the chained resolve stores the
+    // current node and the action vocabulary aims it — the full
+    // click-what-you-see loop speaks chains.
+    let get = repl
+        .step("get role Group >> role Button has_text Save")
+        .await;
+    assert!(
+        ok_line(&get).starts_with(r#"resolved Group >> Button has_text "Save" (generation 0)"#),
+        "{get:?}"
+    );
+    let click = repl.step("click").await;
+    assert!(
+        ok_line(&click).starts_with(r#"Group >> Button has_text "Save": clicked (frame "#),
+        "{click:?}"
+    );
+
+    // The assertion rows ride the same grammar (the m61 family).
+    assert_eq!(
+        rendered(
+            &repl
+                .step("assert count role Group >> role Button is 4")
+                .await
+        ),
+        vec!["assert count — found 4 (Group >> Button)"],
+    );
+
+    // Error honesty: the binder demands a locator on both sides — a
+    // leading, a trailing and a doubled `>>` all name the usage, and the
+    // session survives them.
+    assert_eq!(
+        rendered(&repl.step("count role Button >>").await),
+        vec!["error: `>>` needs a locator on both sides — e.g. `count role Group >> role Button`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count >> role Button").await),
+        vec!["error: `>>` needs a locator on both sides — e.g. `count role Group >> role Button`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("count role Button >> >> role Label").await),
+        vec!["error: `>>` needs a locator on both sides — e.g. `count role Group >> role Button`"],
+    );
+    assert_eq!(
+        rendered(&repl.step("ping").await),
+        vec!["pong"],
+        "the session survives the grammar's error paths"
+    );
+
+    // Discoverability: the help carries the chain word (one row).
+    let help = rendered(&repl.step("help").await).join("\n");
+    assert!(
+        help.contains(">>"),
+        "the help lists the chain binder: {help}"
+    );
+
+    handle.shutdown();
+}
