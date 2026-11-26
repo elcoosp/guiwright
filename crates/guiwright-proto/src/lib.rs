@@ -62,6 +62,10 @@ pub use schema::{
     SemActionV1, TextMatchV1, VIDEO_DEFAULT_FPS, VideoOptsV1, VideoV1,
 };
 pub use tcp::Client as TcpClient;
+// The probe vocabulary the wire rows mirror (the m95 regex rows speak
+// the core pattern's own words — the REPL's `/…/` parse validates
+// through this re-export).
+pub use guiwright_core::TextPattern;
 use thiserror::Error;
 pub use uds::Client;
 pub use wait::WaitState;
