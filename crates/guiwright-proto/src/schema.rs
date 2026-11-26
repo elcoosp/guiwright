@@ -1114,6 +1114,50 @@ pub enum SelectorV1 {
         source: Box<SelectorV1>,
         has: Box<SelectorV1>,
     },
+    /// The regex text probe (the m34 record's second standing note,
+    /// cashed — the m93/m94 honest lists' first item: *"No regex
+    /// `TextPattern` … the REPL's `has_text` word speaks the fuzzy
+    /// `TextMatch` default only"*). Append-only (§7): the five regex
+    /// rows ride at the end of the table (the M64 rule at selector
+    /// width — the `Text`/`Label`/`Value`/`Role`/`Filter` encodings stay
+    /// byte-pinned, the widening is its own variants), so every encoding
+    /// the pre-regex clients pinned is unchanged and an old client
+    /// answers an unknown variant with a clean decode error. The pattern
+    /// is the **source** string only — the matcher compiles it
+    /// resolver-side, the case rule rides the pattern's own inline
+    /// flags (`(?i)save`), the probe is partial by default (a regex
+    /// `test`, Playwright's `getByText(/re/)` shape) and full-match
+    /// rules compose the anchors into the pattern itself. The
+    /// `HasTextRegex` row is the `Filter`'s regex `has_text` half as its
+    /// own variant — a `nth`/`has_not` beside it composes the row as the
+    /// *source* of a string-`Filter` (the fold's own composition, no
+    /// payload reshape).
+    TextRegex {
+        pattern: String,
+    },
+    /// The regex label probe — `getByLabel(/re/)` (the appended regex
+    /// family, the `Label` encodings byte-pinned).
+    LabelRegex {
+        pattern: String,
+    },
+    /// The regex value probe — `getByValue(/re/)` (the appended regex
+    /// family, the `Value` encodings byte-pinned).
+    ValueRegex {
+        pattern: String,
+    },
+    /// The regex role-name probe — `getByRole(role, { name: /re/ })`
+    /// (the appended regex family, the `Role` encodings byte-pinned).
+    RoleNameRegex {
+        role: String,
+        pattern: String,
+    },
+    /// The regex `has_text` filter — Playwright's
+    /// `filter({ hasText: /re/ })` (the appended regex family, the
+    /// `Filter` encodings byte-pinned).
+    HasTextRegex {
+        source: Box<SelectorV1>,
+        pattern: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
