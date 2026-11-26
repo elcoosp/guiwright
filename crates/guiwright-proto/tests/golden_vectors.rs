@@ -555,6 +555,76 @@ fn regex_text_requests() -> Vec<(&'static str, RequestV1)> {
     ]
 }
 
+/// The `getBy*` locator factories' string-row pins (the m95 record's
+/// named TS pass — the kit's `get_by_*` sugars mirrored client-side):
+/// the byte-pinned string rows the factories compose, the shapes no
+/// earlier vector carried (the fuzzy role row rides
+/// `resolve_role_named`, the test-id row `resolve_test_id`, the regex
+/// rows their m95 pins). The TS factory test builds the same shapes
+/// through `getByRole`/`getByText`/`getByLabel`/`getByValue` — the two
+/// clients fail the build together on drift.
+fn getby_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![
+        (
+            "resolve_role_unnamed",
+            RequestV1::Resolve {
+                selector: SelectorV1::Role {
+                    role: "Button".into(),
+                    name: None,
+                },
+                timeout_ms: 0,
+            },
+        ),
+        (
+            "resolve_role_named_exact",
+            RequestV1::Resolve {
+                selector: SelectorV1::Role {
+                    role: "Button".into(),
+                    name: Some(TextMatchV1 {
+                        text: "Save".into(),
+                        exact: true,
+                        ignore_case: false,
+                    }),
+                },
+                timeout_ms: 5000,
+            },
+        ),
+        (
+            "resolve_text",
+            RequestV1::Resolve {
+                selector: SelectorV1::Text(TextMatchV1 {
+                    text: "Save".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+                timeout_ms: 5000,
+            },
+        ),
+        (
+            "resolve_label",
+            RequestV1::Resolve {
+                selector: SelectorV1::Label(TextMatchV1 {
+                    text: "Welcome, Ada".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+                timeout_ms: 5000,
+            },
+        ),
+        (
+            "resolve_value",
+            RequestV1::Resolve {
+                selector: SelectorV1::Value(TextMatchV1 {
+                    text: "ada@example.dev".into(),
+                    exact: false,
+                    ignore_case: true,
+                }),
+                timeout_ms: 5000,
+            },
+        ),
+    ]
+}
+
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
         .into_iter()
@@ -564,6 +634,7 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(resolve_all_requests())
         .chain(has_filter_requests())
         .chain(regex_text_requests())
+        .chain(getby_requests())
         .chain(filter_requests())
         .chain(hit_test_requests())
         .chain(describe_requests())
