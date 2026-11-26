@@ -240,6 +240,38 @@ mod tests {
         }
     }
 
+    /// §15.7's macro leg is two surfaces: "scripted 200-action session on
+    /// the egui demo app **and a synthetic masonry app (1 k nodes)**". The
+    /// egui rows shipped with the m97 stream; the masonry rows complete
+    /// the pair — design targets riding the egui rows' rule
+    /// (`m0_measurable = false`, no sample binding, the bench leg measures
+    /// them) until the framework runtime matrix lands in the CI guard.
+    #[test]
+    fn s15_7_macro_rows_cover_both_surfaces() {
+        let file: BudgetFile = toml::from_str(BUDGETS_TOML).expect("parse budgets.toml");
+        for id in [
+            "macro_egui_action",
+            "macro_egui_assert_suite",
+            "macro_masonry_action",
+            "macro_masonry_assert_suite",
+        ] {
+            let row = file
+                .budget
+                .iter()
+                .find(|row| row.id == id)
+                .unwrap_or_else(|| panic!("missing §15.7 macro row `{id}`"));
+            assert!(
+                !row.m0_measurable,
+                "`{id}` is a design target until the framework runtime matrix lands in the \
+                 CI guard (the `iced_tree_readback` row's rule)"
+            );
+            assert!(
+                row.sample.is_none(),
+                "`{id}` binds no sample (m0_measurable = false, the bench leg measures it)"
+            );
+        }
+    }
+
     /// Repo-only test: the packaged crate ships its own `budgets.toml`
     /// copy (`include_str!` cannot escape the package root); the canonical
     /// file stays `bench/budgets.toml` (§15.7) and must never drift.
