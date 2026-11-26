@@ -43,6 +43,12 @@ iced_widget = "0.14.0"
 guiwright-adapter-egui = { path = "../guiwright-adapter-egui" }
 guiwright-adapter-masonry = { path = "../guiwright-adapter-masonry" }
 egui.workspace = true
+# The §15.7 masonry leg's fixture (the gap the m97 bench leg's header
+# named): the synthetic 1 k-node app is written against the same widget
+# crates the adapter's embedded tests use — the facade's `widgets` and
+# masonry-core's `NewWidget`/`WidgetTag`.
+masonry = "0.4.0"
+masonry_core.workspace = true
 # iced_test names no renderer backend of its own (the adapter carries the
 # same note on its optional deps): with only default features
 # `iced_renderer` builds the null renderer and the zero-bounds
