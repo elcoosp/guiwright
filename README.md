@@ -142,6 +142,7 @@ Plus `clients/typescript` — the TypeScript client with the same vocabulary.
 | `locator.all()`                                                               | `all(\|item\| …)`                                                                    | document order, each match an nth-pinned locator handed to the visitor — the borrow-and-act shape (M26) |
 | `locator.allTextContents()`                                                   | `all_text_contents()`                                                                | one snapshot read per set: document order, the same text the text locators match (M29); the REPL `texts` row (M40) and the TS `allTextContents()` (M41) carry the same read over the describe-all round trip |
 | — (form-dump read)                                                            | `all_values()`                                                                       | the same walk, value first — what the form carries, label fallback (M31 extension); the REPL `values` row (M40) and the TS `allValues()` (M41) carry the flipped source order over any door |
+| `innerText()` / `inputValue()`                                                | `inner_text()` / `input_value()`                                                     | the single-node content getters (the m19 record's honest-list item, an unrecorded pass): the text the text locators match (the label first, then the value — the `has_text` source order) and the value the form carries (the value only, never the label fallback); both ride the strict describe resolve with the read rule intact — `get_attribute` stays the honest cap (the a11y substrate carries no arbitrary attribute vocabulary) |
 | `page.screenshot` / `locator.screenshot`                                      | `app.screenshot` / `locator.screenshot`                                              | one render pass, element crops cut by resolved bounds — never re-render                                 |
 | `mouse` / `keyboard`                                                          | GWP `Gesture` domain; TS `mouse` / `keyboard`                                        | click / drag / wheel / key / type, driver-synthesized from the adapter's pacing table (M7)              |
 
@@ -556,15 +557,24 @@ The milestone stream ([architecture doc](docs/architecture.md), records in `docs
 | **M92**       | The TypeScript filter helper: `filter(source, opts)` (the m34 record's named follow-on — the m45/m60/m63 one-milestone-per-surface pattern carried to the §8.1 filter vocabulary) — the typed `hasText`/`hasNot`/`nth` opts composing the m34 rows byte-identically, the `has` row riding its own variant (the M64 rule at selector width, the m91 composition order), the golden-manifest pin built through the helper, the helper unit pins + the cross-language e2e leg against the real Rust server; no wire change |
 | **M93**       | The REPL filter grammar: the §8.1 narrowing words (`has_text <text…>`, `has_not <get-args…>`, `has <get-args…>`, `first`/`last`/`nth <N>`) riding the shared get-args parse as postfix words (the m91/m92 records' named standing gap — "the REPL's get-args vocabulary speaks no filter rows (`has_not` included)") — every get-args command speaks them in one pass (the reads, the strict `get`, the `assert` rows), the fold composing one wire row per word in the kit DSL's order (the resolver owns the semantics; no new wire shape, the M34/m91 rows unchanged), the renders speaking the grammar's own words, the reserved-words trade-off documented, the consumer demo; no wire change, no budget row (the m35 REPL-pass rule) |
 
+| **M94**       | The REPL chain tokens: the `>>` binder joining full locator segments into the wire's `All` chain (the m93 record's honest-list gap — "the REPL renders a pasted chain row (`a >> b`) but speaks no syntax for building one — the narrowing words are the prompt's vocabulary, the chain is the DSL's") — composition order, source first and the descendants after (the kit `locator(child)` shape, M34), every segment speaking the m93 filter words, the shared get-args parse carrying every command in one pass (the m93 one-seam rule), the resolver's composite-link honesty fix (node-level membership for chain links, one structural resolution + a containment check for subtree reads — the m34 has/chain distinction carried; the walk the m93 renders could carry but no producer had ever sent), the consumer demo; no wire change, no budget row (the m35 REPL-pass rule) |
+
 > The record stream skips m83 (no record exists under `docs/`); the m85 row
 > is recorded in the architecture doc's §12 rather than a dedicated record.
+> Two further passes shipped without a record: the kit's single-node content
+> getters (`inner_text()` / `input_value()` — the m19 record's honest-list
+> item, pinned by `crates/guiwright-kit/tests/content_getters.rs` and named in
+> the parity table above) and the TypeScript client's appended-action sugars
+> (`selectOption()` / `scrollIntoViewIfNeeded()` — the m89/m90 records' named
+> per-surface follow-ons, pinned by `clients/typescript/test/client.test.ts`
+> and documented in `clients/typescript/README.md`).
 
 Every wire addition is append-only and byte-pinned; every kit addition rides the same
 zero-polling session loop — no milestone re-opened the protocol.
 
 ## Learn more
 
-- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m93-repl-filter-rows.md`.
+- [docs/architecture.md](docs/architecture.md) — the full design: per-framework integration dossiers, the process model, the GWP protocol spec, the Playwright parity map, performance engineering. Milestone records live alongside: `docs/m2-gpui-remote-spike.md` … `docs/m94-repl-chain-rows.md`.
 - [docs/m5-test-runner.md](docs/m5-test-runner.md) · [docs/m6-multi-window.md](docs/m6-multi-window.md) — the runner and window-model deep dives
 - [CHANGELOG.md](CHANGELOG.md) — generated from Conventional Commits by git-cliff; tagging `vX.Y.Z` triggers the release workflow
 - [bench/budgets.toml](bench/budgets.toml) — the p50/p95 budget table enforced by the CI guard
