@@ -36,6 +36,13 @@ criterion.workspace = true
 guiwright-adapter-iced = { path = "../guiwright-adapter-iced" }
 iced_test = "0.14.0"
 iced_widget = "0.14.0"
+# The §15.7 macro-session bench (m97): the real egui + masonry adapters —
+# both workspace members, both compile headless by default (no GPU on
+# the bench path: the macro session drives resolve/act/expect, not the
+# pixel rows).
+guiwright-adapter-egui = { path = "../guiwright-adapter-egui" }
+guiwright-adapter-masonry = { path = "../guiwright-adapter-masonry" }
+egui.workspace = true
 # iced_test names no renderer backend of its own (the adapter carries the
 # same note on its optional deps): with only default features
 # `iced_renderer` builds the null renderer and the zero-bounds
@@ -57,6 +64,10 @@ harness = false
 name = "iced_harness"
 harness = false
 required-features = ["iced"]
+
+[[bench]]
+name = "macro_session"
+harness = false
 
 [features]
 # The iced harness bench (the §4.6 read-back path): default builds carry
