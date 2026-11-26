@@ -20,7 +20,7 @@ use guiwright_driver::mock::MockAdapter;
 use guiwright_driver::server::GwpServerHandle;
 use guiwright_proto::DuplexClient;
 use guiwright_proto::client::ClientConn;
-use guiwright_proto::schema::{GestureV1, PointerButtonV1, VideoOptsV1, VideoV1};
+use guiwright_proto::schema::{GestureV1, PointerButtonV1, VideoV1};
 
 /// The bench-shaped canvas: big enough for both fixture windows' rects,
 /// which stay disjoint (W1's Save at 16,16→136,48; W2's Save + label at
