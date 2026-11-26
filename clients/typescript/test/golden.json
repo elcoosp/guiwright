@@ -166,6 +166,26 @@
       "name": "resolve_has_text_regex"
     },
     {
+      "frame_hex": "0c00000000030006427574746f6e0000",
+      "name": "resolve_role_unnamed"
+    },
+    {
+      "frame_hex": "1400000000030006427574746f6e01045361766501008827",
+      "name": "resolve_role_named_exact"
+    },
+    {
+      "frame_hex": "0c000000000302045361766500018827",
+      "name": "resolve_text"
+    },
+    {
+      "frame_hex": "140000000003010c57656c636f6d652c2041646100018827",
+      "name": "resolve_label"
+    },
+    {
+      "frame_hex": "170000000003040f616461406578616d706c652e64657600018827",
+      "name": "resolve_value"
+    },
+    {
       "frame_hex": "250000000003060006427574746f6e00010453617665000101000954657874496e7075740001008827",
       "name": "resolve_filter"
     },
