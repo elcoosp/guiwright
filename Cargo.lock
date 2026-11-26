@@ -2165,6 +2165,7 @@ dependencies = [
  "accesskit 0.25.2",
  "accesskit_consumer 0.39.2",
  "proptest",
+ "regex",
  "thiserror 2.0.21",
  "tracing",
 ]
