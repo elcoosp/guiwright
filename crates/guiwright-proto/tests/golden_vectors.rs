@@ -495,6 +495,66 @@ fn describe_all_identity_state_requests() -> Vec<(&'static str, RequestV1)> {
 }
 
 /// (name, hex of the **framed** request — 4-byte LE length + postcard body).
+/// The regex text probes' byte pins (the m34 standing note cashed — the
+/// m93/m94 honest lists' first item): the five appended `SelectorV1`
+/// rows, the pattern source riding as the payload. The string arms'
+/// encodings are untouched (the M64 rule at selector width); these
+/// vectors pin the rows the TS codec table mirrors.
+fn regex_text_requests() -> Vec<(&'static str, RequestV1)> {
+    vec![
+        (
+            "resolve_text_regex",
+            RequestV1::Resolve {
+                selector: SelectorV1::TextRegex {
+                    pattern: "(?i)save|cancel".into(),
+                },
+                timeout_ms: 5000,
+            },
+        ),
+        (
+            "resolve_label_regex",
+            RequestV1::Resolve {
+                selector: SelectorV1::LabelRegex {
+                    pattern: "^Wel.* Ada$".into(),
+                },
+                timeout_ms: 0,
+            },
+        ),
+        (
+            "resolve_value_regex",
+            RequestV1::Resolve {
+                selector: SelectorV1::ValueRegex {
+                    pattern: r"^\S+@\S+\.\S+$".into(),
+                },
+                timeout_ms: 0,
+            },
+        ),
+        (
+            "resolve_role_name_regex",
+            RequestV1::Resolve {
+                selector: SelectorV1::RoleNameRegex {
+                    role: "Button".into(),
+                    pattern: "^(Save|Cancel)$".into(),
+                },
+                timeout_ms: 5000,
+            },
+        ),
+        (
+            "resolve_has_text_regex",
+            RequestV1::Resolve {
+                selector: SelectorV1::HasTextRegex {
+                    source: Box::new(SelectorV1::Role {
+                        role: "Button".into(),
+                        name: None,
+                    }),
+                    pattern: "^Save$".into(),
+                },
+                timeout_ms: 0,
+            },
+        ),
+    ]
+}
+
 fn request_vectors() -> Vec<(&'static str, String)> {
     let requests = core_requests()
         .into_iter()
@@ -503,6 +563,7 @@ fn request_vectors() -> Vec<(&'static str, String)> {
         .chain(multi_window_gesture_requests())
         .chain(resolve_all_requests())
         .chain(has_filter_requests())
+        .chain(regex_text_requests())
         .chain(filter_requests())
         .chain(hit_test_requests())
         .chain(describe_requests())
