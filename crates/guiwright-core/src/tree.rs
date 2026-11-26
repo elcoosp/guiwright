@@ -799,21 +799,54 @@ impl TreeService {
             Selector::Value(m) => entry.value.as_deref().is_some_and(|v| m.matches(v)),
             Selector::TestId(id) => self.index.test_ids.get(id) == Some(&key),
             Selector::All(_) | Selector::Filter { .. } | Selector::Has { .. } => {
-                // Full sub-resolution within the subtree of this node.
-                self.subtree_matches_selector(&key, selector)
+                // Composite rows are pipeline stages, not node predicates:
+                // the node-level question is membership — `key` is one of
+                // the matches the selector resolves to (the chain links'
+                // honest semantics; an ancestor of a match is not itself a
+                // match — the m34 has/chain distinction). The resolution
+                // is structural and finite; re-entering the subtree walk
+                // here would recurse forever (the m94 chain grammar's
+                // composite links were its first producer).
+                self.resolve_all(selector)
+                    .is_ok_and(|matches| matches.iter().any(|m| m.key == key))
             }
         }
     }
 
     /// Whether any node in `key`'s subtree (including itself) matches the
-    /// selector — used by `has_text`/`has_not`/chains.
+    /// selector — used by `has`/`has_not`/chains. Composite rows resolve
+    /// structurally (once) and ask which matches land in the subtree; leaf
+    /// rows stay the per-node predicate walk.
     fn subtree_matches_selector(&self, key: &NodeKey, selector: &Selector) -> bool {
-        if self.matches_selector(*key, selector) {
+        match selector {
+            Selector::All(_) | Selector::Filter { .. } | Selector::Has { .. } => self
+                .resolve_all(selector)
+                .is_ok_and(|matches| matches.iter().any(|m| self.subtree_contains(key, &m.key))),
+            _ => {
+                if self.matches_selector(*key, selector) {
+                    return true;
+                }
+                let mut found = false;
+                self.descendants(key, &mut |k, _| {
+                    if !found && self.matches_selector(k, selector) {
+                        found = true;
+                    }
+                });
+                found
+            }
+        }
+    }
+
+    /// Whether `target` is `root` or lies in its subtree — the composite
+    /// arms' membership check: one containment walk instead of a
+    /// per-descendant re-resolution of the selector.
+    fn subtree_contains(&self, root: &NodeKey, target: &NodeKey) -> bool {
+        if root == target {
             return true;
         }
         let mut found = false;
-        self.descendants(key, &mut |k, _| {
-            if !found && self.matches_selector(k, selector) {
+        self.descendants(root, &mut |k, _| {
+            if k == *target {
                 found = true;
             }
         });
