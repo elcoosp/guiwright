@@ -54,6 +54,10 @@ toml = "1.2.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 twox-hash = { version = "2.1.5", default-features = false, features = ["std", "xxhash3_64"] }
+# The regex text probes (the m34 standing note, cashed): the
+# `TextPattern::Regex` arm compiles the probe per match — a pure
+# matching dependency, no transport or UI edge rides it.
+regex = "1.13.1"
 
 # Dev / test / bench
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
