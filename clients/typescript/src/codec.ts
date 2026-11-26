@@ -303,6 +303,26 @@ function encodeSelector(enc: Encoder, sel: Selector): void {
       encodeSelector(enc, sel.source);
       encodeSelector(enc, sel.has);
       break;
+    case "text_regex":
+      // The regex text probes (the m34 standing note cashed): the
+      // appended rows, indices 8–12 — the pattern source as the string
+      // payload, the case rule riding the pattern's inline flags.
+      enc.u32(SelectorV1.TextRegex).str(sel.pattern);
+      break;
+    case "label_regex":
+      enc.u32(SelectorV1.LabelRegex).str(sel.pattern);
+      break;
+    case "value_regex":
+      enc.u32(SelectorV1.ValueRegex).str(sel.pattern);
+      break;
+    case "role_name_regex":
+      enc.u32(SelectorV1.RoleNameRegex).str(sel.role).str(sel.pattern);
+      break;
+    case "has_text_regex":
+      enc.u32(SelectorV1.HasTextRegex);
+      encodeSelector(enc, sel.source);
+      enc.str(sel.pattern);
+      break;
   }
 }
 
