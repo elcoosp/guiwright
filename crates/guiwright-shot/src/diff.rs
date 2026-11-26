@@ -138,7 +138,7 @@ mod tests {
         let img = Image::solid(16, 16, [128, 64, 32, 255]);
         let report = diff(&img, &img, DEFAULT_THRESHOLD).expect("same shape");
         assert_eq!(report.failed_pixels, 0);
-        assert_eq!(report.max_distance, 0.0);
+        assert_eq!(report.max_distance.to_bits(), 0.0f32.to_bits());
         assert!(report.passes(0));
     }
 
