@@ -146,6 +146,26 @@
       "name": "resolve_has"
     },
     {
+      "frame_hex": "150000000003080f283f6929736176657c63616e63656c8827",
+      "name": "resolve_text_regex"
+    },
+    {
+      "frame_hex": "100000000003090b5e57656c2e2a204164612400",
+      "name": "resolve_label_regex"
+    },
+    {
+      "frame_hex": "1300000000030a0e5e5c532b405c532b5c2e5c532b2400",
+      "name": "resolve_value_regex"
+    },
+    {
+      "frame_hex": "1c00000000030b06427574746f6e0f5e28536176657c43616e63656c29248827",
+      "name": "resolve_role_name_regex"
+    },
+    {
+      "frame_hex": "1400000000030c0006427574746f6e00065e536176652400",
+      "name": "resolve_has_text_regex"
+    },
+    {
       "frame_hex": "250000000003060006427574746f6e00010453617665000101000954657874496e7075740001008827",
       "name": "resolve_filter"
     },
