@@ -76,7 +76,10 @@ fn window_handle_video_records_its_window() {
     // a re-aimed handle finalizes — no live borrow spans the pumps.
     {
         let mut editor = app.window(&w1).expect("Editor");
-        editor.video().start_in(dir.path(), 25).expect("scoped start");
+        editor
+            .video()
+            .start_in(dir.path(), 25)
+            .expect("scoped start");
     }
     app.session().pump();
     app.session().pump();
