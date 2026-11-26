@@ -304,3 +304,49 @@ fn fuzz_selectors_never_panic() {
         let _ = svc.resolve(&Selector::value(name.as_str()));
     });
 }
+
+// --- the composite links the REPL chain grammar speaks (m94) ---------------
+
+#[test]
+fn composite_link_in_chain_resolves() {
+    let (svc, f) = tree();
+    // All([Group, Filter { Button has_text Save }]): the chain's second
+    // link is a pipeline stage, not a node predicate — the buttons whose
+    // text probe matches, inside the group. The link question is
+    // node-level membership ("this node is one of the link's matches"),
+    // so the group ancestor itself is never a match (the m34 has/chain
+    // distinction carried to composite links) and the walk stays finite.
+    let chain =
+        Selector::role(Role::Group).then_descendant(Selector::role(Role::Button).has_text("Save"));
+    let resolved = svc
+        .resolve(&chain)
+        .expect("the chained filter resolves Save");
+    assert_eq!(node_id(resolved.key), f.save_button);
+}
+
+#[test]
+fn composite_chain_answers_the_link_matches_only() {
+    let (svc, _) = tree();
+    let chain =
+        Selector::role(Role::Group).then_descendant(Selector::role(Role::Button).has_text("Save"));
+    let all = svc.resolve_all(&chain).expect("the chain set");
+    let ids: Vec<_> = all.iter().map(|r| node_id(r.key).0).collect();
+    assert_eq!(ids, vec![2]);
+}
+
+#[test]
+fn composite_inner_in_has_resolves() {
+    let (svc, _) = tree();
+    // Has { Group, All([Button, …Label]) }: the positive filter's inner
+    // is a chain — the group whose subtree holds a node the chain
+    // resolves to. No button's subtree holds a label: the honest empty
+    // read, and the walk terminates (one resolution, one containment
+    // check — never a per-descendant re-resolution of the composite).
+    let kept = svc
+        .resolve_all(
+            &Selector::role(Role::Group)
+                .has(Selector::role(Role::Button).then_descendant(Selector::role(Role::Label))),
+        )
+        .expect("the chain inner resolves");
+    assert!(kept.is_empty(), "no button subtree holds a label");
+}
