@@ -1758,6 +1758,7 @@ impl Repl {
             "  … has_text <text> | has_not <locator> | has <locator> | first | last | nth <N>",
             "                              the §8.1 filter words on every locator (m93)",
             "  … <get-args…> >> <get-args…> the descendant chain on every locator (m94)",
+            "  … <text> /pattern/[i]       the regex text probe on every locator word (m95)",
             "  hit <x> <y>                 which node occupies the point (M32 hit-test read)",
             "  describe <get-args…>        one node's identity facts (M37)",
             "  count <get-args…>           the set size, strict mode aside (M35 read pass)",
@@ -1996,9 +1997,94 @@ fn split_chain(tokens: &[String]) -> Result<Vec<&[String]>, String> {
     Ok(segments)
 }
 
+/// The regex literal's usage words (the failures-name-names rule — the
+/// error names the shape and the flags it accepts).
+const REGEX_USAGE: &str =
+    "a regex literal is one token `/pattern/` with optional `i` flag — e.g. `text /save|cancel/i`";
+
+/// The `/…/` regex literal (the m34 record's second standing note,
+/// cashed at the prompt — the m93/m94 honest lists' first item: *"No
+/// regex `TextPattern` … the REPL's `has_text` word speaks the fuzzy
+/// `TextMatch` default only"*). A text argument that is **one token**
+/// shaped `/pattern/flags` speaks the regex probe — partial by default,
+/// case-sensitive until the `i` flag rides (the JS literal convention;
+/// the flag folds into the pattern's own inline form, the wire regex
+/// rows carry the pattern only). The literal must be the whole argument
+/// — a multi-token probe stays the fuzzy string the grammar always
+/// spoke, and a probe whose text genuinely begins with `/` needs a
+/// different phrasing (the same reserved-token trade-off the m93/m94
+/// grammars documented). An unclosed or uncompilable literal is the
+/// typed usage error at parse time — never a silent downgrade (the
+/// resolver's total-read rule answers an invalid pattern with the empty
+/// set, so the prompt validates before it sends).
+///
+/// `Ok(None)` — not regex-shaped, the fuzzy default speaks;
+/// `Ok(Some((pattern, literal)))` — the composed pattern (inline flags
+/// folded in) and the literal as typed, the render's words;
+/// `Err` — the typed usage error.
+fn regex_probe(tokens: &[String]) -> Result<Option<(String, String)>, String> {
+    let Some(token) = tokens.first() else {
+        return Ok(None);
+    };
+    if tokens.len() != 1 || !token.starts_with('/') {
+        return Ok(None);
+    }
+    let closed = match token.rfind('/') {
+        // A bare `/` (len 1) has no pattern between the slashes.
+        Some(0) | None => {
+            return Err(format!("unclosed regex literal `{token}` — {REGEX_USAGE}"));
+        }
+        Some(i) => i,
+    };
+    let source = &token[1..closed];
+    let flags = &token[closed + 1..];
+    if !flags
+        .chars()
+        .all(|f| matches!(f, 'i' | 'm' | 's' | 'x' | 'U'))
+    {
+        return Err(format!(
+            "unknown regex flags `{flags}` — `i` | `m` | `s` | `x` | `U` — {REGEX_USAGE}"
+        ));
+    }
+    let pattern = if flags.is_empty() {
+        source.to_string()
+    } else {
+        format!("(?{flags}){source}")
+    };
+    // The typed check at the prompt: an uncompilable pattern is the
+    // regex crate's own message beside the usage — the session survives.
+    if let Err(e) = guiwright_proto::TextPattern::validate(&pattern) {
+        return Err(format!("{e} — {REGEX_USAGE}"));
+    }
+    Ok(Some((pattern, token.clone())))
+}
+
+/// The regex text argument as a wire probe, shared by the base arms and
+/// the `has_text` word (the m93 one-seam rule — every text probe speaks
+/// the literal in one pass): regex-shaped tokens take the appended
+/// regex rows, everything else the fuzzy `TextMatchV1` default.
+enum TextProbe {
+    Str(TextMatchV1),
+    Regex(String),
+}
+
+fn text_probe(tokens: &[String], usage: &str) -> Result<TextProbe, String> {
+    if let Some((pattern, _)) = regex_probe(tokens)? {
+        return Ok(TextProbe::Regex(pattern));
+    }
+    let text = joined(Some(tokens)).ok_or(usage)?;
+    Ok(TextProbe::Str(TextMatchV1 {
+        text,
+        exact: false,
+        ignore_case: true,
+    }))
+}
+
 /// The base locator arms — the grammar's `role | text | label | testid |
 /// value` forms, unchanged by the filter pass (m35's "nothing new to
-/// learn" holds: the narrowing words are additive, the base is).
+/// learn" holds: the narrowing words are additive, the base is). The
+/// text probes speak the `/…/` regex literal beside the fuzzy default
+/// (the m93/m94 honest lists' first item, the m95 record).
 fn parse_base_selector(tokens: &[String]) -> Result<SelectorV1, String> {
     let sub = tokens
         .first()
@@ -2008,25 +2094,45 @@ fn parse_base_selector(tokens: &[String]) -> Result<SelectorV1, String> {
             let role = tokens
                 .get(1)
                 .ok_or("`role` needs a role — e.g. `role Button Save`")?;
-            let name = joined(tokens.get(2..));
+            let name_tokens = tokens.get(2..).unwrap_or_default();
+            // The unnamed form the grammar always spoke — every widget
+            // of the role, strict mode within the window.
+            let name = if name_tokens.is_empty() {
+                None
+            } else {
+                match text_probe(name_tokens, "`role` needs a name — e.g. `role Button Save`")? {
+                    TextProbe::Regex(pattern) => {
+                        return Ok(SelectorV1::RoleNameRegex {
+                            role: canonical_role(role),
+                            pattern,
+                        });
+                    }
+                    TextProbe::Str(name) => Some(name),
+                }
+            };
             SelectorV1::Role {
                 role: canonical_role(role),
-                name: name.map(|text| TextMatchV1 {
-                    text,
-                    exact: false,
-                    ignore_case: true,
-                }),
+                name,
             }
         }
-        "text" => SelectorV1::Text(match_arg(tokens.get(1..), "text <text>")?),
-        "label" => SelectorV1::Label(match_arg(tokens.get(1..), "label <text>")?),
+        "text" => match text_probe(tokens.get(1..).unwrap_or_default(), "text <text>")? {
+            TextProbe::Regex(pattern) => SelectorV1::TextRegex { pattern },
+            TextProbe::Str(m) => SelectorV1::Text(m),
+        },
+        "label" => match text_probe(tokens.get(1..).unwrap_or_default(), "label <text>")? {
+            TextProbe::Regex(pattern) => SelectorV1::LabelRegex { pattern },
+            TextProbe::Str(m) => SelectorV1::Label(m),
+        },
         "testid" => SelectorV1::TestId(
             tokens
                 .get(1)
                 .ok_or("`testid` needs an id — e.g. `testid save-btn`")?
                 .clone(),
         ),
-        "value" => SelectorV1::Value(match_arg(tokens.get(1..), "value <text>")?),
+        "value" => match text_probe(tokens.get(1..).unwrap_or_default(), "value <text>")? {
+            TextProbe::Regex(pattern) => SelectorV1::ValueRegex { pattern },
+            TextProbe::Str(m) => SelectorV1::Value(m),
+        },
         other => {
             return Err(format!(
                 "unknown locator `{other}` — role | text | label | testid | value"
@@ -2050,18 +2156,30 @@ fn fold_filters(selector: SelectorV1, tokens: &[String]) -> Result<SelectorV1, S
         match word {
             "has_text" => {
                 let split = filter_word(&rest[1..]).map_or(rest.len(), |i| i + 1);
-                let text = joined(Some(&rest[1..split]))
-                    .ok_or("`has_text` needs text — e.g. `count role Button has_text Save`")?;
-                selector = SelectorV1::Filter {
-                    source: Box::new(selector),
-                    has_text: Some(TextMatchV1 {
-                        text,
-                        exact: false,
-                        ignore_case: true,
-                    }),
-                    has_not: None,
-                    nth: None,
-                };
+                let probe_tokens = &rest[1..split];
+                // The regex literal (the m34 standing note cashed at the
+                // prompt): one `/…/` token speaks the appended
+                // `HasTextRegex` row, everything else the fuzzy
+                // `Filter` row the grammar always spoke.
+                if let Some((pattern, _)) = regex_probe(probe_tokens)? {
+                    selector = SelectorV1::HasTextRegex {
+                        source: Box::new(selector),
+                        pattern,
+                    };
+                } else {
+                    let text = joined(Some(probe_tokens))
+                        .ok_or("`has_text` needs text — e.g. `count role Button has_text Save`")?;
+                    selector = SelectorV1::Filter {
+                        source: Box::new(selector),
+                        has_text: Some(TextMatchV1 {
+                            text,
+                            exact: false,
+                            ignore_case: true,
+                        }),
+                        has_not: None,
+                        nth: None,
+                    };
+                }
                 rest = &rest[split..];
             }
             "has_not" | "has" => {
@@ -2523,6 +2641,13 @@ fn render_selector(selector: &SelectorV1) -> String {
             Some(matched) => format!("{role} {:?}", matched.text),
             None => role.clone(),
         },
+        // The regex rows render the literal the prompt speaks (the m95
+        // grammar): the composed pattern inside the slashes — the flags
+        // ride inline (`/(?i)save/`), the pattern's own words.
+        SelectorV1::RoleNameRegex { role, pattern } => format!("{role} /{pattern}/"),
+        SelectorV1::TextRegex { pattern } => format!("text /{pattern}/"),
+        SelectorV1::LabelRegex { pattern } => format!("label /{pattern}/"),
+        SelectorV1::ValueRegex { pattern } => format!("value /{pattern}/"),
         SelectorV1::Text(m) => format!("text {:?}", m.text),
         SelectorV1::Label(m) => format!("label {:?}", m.text),
         SelectorV1::TestId(id) => format!("testid {id:?}"),
@@ -2559,6 +2684,11 @@ fn render_selector(selector: &SelectorV1) -> String {
                 None => {}
             }
             rendered
+        }
+        // The regex `has_text` row (the m95 grammar): the literal's own
+        // words, beside the fuzzy form above.
+        SelectorV1::HasTextRegex { source, pattern } => {
+            format!("{} has_text /{pattern}/", render_selector(source))
         }
         SelectorV1::Has { source, has } => {
             format!("{} has {}", render_selector(source), render_selector(has))
