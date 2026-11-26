@@ -114,7 +114,8 @@ mod tests {
     fn empty_config_defaults() {
         let cfg = parse_config("").expect("empty table");
         let eff = cfg.screenshots.effective_for("linux");
-        assert_eq!(eff.threshold, DEFAULT_THRESHOLD);
+        // The default is a written constant — the pin is the exact value.
+        assert_eq!(eff.threshold.to_bits(), DEFAULT_THRESHOLD.to_bits());
         assert_eq!(eff.max_failed_pixels, 0);
     }
 
@@ -169,7 +170,12 @@ mod tests {
             "#,
         )
         .expect("unknown keys must not break parsing");
-        assert_eq!(cfg.screenshots.effective_for("linux").threshold, 0.6);
+        assert_eq!(
+            cfg.screenshots.effective_for("linux")
+                .threshold
+                .to_bits(),
+            0.6f32.to_bits()
+        );
     }
 
     #[test]
