@@ -32,6 +32,19 @@ export {
   toRegexPattern,
   type FilterOpts,
 } from "./filter.ts";
+/** The `getBy*` locator factories (the m95 record's named TS pass, the
+ * one-milestone-per-surface pattern's factory half): the five
+ * Playwright-shaped factories mirroring the Rust kit's `get_by_*`
+ * sugars — string/`TextMatchV1`/`RegExp` probes composing the wire's
+ * existing rows client-side, no wire change, no locator object. */
+export {
+  getByRole,
+  getByText,
+  getByLabel,
+  getByValue,
+  getByTestId,
+  type TextProbe,
+} from "./getby.ts";
 export type { Nth, Selector, TextMatchV1 } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
 import { renderSelector, WaitTracker, type WaitState } from "./wait.ts";
