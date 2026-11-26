@@ -228,6 +228,17 @@ export const SelectorV1 = {
   /** The selector-valued positive filter (the m34 record's named
    * follow-on): the appended variant, the `Filter` encodings unchanged. */
   Has: 7,
+  /** The regex text probes (the m34 record's second standing note,
+   * cashed — the m93/m94 honest lists' first item): the five appended
+   * rows, the pattern source as the payload, the string arms untouched
+   * (the M64 rule at selector width). The case rule rides the pattern's
+   * own inline flags (`(?i)save`), the probe is partial by default (a
+   * regex `test`, Playwright's `/re/` shape). */
+  TextRegex: 8,
+  LabelRegex: 9,
+  ValueRegex: 10,
+  RoleNameRegex: 11,
+  HasTextRegex: 12,
 } as const;
 
 export const NthV1 = { First: 0, Last: 1, Index: 2 } as const;
@@ -477,7 +488,20 @@ export type Selector =
   /** The selector-valued positive filter (the m34 record's named
    * follow-on): keep the source's matches whose subtree — the node
    * included — matches `has`. The appended variant, index 7. */
-  | { kind: "has"; source: Selector; has: Selector };
+  | { kind: "has"; source: Selector; has: Selector }
+  /** The regex text probes (the m34 standing note cashed): the pattern
+   * source rides alone — the case rule via inline flags (`(?i)`), the
+   * probe partial by default (a regex `test`), full-match rules compose
+   * the anchors into the pattern. The appended rows, indices 8–12, the
+   * string arms' encodings unchanged. */
+  | { kind: "text_regex"; pattern: string }
+  | { kind: "label_regex"; pattern: string }
+  | { kind: "value_regex"; pattern: string }
+  | { kind: "role_name_regex"; role: string; pattern: string }
+  /** The regex `has_text` filter — `filter({ hasText: /re/ })`: the
+   * source's matches whose text (the node included, the subtree walk)
+   * fits the pattern. */
+  | { kind: "has_text_regex"; source: Selector; pattern: string };
 
 /** The document-order pick (`NthV1`): first / last / an index. */
 export type Nth = { kind: "first" } | { kind: "last" } | { kind: "index"; index: number };
