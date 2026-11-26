@@ -55,6 +55,7 @@ fn published_schema_matches_the_wire_enums() {
         inspect_variants()
     );
     assert_eq!(domains["video"]["variants"].as_array().unwrap().len(), 2);
+    assert_eq!(domains["trace"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["window"]["variants"].as_array().unwrap().len(), 2);
     assert_eq!(domains["gesture"]["variants"].as_array().unwrap().len(), 5);
     assert_eq!(
@@ -101,6 +102,11 @@ fn published_schema_matches_the_wire_enums() {
     assert_eq!(doc["responses"][25]["name"], "DescribedIdentityState");
     // The m70 frontier reply: the M68 row per match, document order.
     assert_eq!(doc["responses"][26]["name"], "DescribedAllIdentityState");
+    // The m97 frontier: the trace domain appends after the describe
+    // family — the archive-control Start/Stop arms the M18 Attach arm
+    // completes, the `TraceFile` reply carrying the finalized archive.
+    assert_eq!(doc["requests"][24]["name"], "Trace");
+    assert_eq!(doc["responses"][27]["name"], "TraceFile");
 
     // The M68 checked vocabulary is its own published domain table (the
     // m67 record's named gap closed as a four-way word).
@@ -156,13 +162,14 @@ fn response_variants() -> usize {
         | ResponseV1::DescribedAllIdentity { .. }
         | ResponseV1::DescribedIdentity(_)
         | ResponseV1::DescribedIdentityState(_)
-        | ResponseV1::DescribedAllIdentityState { .. } => 27usize,
+        | ResponseV1::DescribedAllIdentityState { .. }
+        | ResponseV1::TraceFile { .. } => 28usize,
     };
     probe(ResponseV1::Pong)
 }
 
 fn request_variants() -> usize {
-    24 + match RequestV1::Ping {
+    25 + match RequestV1::Ping {
         RequestV1::Hello { .. }
         | RequestV1::Ping
         | RequestV1::TreeSnapshot
@@ -186,7 +193,8 @@ fn request_variants() -> usize {
         | RequestV1::DescribeAllIdentity(_)
         | RequestV1::DescribeIdentity(_)
         | RequestV1::DescribeIdentityState(_)
-        | RequestV1::DescribeAllIdentityState(_) => 0,
+        | RequestV1::DescribeAllIdentityState(_)
+        | RequestV1::Trace(_) => 0,
     }
 }
 
