@@ -43,7 +43,8 @@ const fn v(index: u64, name: &'static str, payload: &'static str) -> Variant {
 /// fact set at handle width), `DescribeIdentityState` follows
 /// `DescribeIdentity` (M68, the state facts' widening) and
 /// `DescribeAllIdentityState` follows `DescribeIdentityState` (M70,
-/// the state facts at set width); the pinning tests enforce the order.
+/// the state facts at set width); `Trace` follows the describe family
+/// (M97, the §7 archive-control arms); the pinning tests enforce the order.
 const REQUESTS: &[Variant] = &[
     v(0, "Hello", "{ proto_version: u32 varint, agent: string }"),
     v(1, "Ping", "—"),
@@ -113,6 +114,11 @@ const REQUESTS: &[Variant] = &[
         "DescribeAllIdentityState",
         "{ selector: SelectorV1 } — the same walk carrying the state three beside the identity four and the description fact (M70, the m68/m69 records' named standing gap: the state facts at set width) → DescribedAllIdentityState; the M64/M68 encodings stay byte-pinned, the widening is its own domain reusing the DescribeAll payload — one round trip instead of one DescribeIdentityState per row",
     ),
+    v(
+        24,
+        "Trace",
+        "TraceV1 (see domains.trace) — the §7 archive-control Start/Stop arms (M97); the Attach arm is the M18 live feed (domains.subscribe + the viewer's LiveFeed), unchanged",
+    ),
 ];
 
 /// The response table, in wire order. Append-only: `VideoFile` follows
@@ -123,8 +129,9 @@ const REQUESTS: &[Variant] = &[
 /// M32 `HitTest` reply at 20, the M36 `Described` reply at 21, the
 /// M39 `DescribedAll` reply at 22, the M64 `DescribedAllIdentity`
 /// reply at 23, the M66 `DescribedIdentity` reply at 24, the M68
-/// `DescribedIdentityState` reply at 25 and the M70
-/// `DescribedAllIdentityState` reply at 26.
+/// `DescribedIdentityState` reply at 25, the M70
+/// `DescribedAllIdentityState` reply at 26 and the M97 `TraceFile`
+/// reply at 27.
 const RESPONSES: &[Variant] = &[
     v(
         0,
@@ -225,6 +232,11 @@ const RESPONSES: &[Variant] = &[
         "DescribedAllIdentityState",
         "{ rows: seq<DescribedIdentityStateV1 { node: NodeKeyV1, generation: u32 varint, role: string, name: option<string>, value: option<string>, bounds: option<[f64; 4]>, description: option<string>, focused: bool, enabled: bool, checked: CheckedStateV1 (see domains.checked_state) }> } — the same walk's rows carrying the state three beside the identity four and the description fact (M70, the m68/m69 records' named standing gap); document order, an empty set answers with an empty list",
     ),
+    v(
+        27,
+        "TraceFile",
+        "{ path: string, events: u64 varint, frames: u64 varint, records_dropped: u64 varint, archive_bytes: u64 varint } — the finalized gwtrace/v1 archive (M97, §12): the path the client-owned dir landed the file at plus the recorder stats naming what the archive carries (the event rows, the hash-deduped frame set, the ring pressure, the zip size)",
+    ),
 ];
 
 /// Server-push events (multiplexed by `seq` per topic, §7).
@@ -294,6 +306,10 @@ fn domains_json() -> serde_json::Value {
             "video": domain_table("VideoV1", &[
                 (0, "Start", "{ opts: VideoOptsV1 { fps: u32 varint (0 = driver default), dir: option<string> (client-owned artifact dir) } }"),
                 (1, "Stop", "—"),
+            ]),
+            "trace": domain_table("TraceV1", &[
+                (0, "Start", "{ opts: TraceOptsV1 { test: string (the §12 meta.json test label), dir: option<string> (client-owned artifact dir, null = GUIWRIGHT_TRACE_DIR or the OS temp dir) } } → Pong; the session records the gwtrace/v1 archive from its own taps (tree diffs, presented frames, protocol calls, the clock ledger folded at stop); the connection's window scope tags the stream (the m6 §5 handle vocabulary); single-slot — a second Start is the typed rejection"),
+                (1, "Stop", "— → TraceFile { path, events, frames, records_dropped, archive_bytes }; one final pump lands the last frame before the zip closes; stopping with no recording is the typed rejection"),
             ]),
             "window": domain_table("WindowV1", &[
                 (0, "List", "— → Windows"),
