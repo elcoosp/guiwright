@@ -349,6 +349,42 @@ test("requests encode byte-identical to the Rust wire", () => {
       kind: "describe_all_identity_state",
       selector: { kind: "role", role: "CheckBox", name: null },
     }),
+    // The regex text probes (the m34 standing note cashed): the five
+    // appended SelectorV1 rows, the pattern source as the payload — the
+    // bytes pin the published table (the M64 rule at selector width).
+    resolve_text_regex: () => ({
+      kind: "resolve",
+      selector: { kind: "text_regex", pattern: "(?i)save|cancel" },
+      timeout_ms: 5000,
+    }),
+    resolve_label_regex: () => ({
+      kind: "resolve",
+      selector: { kind: "label_regex", pattern: "^Wel.* Ada$" },
+      timeout_ms: 0,
+    }),
+    resolve_value_regex: () => ({
+      kind: "resolve",
+      selector: { kind: "value_regex", pattern: "^\\S+@\\S+\\.\\S+$" },
+      timeout_ms: 0,
+    }),
+    resolve_role_name_regex: () => ({
+      kind: "resolve",
+      selector: {
+        kind: "role_name_regex",
+        role: "Button",
+        pattern: "^(Save|Cancel)$",
+      },
+      timeout_ms: 5000,
+    }),
+    resolve_has_text_regex: () => ({
+      kind: "resolve",
+      selector: {
+        kind: "has_text_regex",
+        source: { kind: "role", role: "Button", name: null },
+        pattern: "^Save$",
+      },
+      timeout_ms: 0,
+    }),
     bye: () => ({ kind: "bye" }),
   };
 
