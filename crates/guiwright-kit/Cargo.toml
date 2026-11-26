@@ -30,6 +30,10 @@ guiwright-viewer.workspace = true
 accesskit.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# The §12 `logs.ndjson` tee installs the recorder's `TraceLogLayer` as a
+# thread-local subscriber while an archive records — the registry composes
+# it (the driver session's tee rides the same crate pin).
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
