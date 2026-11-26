@@ -27,8 +27,8 @@ use guiwright_proto::schema::{
     AdapterInfoV1, CapsV1, CheckedStateV1, ClockV1, DescribeAllV1, DescribeV1,
     DescribedIdentityStateV1, DescribedIdentityV1, DescribedV1, ErrorCode, EventKindV1, EventV1,
     GwpEvent, InspectV1, MockV1, NodeKeyV1, PROTO_VERSION, RequestV1, ResolvedMatchV1, ResponseV1,
-    ResumeCursorV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, VideoV1,
-    WindowInfoV1, WindowV1,
+    ResumeCursorV1, ScreenshotV1, SelectorV1, SemActionV1, SnapshotV1, SubscribeV1, TraceV1,
+    VideoV1, WindowInfoV1, WindowV1,
 };
 use guiwright_proto::tcp;
 use guiwright_proto::uds::{self, Handler};
@@ -848,6 +848,11 @@ fn handle_request<A: FrameworkAdapter>(
     events: Option<(u64, mpsc::Sender<GwpEvent>)>,
     tail_enabled: bool,
 ) -> ResponseV1 {
+    // The trace archive's protocol-call tap (§12 events.ndjson, M97):
+    // every dispatched request lands as one seq'd event row while an
+    // archive records — the session-side record of what the wire did.
+    // No-op unless the Trace domain started a recording.
+    session.trace_protocol(protocol_kind(&request));
     match request {
         RequestV1::Hello { .. } => {
             let meta = session.adapter().meta();
@@ -948,6 +953,7 @@ fn handle_request<A: FrameworkAdapter>(
         RequestV1::Mock(cmd) => mock_response(session, cmd),
         RequestV1::Inspect(cmd) => inspect_response(session, cmd),
         RequestV1::Video(cmd) => video_response(session, cmd, window),
+        RequestV1::Trace(cmd) => trace_response(session, cmd, window),
         RequestV1::Window(cmd) => window_response(session, cmd),
         RequestV1::Screenshot(cmd) => screenshot_response(session, cmd, window),
         RequestV1::Snapshot(cmd) => tree_dump_response(session, cmd, window),
@@ -1539,6 +1545,79 @@ fn video_response<A: FrameworkAdapter>(
             },
             Err(err) => error_response(&err),
         },
+    }
+}
+
+/// §7 trace domain (§12 archive, M97): recording control over any door.
+/// Wired to the session's trace service — the archive rides the session's
+/// own taps (tree diffs + presented frames in the pump, protocol calls in
+/// the dispatch, the clock ledger folded at stop), so the client only
+/// owns the test label and the artifact dir (Playwright parity, the video
+/// rule). The connection's active window target tags the stream (the m6
+/// §5 handle vocabulary the video scope rides).
+fn trace_response<A: FrameworkAdapter>(
+    session: &mut Session<A>,
+    cmd: TraceV1,
+    window: Option<&str>,
+) -> ResponseV1 {
+    match cmd {
+        TraceV1::Start(opts) => {
+            let result = if let Some(dir) = opts.dir.as_deref() {
+                session.trace_start_in(std::path::Path::new(dir), &opts.test, window)
+            } else {
+                let dir = std::env::var_os("GUIWRIGHT_TRACE_DIR")
+                    .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+                session.trace_start_in(&dir, &opts.test, window)
+            };
+            match result {
+                Ok(()) => ResponseV1::Pong,
+                Err(err) => error_response(&err),
+            }
+        }
+        TraceV1::Stop => match session.trace_stop() {
+            Ok(file) => ResponseV1::TraceFile {
+                path: file.path.display().to_string(),
+                events: file.stats.events,
+                frames: file.stats.frames,
+                records_dropped: file.stats.records_dropped,
+                archive_bytes: file.stats.archive_bytes,
+            },
+            Err(err) => error_response(&err),
+        },
+    }
+}
+
+/// The trace archive's protocol-call vocabulary (§12 events.ndjson, M97):
+/// one stable word per request variant — the archive's seq'd record of
+/// what the wire did, the same amortized-row shape the kit's action taps
+/// carry.
+fn protocol_kind(request: &RequestV1) -> &'static str {
+    match request {
+        RequestV1::Hello { .. } => "hello",
+        RequestV1::Ping => "ping",
+        RequestV1::TreeSnapshot => "tree_snapshot",
+        RequestV1::Resolve { .. } => "resolve",
+        RequestV1::Action { .. } => "action",
+        RequestV1::Input { .. } => "input",
+        RequestV1::Clock(_) => "clock",
+        RequestV1::Mock(_) => "mock",
+        RequestV1::Inspect(_) => "inspect",
+        RequestV1::Bye => "bye",
+        RequestV1::Video(_) => "video",
+        RequestV1::Trace(_) => "trace",
+        RequestV1::Window(_) => "window",
+        RequestV1::Gesture(_) => "gesture",
+        RequestV1::Screenshot(_) => "screenshot",
+        RequestV1::Snapshot(_) => "snapshot",
+        RequestV1::Subscribe(_) => "subscribe",
+        RequestV1::ResolveAll { .. } => "resolve_all",
+        RequestV1::HitTest { .. } => "hit_test",
+        RequestV1::Describe(_) => "describe",
+        RequestV1::DescribeAll(_) => "describe_all",
+        RequestV1::DescribeAllIdentity(_) => "describe_all_identity",
+        RequestV1::DescribeIdentity(_) => "describe_identity",
+        RequestV1::DescribeIdentityState(_) => "describe_identity_state",
+        RequestV1::DescribeAllIdentityState(_) => "describe_all_identity_state",
     }
 }
 
