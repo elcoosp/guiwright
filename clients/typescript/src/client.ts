@@ -19,8 +19,19 @@ import { encodeRequest, decodeResponse } from "./codec.ts";
 export { PROTO_VERSION } from "./schema.ts";
 /** The typed filter composition (the m34 record's named TS pass): the
  * `filter({ hasText, hasNot, has, nth })` rows and the m91 `has` variant,
- * composed client-side. */
-export { filter, type FilterOpts } from "./filter.ts";
+ * composed client-side — plus the m95 regex text rows (`textRegex`,
+ * `labelRegex`, `valueRegex`, `roleNameRegex`, `hasTextRegex`, the
+ * `RegExp` acceptance folding the wire-readable flags inline). */
+export {
+  filter,
+  textRegex,
+  labelRegex,
+  valueRegex,
+  roleNameRegex,
+  hasTextRegex,
+  toRegexPattern,
+  type FilterOpts,
+} from "./filter.ts";
 export type { Nth, Selector, TextMatchV1 } from "./schema.ts";
 import { encodeFrame, FrameReader } from "./framing.ts";
 import { renderSelector, WaitTracker, type WaitState } from "./wait.ts";
