@@ -45,22 +45,74 @@ impl TextMatch {
         }
     }
 
+    /// The regex probe (the m34 record's second standing note, cashed —
+    /// the m93/m94 honest lists' first item): a JS-convention regex
+    /// `test` — partial by default, **case-sensitive** unless the
+    /// pattern carries its own inline flags (`(?i)save`), the
+    /// [`TextMatch::exact`] flag anchoring it (`^…$`). The
+    /// `ignore_case` field never applies to a regex — the pattern speaks
+    /// its own case rule (the wire regex rows carry the pattern only).
+    pub fn regex(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: TextPattern::Regex(pattern.into()),
+            exact: false,
+            ignore_case: false,
+        }
+    }
+
+    /// The regex probe with [`TextMatch::exact`] set — the pattern is
+    /// wrapped `^(?:…)$` so a full-match rule composes without editing
+    /// the source (Playwright's `exact: true` reading at regex width).
+    pub fn regex_exact(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: TextPattern::Regex(pattern.into()),
+            exact: true,
+            ignore_case: false,
+        }
+    }
+
     /// Test a candidate string against this rule. Both sides are
     /// whitespace-normalized (Playwright normalizes both).
     pub fn matches(&self, candidate: &str) -> bool {
         let candidate = normalize(candidate);
-        let needle = normalize(self.pattern.as_str());
-        if self.ignore_case {
-            let (candidate, needle) = (candidate.to_lowercase(), needle.to_lowercase());
-            if self.exact {
-                candidate == needle
-            } else {
-                candidate.contains(&needle)
+        match &self.pattern {
+            TextPattern::Str(needle) => {
+                let needle = normalize(needle);
+                if self.ignore_case {
+                    let (candidate, needle) = (candidate.to_lowercase(), needle.to_lowercase());
+                    if self.exact {
+                        candidate == needle
+                    } else {
+                        candidate.contains(&needle)
+                    }
+                } else if self.exact {
+                    candidate == needle
+                } else {
+                    candidate.contains(&needle)
+                }
             }
-        } else if self.exact {
-            candidate == needle
-        } else {
-            candidate.contains(&needle)
+            // The regex probe (the m34 standing note, cashed): the
+            // candidate is normalized, the pattern is not (it is a
+            // pattern, not literal text). An uncompilable source answers
+            // the honest `false` — the callers validate at their own
+            // boundary ([`TextMatch::try_regex`]), the resolver never
+            // panics (the fuzz rule).
+            TextPattern::Regex(source) => {
+                if self.exact {
+                    // The anchored form wraps the pattern (`^…$`), never
+                    // the candidate — a full-match rule composed from a
+                    // partial source.
+                    match regex::Regex::new(&format!("^(?:{source})$")) {
+                        Ok(re) => re.is_match(&candidate),
+                        Err(_) => false,
+                    }
+                } else {
+                    match regex::Regex::new(source) {
+                        Ok(re) => re.is_match(&candidate),
+                        Err(_) => false,
+                    }
+                }
+            }
         }
     }
 }
@@ -84,21 +136,45 @@ pub fn normalize(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// The text itself. The codegen milestone has since shipped (m87)
-/// without asking for regex — the cost model emits exact/fuzzy strings
-/// only — so the enum stays `Str`-shaped until a consumer actually asks
-/// (the m34 record's standing note; the architecture keeps the enum
-/// open).
+/// The text itself. The regex arm is the m34 record's second standing
+/// note cashed (the m93/m94 honest lists' first item — *"the enum stays
+/// open until the codegen milestone asks"*; the codegen milestones
+/// shipped without asking, and the prompt-side gap the m93/m94 records
+/// named — *"the REPL's `has_text` word speaks the fuzzy `TextMatch`
+/// default only"* — is the consumer that arrived): the arm carries the
+/// pattern **source** string only, compiled per match (the
+/// [`TextMatch::matches`] arm owns the semantics; the resolve path's
+/// string probes keep their §15.1 budget rows — a regex probe rides the
+/// same resolve conversations, no row of its own).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextPattern {
     Str(String),
+    Regex(String),
 }
 
 impl TextPattern {
     pub fn as_str(&self) -> &str {
+        // Both arms carry the pattern source — the string probe's needle
+        // and the regex probe's source share the accessor (the
+        // `TextMatchV1` bridge reads it without knowing the arm).
         match self {
-            TextPattern::Str(s) => s,
+            TextPattern::Str(s) | TextPattern::Regex(s) => s,
         }
+    }
+
+    /// The regex arm's constructor.
+    pub fn regex(source: impl Into<String>) -> Self {
+        TextPattern::Regex(source.into())
+    }
+
+    /// The typed check the boundary callers compose ([`TextMatch::try_regex`],
+    /// the REPL's `/…/` literal parse): is this source a regex the crate
+    /// compiles? The error text is the regex crate's own — the
+    /// failures-name-names rule.
+    pub fn validate(source: &str) -> Result<(), String> {
+        regex::Regex::new(source)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -135,6 +211,25 @@ impl From<String> for TextMatch {
 impl From<&String> for TextMatch {
     fn from(s: &String) -> Self {
         TextMatch::new(s.as_str())
+    }
+}
+
+impl From<TextPattern> for TextMatch {
+    fn from(pattern: TextPattern) -> Self {
+        TextMatch::new(pattern)
+    }
+}
+
+impl TextMatch {
+    /// The validated regex probe ([`TextMatch::regex`] with the
+    /// boundary check): an uncompilable source is the typed error, the
+    /// message the regex crate itself printed — the REPL's `/…/` parse
+    /// and the kit's programmatic builders compose it so a bad pattern
+    /// never reaches the resolver silently.
+    pub fn try_regex(pattern: impl Into<String>) -> Result<Self, String> {
+        let source = pattern.into();
+        TextPattern::validate(&source)?;
+        Ok(TextMatch::regex(source))
     }
 }
 
@@ -348,11 +443,17 @@ impl Selector {
 }
 
 fn render_match(m: &TextMatch) -> String {
-    let inner = m.pattern.as_str();
-    if m.exact && !m.ignore_case {
-        format!("{inner:?}")
-    } else {
-        format!("{inner:?} (fuzzy)")
+    match &m.pattern {
+        // The regex probe renders the JS literal shape — what you built
+        // is what the error names (the failures-name-names rule).
+        TextPattern::Regex(source) => format!("/{source}/"),
+        TextPattern::Str(inner) => {
+            if m.exact && !m.ignore_case {
+                format!("{inner:?}")
+            } else {
+                format!("{inner:?} (fuzzy)")
+            }
+        }
     }
 }
 
@@ -383,6 +484,52 @@ mod tests {
         assert!(m.matches("Hello world"));
         let m = TextMatch::new("hello  world");
         assert!(m.matches("Hello\tWorld"));
+    }
+
+    #[test]
+    fn regex_probe_is_partial_and_case_sensitive_by_default() {
+        let m = TextMatch::regex("Save");
+        assert!(m.matches("Save"));
+        assert!(
+            m.matches("Save all"),
+            "partial — a regex `test`, not a full match"
+        );
+        assert!(
+            !m.matches("save"),
+            "case-sensitive until the pattern says (?i)"
+        );
+        let m = TextMatch::regex("(?i)^save all$");
+        assert!(
+            m.matches("  SAVE   ALL  "),
+            "inline flags + normalized candidate"
+        );
+    }
+
+    #[test]
+    fn regex_exact_anchors_the_pattern() {
+        let m = TextMatch::regex_exact("Save");
+        assert!(m.matches("Save"));
+        assert!(
+            !m.matches("Save all"),
+            "anchored — the wrapped form full-matches"
+        );
+    }
+
+    #[test]
+    fn an_uncompilable_pattern_matches_nothing() {
+        let m = TextMatch::regex("(unclosed[");
+        assert!(!m.matches("anything"), "the honest false, never a panic");
+        let err = TextMatch::try_regex("(unclosed[").unwrap_err();
+        assert!(err.contains("unclosed character class"), "{err}");
+        assert!(TextMatch::try_regex("^Save$").is_ok());
+    }
+
+    #[test]
+    fn regex_render_is_the_literal_shape() {
+        let s = Selector::text(TextMatch::regex("(?i)save|cancel"));
+        assert_eq!(s.render(), "getByText(/(?i)save|cancel/)");
+        let s = Selector::role_named(Role::Button, "Save").first();
+        assert_eq!(s.render(), "getByRole(Button, \"Save\" (fuzzy)).first()");
     }
 
     #[test]
