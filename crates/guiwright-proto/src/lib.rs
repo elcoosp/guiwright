@@ -59,7 +59,7 @@ pub use expect::ExpectKind;
 pub use schema::{
     AdapterInfoV1, CapsV1, ErrorCode, EventV1, GwpEvent, GwpRequest, GwpResponse, InputEventV1,
     NodeKeyV1, NthV1, PROTO_VERSION, PointerButtonV1, RequestV1, ResponseV1, SelectorV1,
-    SemActionV1, TextMatchV1, VIDEO_DEFAULT_FPS, VideoOptsV1, VideoV1,
+    SemActionV1, TextMatchV1, TraceOptsV1, TraceV1, VIDEO_DEFAULT_FPS, VideoOptsV1, VideoV1,
 };
 pub use tcp::Client as TcpClient;
 // The probe vocabulary the wire rows mirror (the m95 regex rows speak
