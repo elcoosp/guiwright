@@ -372,3 +372,24 @@ test("§12 live trace HTML: the Rust emitter captures the TS client's session", 
   assert.ok(html.includes("Save"), "the captured tree rides the payload");
   assert.ok(html.includes("Cancel"), "the full dump is in the payload");
 });
+
+test("§7 trace domain: TS starts the archive, acts, stops, gets the finalized stats (m97)", async () => {
+  const client = await GwpClient.connectTcp(demo.addr);
+  try {
+    await client.handshake("ts-e2e-trace/0.1");
+    const dir = mkdtempSync(join(tmpdir(), "gw-trace-e2e-"));
+    await client.traceStart({ test: "ts-e2e-trace", dir });
+    const save = await client.resolve(
+      { kind: "role", role: "Button", name: { text: "Save", exact: false, ignore_case: true } },
+      2000,
+    );
+    assert.ok(save, "the resolve lands inside the recording window");
+    const file = await client.traceStop();
+    assert.ok(file.path.startsWith(dir), "the archive lives in the client-owned dir");
+    assert.ok(existsSync(file.path), "the archive exists at the replied path");
+    assert.ok(file.events >= 2, `the protocol calls are recorded (${file.events})`);
+    assert.equal(file.records_dropped, 0, "a two-request session never drops records");
+  } finally {
+    await client.close();
+  }
+});
