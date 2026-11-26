@@ -667,3 +667,19 @@ p50_us = 20000000
 p95_us = 60000000
 notes = "the §15.7 macro row's suite slice (m97's bench leg): 1 000 expect-assert round trips through the in-process door on the real egui adapter — the suite wall clock the §15.7 'wall-clock for 1 000 asserts' row names; design target, m0_measurable=false until the framework runtime matrix lands (the iced_tree_readback row's rule)"
 m0_measurable = false
+
+[[budget]]
+id = "macro_masonry_action"
+name = "§15.7 macro session: one scripted resolve+act action end-to-end (synthetic masonry app, 1 k nodes)"
+p50_us = 2000
+p95_us = 10000
+notes = "the §15.7 macro row's per-action slice, masonry surface: one scripted resolve+click round trip through the in-process door on the real masonry adapter over the synthetic 1 k-node app — the resolve's a11y walk + actionability checks + the act rendezvous pump, marshalled; the design target the §15.1 per-mechanism rows compose into (the egui row's numbers carried — same composition rule); m0_measurable=false until the framework runtime matrix lands in the CI guard (the iced_tree_readback row's rule), the bench leg measures it"
+m0_measurable = false
+
+[[budget]]
+id = "macro_masonry_assert_suite"
+name = "§15.7 macro session: 1 000-assert suite wall clock (synthetic masonry app, 1 k nodes)"
+p50_us = 20000000
+p95_us = 60000000
+notes = "the §15.7 macro row's suite slice, masonry surface: 1 000 expect-assert round trips through the in-process door on the real masonry adapter over the synthetic 1 k-node app — the suite wall clock the §15.7 'wall-clock for 1 000 asserts' row names; design target (the egui row's numbers carried), m0_measurable=false until the framework runtime matrix lands (the iced_tree_readback row's rule)"
+m0_measurable = false
