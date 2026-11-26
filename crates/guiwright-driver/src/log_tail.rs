@@ -233,7 +233,7 @@ pub(crate) struct LogTapLayer {
 }
 
 impl LogTapLayer {
-    pub(crate) fn new(tap: LogTap) -> Self {
+    pub(crate) fn new(tap: &LogTap) -> Self {
         Self {
             tap: Arc::clone(&tap.inner),
             start: Instant::now(),
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn the_layer_formats_the_logs_ndjson_vocabulary() {
         let (tail, tap) = LogTail::new(16);
-        let layer = LogTapLayer::new(tap);
+        let layer = LogTapLayer::new(&tap);
         {
             let subscriber = tracing_subscriber::registry().with(layer);
             let _guard = subscriber.set_default();
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn debug_values_keep_their_quoting() {
         let (tail, tap) = LogTail::new(4);
-        let layer = LogTapLayer::new(tap);
+        let layer = LogTapLayer::new(&tap);
         {
             let subscriber = tracing_subscriber::registry().with(layer);
             let _guard = subscriber.set_default();
