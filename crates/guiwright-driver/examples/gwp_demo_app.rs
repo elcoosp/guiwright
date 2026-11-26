@@ -16,9 +16,9 @@
 //! The app serves the state fixture (Save/Cancel + the Install button
 //! whose row carries `"Installs the latest build"` + the M20 checkbox
 //! trio the m68 state facts read answers), the virtual clock and
-//! two state seams — exactly the surface the TS client covers: handshake →
+//! two state seams — exactly the surface the `TS` client covers: handshake →
 //! resolve → act → clock → mock → bye. `--fixture combobox` swaps in the
-//! m89 select-vocabulary fixture (the buttons() base + the ComboBox
+//! m89 select-vocabulary fixture (the `buttons()` base + the `ComboBox`
 //! "Country" row on the NodeId(15) band, the base set byte-stable) for
 //! the appended-action conversations.
 
