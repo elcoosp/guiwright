@@ -27,7 +27,7 @@ fn socket_path(tag: &str) -> std::path::PathBuf {
 }
 
 /// Script the checked-fact move of the fixture's Dark-mode checkbox
-/// (NodeId 10, `Toggled::False` in `Fixture::with_checkboxes`) — the
+/// (`NodeId` 10, `Toggled::False` in `Fixture::with_checkboxes`) — the
 /// app-side state change a real adapter's widget mutation carries. The
 /// fixture's own toggle helper re-states the row bounded (the
 /// actionability gate reads bounds).
