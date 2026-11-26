@@ -27,9 +27,17 @@ fn highlight_aims_the_outline_and_returns_facts() {
     let facts = app.inspect().highlight(&save).expect("highlight resolves");
     assert_eq!(facts.role.as_deref(), Some("Button"));
     assert_eq!(facts.name.as_deref(), Some("Save"));
+    // The fixture rects are deterministic constants — the pins are exact
+    // by construction, so the comparison rides the bits (the exactness IS
+    // the assertion; no tolerance belongs in a fixture pin).
     assert_eq!(
-        facts.bounds.expect("fixture bounds"),
-        [16.0, 16.0, 136.0, 48.0]
+        facts.bounds.expect("fixture bounds").map(f64::to_bits),
+        [
+            16.0f64.to_bits(),
+            16.0f64.to_bits(),
+            136.0f64.to_bits(),
+            48.0f64.to_bits()
+        ]
     );
     assert!(app.inspect().is_active(), "highlight implies the session");
     let plan = app
@@ -38,9 +46,20 @@ fn highlight_aims_the_outline_and_returns_facts() {
         .overlay()
         .expect("the adapter composites the plan");
     let hover = plan.hover.expect("Save is outlined");
+    // Same bit-exact pin (the hover rect is the resolved fact's bounds).
     assert_eq!(
-        [hover.x0, hover.y0, hover.x1, hover.y1],
-        [16.0, 16.0, 136.0, 48.0]
+        [
+            hover.x0.to_bits(),
+            hover.y0.to_bits(),
+            hover.x1.to_bits(),
+            hover.y1.to_bits()
+        ],
+        [
+            16.0f64.to_bits(),
+            16.0f64.to_bits(),
+            136.0f64.to_bits(),
+            48.0f64.to_bits()
+        ]
     );
     assert!(
         plan.badges.iter().any(|b| b.text.contains("Save")),
