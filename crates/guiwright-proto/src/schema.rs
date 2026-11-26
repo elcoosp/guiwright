@@ -254,6 +254,43 @@ pub enum RequestV1 {
     /// appended after `DescribeIdentityState` (discriminant 23); see
     /// [`RequestV1::Video`].
     DescribeAllIdentityState(DescribeAllV1),
+    /// Trace domain (§7 "Domain: trace & inspector", M97): the
+    /// archive-control half of the sketch's
+    /// `Trace { Start(opts) | Stop | Attach(stream) }` — the **Attach**
+    /// arm is the M18 live feed (the §7 event channel + the viewer's
+    /// `LiveFeed`, unchanged here); Start/Stop record the §12
+    /// `gwtrace/v1` archive on the session side, over any door. The
+    /// client owns the artifact dir (Playwright parity, the video rule)
+    /// and learns the finalized archive from the [`ResponseV1::TraceFile`]
+    /// reply — the same shape the §10 video seam rides. Wire discipline:
+    /// appended after the describe family (discriminant 24); see
+    /// [`RequestV1::Video`].
+    Trace(TraceV1),
+}
+
+/// The trace domain's commands (§7, M97): start a session-side
+/// `gwtrace/v1` archive, or stop and finalize it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum TraceV1 {
+    /// Start recording the session into a §12 archive.
+    Start(TraceOptsV1),
+    /// Stop and finalize the archive file.
+    Stop,
+}
+
+/// Trace recording options (§12 archive options, the client-owned subset).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceOptsV1 {
+    /// The test label the archive's `meta.json` carries (§12 "the test
+    /// the archive belongs to") — the remote-mode equivalent of the kit's
+    /// `App::enable_trace` test name.
+    pub test: String,
+    /// Output directory for the archive (Playwright-style: the client
+    /// owns the artifact dir, the video rule). `None` = the driver's
+    /// default (`GUIWRIGHT_TRACE_DIR` or the OS temp dir). Relative paths
+    /// resolve against the driver process's cwd. The file itself is the
+    /// §12 `guiwright-<test>-<ts>.zip` shape.
+    pub dir: Option<String>,
 }
 
 /// The describe-all read's request payload (§8.1/§8.2, M39): the
@@ -749,6 +786,26 @@ pub enum ResponseV1 {
         /// One row per match, document order (the `all()`/`count()`
         /// ordering).
         rows: Vec<DescribedIdentityStateV1>,
+    },
+    /// Trace domain reply (§7, M97): the finalized `gwtrace/v1` archive —
+    /// the path the client-owned dir landed the file at, plus the §12
+    /// recorder stats that name what the archive carries (the event rows,
+    /// the hash-deduped frame set, the ring pressure the session paid,
+    /// the zip size). Append-only wire discipline — see
+    /// [`RequestV1::Video`].
+    TraceFile {
+        /// The archive's path (the §12 `guiwright-<test>-<ts>.zip` shape).
+        path: String,
+        /// Event rows recorded (`events.ndjson`, §12).
+        events: u64,
+        /// Frames recorded (the hash-deduped `frames/` set, §12).
+        frames: u64,
+        /// Records shed by the bounded SPSC ring (§12 backpressure —
+        /// dropped records are the design working, never a silent loss:
+        /// the count rides the archive's `meta.json` too).
+        records_dropped: u64,
+        /// The finalized zip's size.
+        archive_bytes: u64,
     },
 }
 
@@ -2349,6 +2406,72 @@ mod tests {
             discriminant(&ResponseV1::DescribedAllIdentityState { rows: Vec::new() }),
             26
         );
+    }
+
+    /// §7 trace domain (M97): the archive-control half of the sketch's
+    /// `Trace { Start(opts) | Stop | Attach(stream) }` — the Attach arm is
+    /// the M18 live feed; Start/Stop append after the describe family,
+    /// the `TraceFile` reply after the describe-all state reply.
+    #[test]
+    fn m97_trace_domain_pins() {
+        fn discriminant<T: serde::Serialize>(value: &T) -> u64 {
+            let bytes = postcard::to_allocvec(value).expect("encode");
+            u64::from(bytes[0])
+        }
+        assert_eq!(
+            discriminant(&RequestV1::Trace(TraceV1::Start(TraceOptsV1 {
+                test: String::new(),
+                dir: None,
+            }))),
+            24
+        );
+        assert_eq!(discriminant(&RequestV1::Trace(TraceV1::Stop)), 24);
+        assert_eq!(
+            discriminant(&TraceV1::Start(TraceOptsV1 {
+                test: String::new(),
+                dir: None,
+            })),
+            0
+        );
+        assert_eq!(discriminant(&TraceV1::Stop), 1);
+        assert_eq!(
+            discriminant(&ResponseV1::TraceFile {
+                path: String::new(),
+                events: 0,
+                frames: 0,
+                records_dropped: 0,
+                archive_bytes: 0
+            }),
+            27
+        );
+    }
+
+    /// §7 trace domain round-trip (M97): the Start/Stop requests and the
+    /// `TraceFile` reply survive postcard both ways.
+    #[test]
+    fn trace_domain_roundtrip() {
+        let requests = [
+            GwpRequest::V1(RequestV1::Trace(TraceV1::Start(TraceOptsV1 {
+                test: "trace roundtrip".into(),
+                dir: Some("/tmp/gw-trace".into()),
+            }))),
+            GwpRequest::V1(RequestV1::Trace(TraceV1::Stop)),
+        ];
+        for req in requests {
+            let bytes = postcard::to_allocvec(&req).expect("encode");
+            let back: GwpRequest = postcard::from_bytes(&bytes).expect("decode");
+            assert_eq!(req, back);
+        }
+        let resp = GwpResponse::V1(ResponseV1::TraceFile {
+            path: "/tmp/gw-trace/guiwright-trace-1.zip".into(),
+            events: 3,
+            frames: 2,
+            records_dropped: 0,
+            archive_bytes: 128,
+        });
+        let bytes = postcard::to_allocvec(&resp).expect("encode");
+        let back: GwpResponse = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(resp, back);
     }
 
     /// §7 set-width identity-state describe round-trip (M70): the M39
