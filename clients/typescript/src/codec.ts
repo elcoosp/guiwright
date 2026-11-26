@@ -32,6 +32,8 @@ import {
   SemActionV1,
   type SemAction,
   type TextMatchV1,
+  type TraceCmd,
+  TraceV1,
   type VideoCmd,
   VideoV1,
   type WindowCmd,
@@ -184,6 +186,10 @@ export function encodeRequest(req: GwpRequest): Uint8Array {
     case "video":
       enc.u32(RequestV1.Video);
       encodeVideoCmd(enc, req.cmd);
+      break;
+    case "trace":
+      enc.u32(RequestV1.Trace);
+      encodeTraceCmd(enc, req.cmd);
       break;
     case "window":
       enc.u32(RequestV1.Window);
@@ -491,6 +497,19 @@ function encodeVideoCmd(enc: Encoder, cmd: VideoCmd): void {
   }
 }
 
+function encodeTraceCmd(enc: Encoder, cmd: TraceCmd): void {
+  switch (cmd.kind) {
+    case "start":
+      enc.u32(TraceV1.Start).str(cmd.opts.test);
+      enc.optionTag(cmd.opts.dir !== null);
+      if (cmd.opts.dir !== null) enc.str(cmd.opts.dir);
+      break;
+    case "stop":
+      enc.u32(TraceV1.Stop);
+      break;
+  }
+}
+
 function encodeWindowCmd(enc: Encoder, cmd: WindowCmd): void {
   switch (cmd.kind) {
     case "list":
@@ -740,6 +759,16 @@ function decodeResponseInner(variant: number, dec: Decoder): GwpResponseT {
       const rows: DescribedIdentityStateNode[] = [];
       for (let i = 0; i < n; i += 1) rows.push(decodeDescribedIdentityStateNode(dec));
       return { kind: "described_all_identity_state", rows };
+    }
+    case 27: {
+      // §7 trace domain reply (M97): the finalized gwtrace/v1 archive —
+      // the path plus the §12 recorder stats.
+      const path = dec.str();
+      const events = dec.u64n();
+      const frames = dec.u64n();
+      const records_dropped = dec.u64n();
+      const archive_bytes = dec.u64n();
+      return { kind: "trace_file", path, events, frames, records_dropped, archive_bytes };
     }
     default:
       throw new Error(`unknown response variant ${variant}`);
