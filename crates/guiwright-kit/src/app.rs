@@ -940,12 +940,44 @@ impl<A: FrameworkAdapter> Locator<'_, A> {
 }
 
 /// The embedded app (§6.3).
+/// Start a §12 recorder with the `logs.ndjson` tee armed: the recorder
+/// gets its sink, and the caller's thread gains a thread-local `tracing`
+/// default whose `TraceLogLayer` feeds that sink — the plan row the
+/// archive schema has carried since v0.1 ("`tracing` subscriber output"),
+/// the half the m97 record's honest list named for the kit ("the kit's
+/// archives don't either"). The guard's scope is the recording: dropping
+/// it restores the thread's previous default. The adapter and the kit run
+/// on the test thread in embedded mode (§5.1), so the records the drive
+/// emits land in the archive.
+fn start_recorder_with_logs(
+    options: TraceOptions,
+) -> (
+    Option<TraceRecorder>,
+    Option<tracing::subscriber::DefaultGuard>,
+) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    let (recorder, sink) = TraceRecorder::start_with_sink(options);
+    let layer = guiwright_trace::TraceLogLayer::new(sink);
+    (
+        Some(recorder),
+        Some(tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(layer),
+        )),
+    )
+}
+
 pub struct App<A: FrameworkAdapter = MockAdapter> {
     pub(crate) session: Session<A>,
     context: TestContext,
     config: GuiwrightConfig,
     baseline_root: Option<PathBuf>,
     trace: Option<TraceRecorder>,
+    /// The §12 `logs.ndjson` tee's subscriber scope (the driver session
+    /// carries the same pair): the thread-local `tracing` default routing
+    /// the test thread's records into the recording archive, installed at
+    /// `enable_trace`/`GW_TRACE` and dropped at `finish`. `None` = not
+    /// recording.
+    trace_log_guard: Option<tracing::subscriber::DefaultGuard>,
     trace_path: Option<PathBuf>,
     finished: bool,
     /// Clock-ledger rows already flushed to the trace (incremental flush,
@@ -999,8 +1031,10 @@ impl<A: FrameworkAdapter> App<A> {
         let config =
             guiwright_shot::config::load_from_dir(&context.baseline_dir()).unwrap_or_default();
         // Tracing is opt-in per §12 (GW_TRACE=1) — the writer thread must
-        // never spin for tests that do not ask for it.
-        let trace = if std::env::var("GW_TRACE").ok().as_deref() == Some("1") {
+        // never spin for tests that do not ask for it. The tee rides the
+        // same rule (the §12 `logs.ndjson` row): while the archive
+        // records, the test thread's `tracing` output lands in it.
+        let (trace, trace_log_guard) = if std::env::var("GW_TRACE").ok().as_deref() == Some("1") {
             let path = context.trace_path();
             let options = TraceOptions::new(
                 path.clone(),
@@ -1011,9 +1045,9 @@ impl<A: FrameworkAdapter> App<A> {
                     framework_version: adapter.meta().framework_version.clone(),
                 },
             );
-            Some(TraceRecorder::start(options))
+            start_recorder_with_logs(options)
         } else {
-            None
+            (None, None)
         };
         Self {
             session: Session::new(adapter),
@@ -1021,6 +1055,7 @@ impl<A: FrameworkAdapter> App<A> {
             config,
             baseline_root: None,
             trace,
+            trace_log_guard,
             trace_path: None,
             finished: false,
             ledger_written: 0,
@@ -1066,7 +1101,9 @@ impl<A: FrameworkAdapter> App<A> {
         if let Some(handle) = window {
             options = options.with_window(handle);
         }
-        self.trace = Some(TraceRecorder::start(options));
+        let (trace, guard) = start_recorder_with_logs(options);
+        self.trace = trace;
+        self.trace_log_guard = guard;
     }
 
     pub fn context(&self) -> &TestContext {
@@ -1422,13 +1459,16 @@ impl<A: FrameworkAdapter> App<A> {
     }
 
     /// Stop the trace and return the archive path (§12
-    /// `app.trace().stop()`; `None` when tracing was not enabled).
+    /// `app.trace().stop()`; `None` when tracing was not enabled). The
+    /// logs tee's scope ends with the recording — the guard drops before
+    /// the archive finalizes, restoring the thread's previous default.
     pub fn finish(&mut self) -> Option<PathBuf> {
         if self.finished {
             return self.trace_path.clone();
         }
         self.finished = true;
         let recorder = self.trace.take()?;
+        drop(self.trace_log_guard.take());
         match recorder.stop() {
             Ok(file) => {
                 self.trace_path = Some(file.path.clone());
