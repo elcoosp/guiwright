@@ -34,7 +34,7 @@ use crate::schema::{
     DescribedIdentityV1, DescribedV1, EventKindV1, EventV1, GestureV1, GwpEvent, InputEventV1,
     InspectV1, MockV1, NodeKeyV1, RequestV1, ResolvedMatchV1, ResponseV1, ResumeCursorV1,
     ScreenshotV1, SelectorV1, SemActionV1, SnapshotNodeV1, SnapshotV1, SubscribeV1, TextMatchV1,
-    VideoV1, WindowInfoV1, WindowV1,
+    TraceV1, VideoV1, WindowInfoV1, WindowV1,
 };
 use crate::wait::{Eval, WaitState, WaitTracker};
 use guiwright_core::wait::CountMatch;
@@ -213,6 +213,43 @@ pub enum VideoReply {
     Started,
     /// The `Stop` arm's answer: the finalized recording file.
     File(VideoOutput),
+}
+
+/// The finalized §12 archive a [`ClientConn::trace`] stop arm answers
+/// (M97): the path the client-owned dir landed the
+/// `guiwright-<test>-<ts>.zip` at, plus the recorder stats that name what
+/// the archive carries. Never serialized itself (the reply rides
+/// `ResponseV1::TraceFile` byte-for-byte), so the schema stays
+/// byte-pinned (the [`VideoOutput`] rule).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraceOutput {
+    /// The archive's path (the §12 `guiwright-<test>-<ts>.zip` shape).
+    pub path: String,
+    /// Event rows recorded (`events.ndjson`, §12).
+    pub events: u64,
+    /// Frames recorded (the hash-deduped `frames/` set, §12).
+    pub frames: u64,
+    /// Records shed by the bounded SPSC ring (§12 backpressure — the
+    /// count rides the archive's `meta.json` too).
+    pub records_dropped: u64,
+    /// The finalized zip's size.
+    pub archive_bytes: u64,
+}
+
+/// The reply a [`ClientConn::trace`] call answers (M97): the §7 trace
+/// domain's replies are heterogeneous by wire design — the `Start` arm
+/// rides the shared `Pong` ack (the recorder is live), and only the
+/// `Stop` arm carries the finalized `TraceFile` payload. The union names
+/// that shape client-side instead of collapsing it into a bare `Option`
+/// that hides which command answered what — the same honesty the
+/// [`VideoReply`] union draws (never serialized itself, so the schema
+/// stays byte-pinned).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TraceReply {
+    /// The recorder is live — the `Start` arm's ack (`Pong` on the wire).
+    Started,
+    /// The `Stop` arm's answer: the finalized §12 archive.
+    File(TraceOutput),
 }
 
 /// The receipt a [`ClientConn::input`] answers (m56): the frame the raw
@@ -1116,6 +1153,48 @@ pub trait ClientConn: Send + 'static {
                     duration_ms,
                 })),
                 other => Err(GwpError::Protocol(format!("Video answered by {other:?}"))),
+            }
+        }
+    }
+
+    /// The §12 archive-control half of the trace domain as typed seam
+    /// sugar (M97): one [`RequestV1::Trace`] round trip — the client
+    /// starts a session-side `gwtrace/v1` recording
+    /// (`TraceV1::Start(TraceOptsV1)`, the test label + the client-owned
+    /// artifact dir) or stops and finalizes it (`TraceV1::Stop`),
+    /// answering the [`TraceReply`] union — the start arm acks
+    /// `Started`, the stop arm carries the finalized [`TraceOutput`] (the
+    /// archive path plus the §12 recorder stats). The domain's **Attach**
+    /// arm stays the M18 live feed ([`Self::subscribe`] /
+    /// [`Self::next_event`] + the viewer's `LiveFeed`), unchanged here.
+    /// Every [`ClientConn`] impl inherits the sugar, the same shape the
+    /// TypeScript client speaks (`traceStart()` / `traceStop()`).
+    ///
+    /// The single-slot honesty carries over unchanged (the video rules):
+    /// a second `Start` while an archive records answers the session's
+    /// typed rejection, and a `Stop` with nothing running answers the
+    /// same rejection ("idempotence via error", mirroring the `Clock`
+    /// rules). A pixel-less adapter records the session honestly — the
+    /// event rows land, the frame feed contributes nothing (`frames: 0`),
+    /// never a guessed raster.
+    fn trace(&mut self, cmd: TraceV1) -> impl Future<Output = Result<TraceReply, GwpError>> + Send {
+        async move {
+            match self.request(RequestV1::Trace(cmd)).await? {
+                ResponseV1::Pong => Ok(TraceReply::Started),
+                ResponseV1::TraceFile {
+                    path,
+                    events,
+                    frames,
+                    records_dropped,
+                    archive_bytes,
+                } => Ok(TraceReply::File(TraceOutput {
+                    path,
+                    events,
+                    frames,
+                    records_dropped,
+                    archive_bytes,
+                })),
+                other => Err(GwpError::Protocol(format!("Trace answered by {other:?}"))),
             }
         }
     }
