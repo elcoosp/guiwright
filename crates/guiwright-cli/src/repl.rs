@@ -1757,6 +1757,7 @@ impl Repl {
             "  get testid <id>             resolve a locator (strict mode)",
             "  … has_text <text> | has_not <locator> | has <locator> | first | last | nth <N>",
             "                              the §8.1 filter words on every locator (m93)",
+            "  … <get-args…> >> <get-args…> the descendant chain on every locator (m94)",
             "  hit <x> <y>                 which node occupies the point (M32 hit-test read)",
             "  describe <get-args…>        one node's identity facts (M37)",
             "  count <get-args…>           the set size, strict mode aside (M35 read pass)",
@@ -1925,22 +1926,74 @@ fn filter_word(tokens: &[String]) -> Option<usize> {
 /// Parse the `get`-shaped locator vocabulary shared by every get-args
 /// command (`get`, `count`, `all`, `texts`, `values`, `describe`,
 /// `snapshot under`, `wait`, `assert …`, `expect`, `inspect`): one
-/// selector — the base locator plus the §8.1 filter words — and its
-/// rendered form (the words the grammar speaks, so what you typed is
-/// what it prints). The tokens start at the locator kind — `role …`,
-/// `text …`, `label …`, `testid …`, `value …` — and may carry the
-/// narrowing words after it (`has_text <text…>`, `has_not <get-args…>`,
-/// `has <get-args…>`, `first`, `last`, `nth <N>`). `has`/`has_not` take
-/// a full locator, so they recurse on the remainder and end the fold
-/// (the wire nests `Filter` over `Has` over `Filter` already — the
-/// resolver owns the semantics, the REPL only composes the rows).
+/// selector — the base locator plus the §8.1 filter words, optionally
+/// chained — and its rendered form (the words the grammar speaks, so
+/// what you typed is what it prints). The tokens start at the locator
+/// kind — `role …`, `text …`, `label …`, `testid …`, `value …` — and may
+/// carry the narrowing words after it (`has_text <text…>`,
+/// `has_not <get-args…>`, `has <get-args…>`, `first`, `last`, `nth <N>`)
+/// and the `>>` chain binder between full locator segments (m94 — the
+/// m93 record's honest-list gap: the chain is now the prompt's
+/// vocabulary too). `has`/`has_not` take a full locator, so they recurse
+/// on the remainder and end the fold (the wire nests `Filter` over `Has`
+/// over `Filter` already — the resolver owns the semantics, the REPL
+/// only composes the rows).
 fn parse_selector(tokens: &[String]) -> Result<(SelectorV1, String), String> {
-    let split = filter_word(tokens).unwrap_or(tokens.len());
-    let (base_tokens, rest) = tokens.split_at(split);
-    let selector = parse_base_selector(base_tokens)?;
-    let selector = fold_filters(selector, rest)?;
+    let segments = split_chain(tokens)?;
+    let mut parsed: Vec<SelectorV1> = Vec::with_capacity(segments.len());
+    for segment in &segments {
+        let split = filter_word(segment).unwrap_or(segment.len());
+        let (base_tokens, rest) = segment.split_at(split);
+        let selector = parse_base_selector(base_tokens)?;
+        let selector = fold_filters(selector, rest)?;
+        parsed.push(selector);
+    }
+    let selector = if parsed.len() == 1 {
+        // One segment — the plain locator the grammar always spoke; the
+        // `All` row is the chain's own wire shape, not a wrapper.
+        parsed.remove(0)
+    } else {
+        // Composition order: source first, the descendants after — the
+        // kit `locator(child)` shape (M34), the row the resolver walks.
+        SelectorV1::All(parsed)
+    };
     let describe = render_selector(&selector);
     Ok((selector, describe))
+}
+
+/// The `>>` chain binder (m94 — the m93 record's honest-list gap:
+/// *"the REPL renders a pasted chain row (`a >> b`) but speaks no
+/// syntax for building one — the narrowing words are the prompt's
+/// vocabulary, the chain is the DSL's"*). The token splits the get-args
+/// into full locator segments, each parsed by the same base +
+/// filter-word path, so every get-args command speaks chains in one
+/// pass (the m93 one-seam rule). `>>` binds at chain level — the split
+/// runs before the filter fold, so a `has`/`has_not` inner carries no
+/// chain and a name carrying `>>` needs a different phrasing (the same
+/// reserved-word trade-off family the filter words documented).
+const CHAIN_TOKEN: &str = ">>";
+
+/// The chain split: the segments between `>>` tokens, none empty — a
+/// leading, a trailing or a doubled binder names the usage (the
+/// grammar's own words, the m93 error-honesty rule).
+fn split_chain(tokens: &[String]) -> Result<Vec<&[String]>, String> {
+    let usage = "`>>` needs a locator on both sides — e.g. `count role Group >> role Button`";
+    let mut segments: Vec<&[String]> = Vec::new();
+    let mut start = 0;
+    for (i, token) in tokens.iter().enumerate() {
+        if token == CHAIN_TOKEN {
+            if i == start {
+                return Err(usage.into());
+            }
+            segments.push(&tokens[start..i]);
+            start = i + 1;
+        }
+    }
+    if start == tokens.len() {
+        return Err(usage.into());
+    }
+    segments.push(&tokens[start..]);
+    Ok(segments)
 }
 
 /// The base locator arms — the grammar's `role | text | label | testid |
@@ -2474,8 +2527,8 @@ fn render_selector(selector: &SelectorV1) -> String {
         SelectorV1::Label(m) => format!("label {:?}", m.text),
         SelectorV1::TestId(id) => format!("testid {id:?}"),
         SelectorV1::Value(m) => format!("value {:?}", m.text),
-        // The REPL grammar speaks no chain tokens, but a pasted or
-        // recorded row can carry one — the core render's `>>` form.
+        // The grammar speaks the chain tokens (m94): what you typed is
+        // what the describe prints — the core render's `>>` form.
         SelectorV1::All(chain) => {
             let parts: Vec<String> = chain.iter().map(render_selector).collect();
             parts.join(" >> ")
