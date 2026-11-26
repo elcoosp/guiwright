@@ -58,6 +58,8 @@ export const RequestV1 = {
   DescribeIdentityState: 22,
   /** §8.1 state facts at set width (M70): the M64 walk payload in, the M68 identity-state row per match out — the state three for the whole set, one round trip. */
   DescribeAllIdentityState: 23,
+  /** §7 trace domain (M97): the archive-control Start/Stop arms — the session records the gwtrace/v1 archive (§12) over any door; the Attach arm is the M18 live feed, unchanged. */
+  Trace: 24,
 } as const;
 
 export const ClockV1 = {
@@ -87,6 +89,12 @@ export const InspectV1 = {
 } as const;
 
 export const VideoV1 = {
+  Start: 0,
+  Stop: 1,
+} as const;
+
+/** §7 trace domain (M97): the archive-control arms (the M18 Attach arm is the live feed). */
+export const TraceV1 = {
   Start: 0,
   Stop: 1,
 } as const;
@@ -196,6 +204,8 @@ export const ResponseV1 = {
   DescribedIdentityState: 25,
   /** §8.1 identity row's state facts at set width (M70): the M68 row per match, document order — the m64 row-widening rule's fourth link. */
   DescribedAllIdentityState: 26,
+  /** §7 trace domain reply (M97): the finalized gwtrace/v1 archive — path + the §12 recorder stats. */
+  TraceFile: 27,
 } as const;
 
 export const ErrorCode = {
@@ -288,6 +298,14 @@ export interface VideoOptsV1 {
   /** 0 = the driver default (25 fps). */
   fps: number;
   /** Client-owned artifact dir (Playwright parity); null = driver default. */
+  dir: string | null;
+}
+
+/** §7 trace domain (M97): the client-owned subset of the §12 archive options. */
+export interface TraceOptsV1 {
+  /** The test label the archive's meta.json carries (§12). */
+  test: string;
+  /** Client-owned artifact dir (Playwright parity, the video rule); null = driver default (GUIWRIGHT_TRACE_DIR or the OS temp dir). */
   dir: string | null;
 }
 
@@ -385,6 +403,15 @@ export interface VideoFile {
   duration_ms: number;
 }
 
+/** §7 trace domain reply (M97): the finalized gwtrace/v1 archive plus the §12 recorder stats. */
+export interface TraceFile {
+  path: string;
+  events: number;
+  frames: number;
+  records_dropped: number;
+  archive_bytes: number;
+}
+
 export interface ClockState {
   virtual_time_ms: number | null;
   paused: boolean;
@@ -454,6 +481,7 @@ export type GwpRequest =
   | { kind: "inspect"; cmd: InspectCmd }
   | { kind: "bye" }
   | { kind: "video"; cmd: VideoCmd }
+  | { kind: "trace"; cmd: TraceCmd }
   | { kind: "window"; cmd: WindowCmd }
   | { kind: "gesture"; cmd: GestureCmd }
   | { kind: "screenshot"; cmd: ScreenshotCmd }
@@ -557,6 +585,11 @@ export type VideoCmd =
   | { kind: "start"; opts: VideoOptsV1 }
   | { kind: "stop" };
 
+/** §7 trace domain (M97): the archive-control arms. */
+export type TraceCmd =
+  | { kind: "start"; opts: TraceOptsV1 }
+  | { kind: "stop" };
+
 /** §16 v0.4 multi-window: `Use` aims THIS connection at a window target. */
 export type WindowCmd = { kind: "list" } | { kind: "use"; handle: string };
 
@@ -638,6 +671,7 @@ export type GwpResponse =
   | { kind: "error"; code: number; message: string }
   | { kind: "bye" }
   | ({ kind: "video_file" } & VideoFile)
+  | ({ kind: "trace_file" } & TraceFile)
   | { kind: "windows"; windows: WindowInfoV1[] }
   | { kind: "window_used"; handle: string }
   | { kind: "gesture_done"; frame_seq: number; detail: string }
