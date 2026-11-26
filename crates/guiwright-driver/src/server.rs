@@ -39,7 +39,7 @@ use crate::adapter::{AdapterMeta, FrameworkAdapter, SemAction};
 use crate::clock::FRAME_STEP;
 use crate::events::{EventHub, Subscriber};
 use crate::gesture::Gesture;
-use crate::log_tail::{LOG_TAIL_CAPACITY, LogTail, LogTapLayer};
+use crate::log_tail::{LOG_TAIL_CAPACITY, LogTail, LogTap, LogTapLayer};
 use crate::session::Session;
 use guiwright_core::{CoreError, NodeKey, Selector};
 
@@ -654,20 +654,20 @@ fn run_session_thread<A: FrameworkAdapter>(
     // holds clones and feeds its own records onto the same stream, and
     // the knob implies the tail — `log_tail` stays the server-created
     // form and yields to it.
-    let (tail, _tap_guard) = if let Some(tap) = options.log_tap {
+    let (tail, tap, _tap_guard) = if let Some(tap) = options.log_tap {
         let tail = preset_tail.expect("start() validated the tap's tail");
         let guard = tracing::subscriber::set_default(
             tracing_subscriber::registry().with(LogTapLayer::new(&tap)),
         );
-        (Some(tail), Some(guard))
+        (Some(tail), Some(tap), Some(guard))
     } else if options.log_tail {
         let (tail, tap) = LogTail::new(LOG_TAIL_CAPACITY);
         let guard = tracing::subscriber::set_default(
             tracing_subscriber::registry().with(LogTapLayer::new(&tap)),
         );
-        (Some(tail), Some(guard))
+        (Some(tail), Some(tap), Some(guard))
     } else {
-        (None, None)
+        (None, None, None)
     };
     // The §15.6 shared-frame ring: the options knob names the path, the
     // `GUIWRIGHT_FRAME_RING` env var is the remote-mode fallback (the
@@ -682,6 +682,10 @@ fn run_session_thread<A: FrameworkAdapter>(
         adapter,
         options.seams,
         tail,
+        // The tap rides into the session: the §12 tee rebuilds the tail's
+        // layer beside its own while an archive records, so the live
+        // `EventV1::Log` flow keeps flowing.
+        tap,
         frame_ring,
     ));
 }
@@ -692,9 +696,16 @@ async fn session_loop<A: FrameworkAdapter>(
     adapter: A,
     seams: crate::seams::SeamRegistry,
     tail: Option<LogTail>,
+    tap: Option<LogTap>,
     frame_ring: Option<PathBuf>,
 ) {
     let mut session = Session::new(adapter);
+    // The §12 logs tee composes with the M14 tail: the session holds the
+    // tap so a recording archive's subscriber rebuilds the tail's layer
+    // beside its own (the live `EventV1::Log` flow keeps flowing).
+    if let Some(tap) = tap {
+        session.set_log_tap(tap);
+    }
     // App-boot seams are available to the whole session (§14).
     session.register_seams(&seams);
     // Attach: settle the app so the initial tree is visible (§6.3
