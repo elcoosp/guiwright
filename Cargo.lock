@@ -2121,7 +2121,10 @@ version = "1.0.0"
 dependencies = [
  "accesskit 0.25.2",
  "criterion",
+ "egui",
+ "guiwright-adapter-egui",
  "guiwright-adapter-iced",
+ "guiwright-adapter-masonry",
  "guiwright-core",
  "guiwright-driver",
  "guiwright-kit",
