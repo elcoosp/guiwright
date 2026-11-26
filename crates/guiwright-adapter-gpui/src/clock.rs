@@ -46,14 +46,24 @@ pub fn plan(cmd: ClockCmd) -> Vec<GpuiClockStep> {
     }
 }
 
-/// The clock precision the adapter reports in `Caps.clock` + traces (the
-/// M2 spike §2 "a GPUI adapter reports its precision in `Caps.clock`").
+/// The clock precision the adapter reports in traces (the M2 spike §2
+/// records the vocabulary; `Caps.clock` carries the capability bit —
+/// the precision word rides the adapter's own traces, not the wire).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClockPrecision {
     /// `test-support` dispatcher: deterministic rounds.
     VirtualRounds,
     /// Live mode: best-effort (real dispatcher, no seeding).
     BestEffort,
+}
+
+impl ClockPrecision {
+    /// The precision this engine's binding runs at: the glue binds the
+    /// seeded `test-support` dispatcher (§4.5), so embedded sessions are
+    /// deterministic rounds.
+    pub fn reported() -> Self {
+        Self::VirtualRounds
+    }
 }
 
 #[cfg(test)]
