@@ -263,7 +263,7 @@ fn encode_frame_png(
 /// carry, losslessly for the adapter-minted logical handles too
 /// (`node_id`'s normalization).
 fn diff_ids(keys: &[NodeKey]) -> Vec<u64> {
-    keys.iter().map(|key| u64::from(node_id(key).0)).collect()
+    keys.iter().map(|key| node_id(key).0).collect()
 }
 
 /// The `GestureDone` detail line: positions and event count, matching the
@@ -356,6 +356,17 @@ pub struct Session<A: FrameworkAdapter> {
     /// the session's own taps (tree diffs, presented frames, protocol
     /// calls, the clock ledger). `None` = not recording.
     trace: Option<TraceRecorder>,
+    /// The §12 `logs.ndjson` tee's subscriber scope: the thread-local
+    /// `tracing` default that routes the session thread's records into
+    /// the recording archive, installed at start and dropped at stop
+    /// (the guard restores the previous default — the live tail's layer
+    /// when the M14 knob is on, nothing otherwise). `None` = not recording.
+    trace_log_guard: Option<tracing::subscriber::DefaultGuard>,
+    /// The session thread's log tap (the M14 producer end), held so the
+    /// tee's subscriber can rebuild the tail's layer beside its own while
+    /// an archive records — the live `EventV1::Log` flow keeps flowing.
+    /// `None` = the session spawned without the tail.
+    log_tap: Option<crate::log_tail::LogTap>,
     /// The window scope the recording was started under (the m6 §5/m7 §4
     /// deferred half — "window-tagged streams ride the same handle
     /// vocabulary"): the scope root the presented frames crop to.
@@ -395,6 +406,8 @@ impl<A: FrameworkAdapter> Session<A> {
             video: None,
             video_scope: None,
             trace: None,
+            trace_log_guard: None,
+            log_tap: None,
             frame_ring: None,
             codegen: None,
             overlay_active: false,
@@ -404,6 +417,13 @@ impl<A: FrameworkAdapter> Session<A> {
 
     pub fn tree(&self) -> &TreeService {
         &self.tree
+    }
+
+    /// Adopt the session thread's log tap (the M14 producer end) — the
+    /// server hands its tap over at boot so the §12 tee's subscriber can
+    /// rebuild the tail's layer beside its own while an archive records.
+    pub(crate) fn set_log_tap(&mut self, tap: crate::log_tail::LogTap) {
+        self.log_tap = Some(tap);
     }
 
     /// The most recent presented frame stamp (§7, M12): the seq + hash
@@ -716,7 +736,26 @@ impl<A: FrameworkAdapter> Session<A> {
         if let Some(handle) = window {
             options = options.with_window(handle);
         }
-        self.trace = Some(TraceRecorder::start(options));
+        // The §12 `logs.ndjson` tee: while the archive records, the
+        // session thread's `tracing` records land in it — the layer
+        // `guiwright-trace` has shipped since the first archive cut, now
+        // installed by the surface that owns the recorder. The scope is
+        // the recording: a thread-local default swapped for the guard's
+        // lifetime, restored at stop. The M14 tail's layer rides beside
+        // it when the tap exists, so the live `EventV1::Log` flow keeps
+        // flowing while the tee captures.
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let (recorder, sink) = TraceRecorder::start_with_sink(options);
+        let layer = guiwright_trace::TraceLogLayer::new(sink);
+        self.trace_log_guard = Some(match &self.log_tap {
+            Some(tap) => tracing::subscriber::set_default(
+                tracing_subscriber::registry()
+                    .with(crate::log_tail::LogTapLayer::new(tap))
+                    .with(layer),
+            ),
+            None => tracing::subscriber::set_default(tracing_subscriber::registry().with(layer)),
+        });
+        self.trace = Some(recorder);
         Ok(())
     }
 
@@ -771,6 +810,11 @@ impl<A: FrameworkAdapter> Session<A> {
         }
         self.pump();
         let mut recorder = self.trace.take().expect("checked above");
+        // The tee's scope ends with the recording: drop the guard so the
+        // thread's previous default (the live tail's layer, or none)
+        // returns before the archive finalizes — a second archive re-tees
+        // from empty, never stacked layers.
+        drop(self.trace_log_guard.take());
         let ledger = self.clock_ledger();
         let mut previous_us: Option<u64> = None;
         for entry in ledger {
