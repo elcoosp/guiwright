@@ -14,6 +14,7 @@ accesskit.workspace = true
 accesskit_consumer.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
