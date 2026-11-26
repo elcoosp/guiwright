@@ -261,6 +261,9 @@ mod tests {
             schema: guiwright_trace::schema::SCHEMA.into(),
             test: "demo".into(),
             app: "demo".into(),
+            // The scoped stream's window tag (the m88-era field; a
+            // whole-session meta carries None — the serde default).
+            window: None,
             adapter: AdapterRecord {
                 name: "mock".into(),
                 framework: "fixture".into(),
