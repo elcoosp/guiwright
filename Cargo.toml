@@ -111,6 +111,11 @@ missing_panics_doc = "allow"
 # conversion. Rewriting it any other way hides the intent.
 cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
+# The same quantization shape at the test fixtures: the pixel fixture
+# rects (`fill_rect`, the window-recording pins) are known-positive
+# bounds walked into the u32 pixel domain — the guarded-`as` rule above
+# covers the sign half the same way.
+cast_sign_loss = "allow"
 # The kit's `expect(locator).to_be_visible()` surface keeps the
 # Playwright §16 shape: the `to_*` assertion methods consume the pending
 # builder by value (single-shot assertions — see kit/app.rs).
