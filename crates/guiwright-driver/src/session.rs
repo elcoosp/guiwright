@@ -31,6 +31,7 @@ use crate::clock::{ClockReport, ClockService, LedgerCommand};
 use crate::gesture::{Gesture, codegen_call, codegen_event_call, codegen_line, synthesize};
 use crate::seams::SeamRegistry;
 use guiwright_trace::video::{VideoOptions, VideoRecorder, VideoSummary};
+use guiwright_trace::{AdapterRecord, TraceFile, TraceOptions, TraceRecorder};
 
 /// Options for actions (§8.3 "Timeout & retries" + force mode).
 #[derive(Clone, Debug)]
@@ -257,6 +258,14 @@ fn encode_frame_png(
         .map_err(|e| CoreError::other(format!("shot PNG encode failed: {e}")))
 }
 
+/// Fold a diff summary's node keys to the recorder's node-id rows
+/// (`trees/diff.bin`, §12) — the AccessKit `NodeId` the session keys
+/// carry, losslessly for the adapter-minted logical handles too
+/// (`node_id`'s normalization).
+fn diff_ids(keys: &[NodeKey]) -> Vec<u64> {
+    keys.iter().map(|key| u64::from(node_id(key).0)).collect()
+}
+
 /// The `GestureDone` detail line: positions and event count, matching the
 /// golden-vector wording ("clicked at (12.5, 30) — 3 events").
 fn gesture_detail(gesture: &Gesture, events: usize) -> String {
@@ -341,6 +350,12 @@ pub struct Session<A: FrameworkAdapter> {
     /// Video recording service (§10, M3): present-frame capture riding
     /// the pump loop. `None` = not recording.
     video: Option<VideoRecorder>,
+    /// Trace archive recorder (§12, M97): the session-side `gwtrace/v1`
+    /// writer the wire Trace domain's Start/Stop arms control — the same
+    /// recorder the kit's embedded `enable_trace` path starts, fed from
+    /// the session's own taps (tree diffs, presented frames, protocol
+    /// calls, the clock ledger). `None` = not recording.
+    trace: Option<TraceRecorder>,
     /// The window scope the recording was started under (the m6 §5/m7 §4
     /// deferred half — "window-tagged streams ride the same handle
     /// vocabulary"): the scope root the presented frames crop to.
@@ -379,6 +394,7 @@ impl<A: FrameworkAdapter> Session<A> {
             reset_seam: "reset_state".into(),
             video: None,
             video_scope: None,
+            trace: None,
             frame_ring: None,
             codegen: None,
             overlay_active: false,
@@ -418,16 +434,17 @@ impl<A: FrameworkAdapter> Session<A> {
         let mut summary = PumpSummary::default();
 
         if let Some(update) = self.adapter.tree_update() {
-            let _diff = self.tree.apply_update(update);
+            let diff = self.tree.apply_update(update);
             self.tree_seq += 1;
             summary.tree_changed = true;
+            self.trace_diff(self.frame_seq, &diff);
         }
         if let Some(diff) = self.adapter.logical_snapshot() {
             // Level-2 adapters synthesize an AccessKit-shaped update
             // (§6.1): selectors, actionability and expect run unchanged on
             // the consumer tree; actions come back with the adapter-minted
             // NodeIds (session.rs `node_id`).
-            let _diff = self.tree.apply_update(diff.update);
+            let diff_summary = self.tree.apply_update(diff.update);
             for (node, test_id) in diff.test_ids {
                 self.tree.register_test_id(
                     guiwright_core::NodeKey::AccessKit {
@@ -439,6 +456,7 @@ impl<A: FrameworkAdapter> Session<A> {
             }
             self.tree_seq += 1;
             summary.tree_changed = true;
+            self.trace_diff(self.frame_seq, &diff_summary);
         }
 
         for stamp in &outcome.frames {
@@ -446,6 +464,27 @@ impl<A: FrameworkAdapter> Session<A> {
             self.last_presented = Some(*stamp);
             let _info = self.tree.frame_presented(stamp.hash);
             summary.frames_presented += 1;
+        }
+
+        // Trace archive frame feed (§12, M97): presented frames land as
+        // the archive's hash-deduped `frames/<seq>.png` set — the same
+        // whole-frame readback the video capture rides, gated on the
+        // adapter's §6.2 pixel row. A pixel-less adapter records the
+        // session honestly (`frames: 0` in the reply stats, no rows in
+        // the archive) — never a guessed raster. The recorder dedups by
+        // the stamp's own digest (§10's hash discipline at archive
+        // width), so a static span compresses to the first frame.
+        if self.trace.is_some() {
+            let caps = self.adapter.meta().caps;
+            if caps.last_frame || caps.render_frame {
+                for stamp in &outcome.frames {
+                    let frame = self.adapter.last_frame();
+                    let png = frame.as_ref().and_then(|f| encode_frame_png(f, None).ok());
+                    if let (Some(rec), Some(png)) = (self.trace.as_mut(), png) {
+                        rec.frame(stamp.seq, stamp.hash, png);
+                    }
+                }
+            }
         }
 
         // Video capture (§10, M3): every presented frame is offered to the
@@ -637,6 +676,137 @@ impl<A: FrameworkAdapter> Session<A> {
         recorder
             .stop()
             .map_err(|e| CoreError::Other(format!("video stop: {e}")))
+    }
+
+    // --- Trace service (§12, M97) ------------------------------------------
+
+    /// Start recording the session into a `gwtrace/v1` archive (§12)
+    /// under `dir`. The archive carries the session-side taps: the tree
+    /// diffs and presented frames the pump integrates, the protocol calls
+    /// the server dispatch records, and the virtual-clock ledger folded
+    /// at stop (`clock.bin`, §14 "clock.bin in traces replays timing").
+    /// `window` tags the stream with one window target (the m6 §5 handle
+    /// vocabulary the video scope rides). Refuses when an archive is
+    /// already recording (single-slot, the video rule).
+    pub fn trace_start_in(
+        &mut self,
+        dir: &Path,
+        test: &str,
+        window: Option<&str>,
+    ) -> Result<(), CoreError> {
+        if self.trace.is_some() {
+            return Err(CoreError::Other(
+                "a trace recording is already running".into(),
+            ));
+        }
+        let meta = self.adapter.meta();
+        let mut options = TraceOptions::new(
+            dir.join(format!(
+                "guiwright-trace-{}-{}.zip",
+                std::process::id(),
+                guiwright_trace::video::epoch_ms()
+            )),
+            test,
+            AdapterRecord {
+                name: meta.name.to_string(),
+                framework: meta.framework.to_string(),
+                framework_version: meta.framework_version.clone(),
+            },
+        );
+        if let Some(handle) = window {
+            options = options.with_window(handle);
+        }
+        self.trace = Some(TraceRecorder::start(options));
+        Ok(())
+    }
+
+    /// Start recording into the default directory (`GUIWRIGHT_TRACE_DIR`
+    /// or the OS temp dir) — the remote-mode default, since the client
+    /// learns the finalized archive from the `TraceFile` reply (§7).
+    pub fn trace_start(&mut self, test: &str) -> Result<(), CoreError> {
+        let dir = Self::default_trace_dir();
+        self.trace_start_in(&dir, test, None)
+    }
+
+    /// The artifact dir for default-dir starts (`GUIWRIGHT_TRACE_DIR` or
+    /// the OS temp dir).
+    fn default_trace_dir() -> PathBuf {
+        std::env::var_os("GUIWRIGHT_TRACE_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
+    }
+
+    /// Record one protocol call (§12 `events.ndjson`: "input events,
+    /// semantic actions and protocol calls") — the server dispatch's tap.
+    /// No-op unless an archive is recording.
+    pub fn trace_protocol(&mut self, kind: &'static str) {
+        let frame = self.frame_seq();
+        if let Some(rec) = self.trace.as_mut() {
+            rec.event(frame, "protocol", kind);
+        }
+    }
+
+    /// Feed one applied tree diff into the archive (`trees/diff.bin`,
+    /// §12) — the pump's `TreeDiffSummary` folded to the recorder's
+    /// node-id rows. No-op unless an archive is recording.
+    fn trace_diff(&mut self, frame_seq: u64, diff: &guiwright_core::TreeDiffSummary) {
+        let Some(rec) = self.trace.as_mut() else {
+            return;
+        };
+        rec.tree_diff(
+            frame_seq,
+            diff_ids(&diff.added),
+            diff_ids(&diff.updated),
+            diff_ids(&diff.removed),
+            diff.focus_changed,
+        );
+    }
+
+    /// Stop and finalize the archive; one final pump lands the last
+    /// frame's feed before the zip closes (§15.4, the video stop rule).
+    /// The virtual-clock ledger folds into `clock.bin` here — the archive
+    /// is finalized at stop, so the whole ledger lands once. Idempotence
+    /// via error: stopping twice is an error, mirroring the video rules.
+    pub fn trace_stop(&mut self) -> Result<TraceFile, CoreError> {
+        if self.trace.is_none() {
+            return Err(CoreError::Other("no trace recording is running".into()));
+        }
+        self.pump();
+        let mut recorder = self.trace.take().expect("checked above");
+        let ledger = self.clock_ledger();
+        let mut previous_us: Option<u64> = None;
+        for entry in ledger {
+            let command = match entry.command {
+                crate::clock::LedgerCommand::InstallVirtual => {
+                    guiwright_trace::ClockCommand::InstallVirtual
+                }
+                crate::clock::LedgerCommand::FastForward => {
+                    let delta = entry
+                        .virtual_time_us
+                        .saturating_sub(previous_us.unwrap_or(0));
+                    guiwright_trace::ClockCommand::FastForward { micros: delta }
+                }
+                crate::clock::LedgerCommand::RunFor => {
+                    guiwright_trace::ClockCommand::RunFor { micros: 0 }
+                }
+                crate::clock::LedgerCommand::Pause => guiwright_trace::ClockCommand::Pause,
+                crate::clock::LedgerCommand::Resume => guiwright_trace::ClockCommand::Resume,
+                crate::clock::LedgerCommand::SetTime => {
+                    guiwright_trace::ClockCommand::FastForward {
+                        micros: entry
+                            .virtual_time_us
+                            .saturating_sub(previous_us.unwrap_or(0)),
+                    }
+                }
+            };
+            recorder.clock_jump(guiwright_trace::ClockJump {
+                frame_seq: entry.frame_seq,
+                command,
+                virtual_time_us: entry.virtual_time_us,
+            });
+            previous_us = Some(entry.virtual_time_us);
+        }
+        recorder
+            .stop()
+            .map_err(|e| CoreError::Other(format!("trace stop: {e}")))
     }
 
     /// Is a recording currently running?
