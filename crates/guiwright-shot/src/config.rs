@@ -171,9 +171,7 @@ mod tests {
         )
         .expect("unknown keys must not break parsing");
         assert_eq!(
-            cfg.screenshots.effective_for("linux")
-                .threshold
-                .to_bits(),
+            cfg.screenshots.effective_for("linux").threshold.to_bits(),
             0.6f32.to_bits()
         );
     }
