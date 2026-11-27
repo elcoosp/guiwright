@@ -24,6 +24,13 @@
 //! with the error message). Extra attributes (`#[ignore]`,
 //! `#[should_panic]`) are carried over to the generated test.
 //!
+//! A failing test's report carries the §12 deep link: `App::finish`
+//! finalizes the archive *before* the outcome reports — a failing
+//! scenario's trace is the valuable one (the runner's own rule) — and a
+//! recording that was armed (`GW_TRACE` or `enable_trace`) adds
+//! `trace: <path> (guiwright show-trace <path>)` under the error line
+//! (§12 "'open on failure' deep-links from assertion errors").
+//!
 //! `#[seam]` (§14 "State seams") marks an app function as a reset/init
 //! hook for the mock domain. The original function stays untouched; the
 //! macro additionally generates `pub fn __gw_seam_<name>(registry)` that
@@ -73,18 +80,36 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Unit bodies report `()`; Result bodies propagate the error message
     // (any `Result<(), E: Display>` shape works — the standard one).
+    //
+    // The §12 "open on failure" deep link: `finish` finalizes the archive
+    // BEFORE the outcome reports — a failing scenario's trace is the
+    // valuable one (the CLI runner's own rule) — and the armed
+    // recording's path rides the report through
+    // `TestOutcome::report_with_trace` (`None` = no archive, the legacy
+    // line unchanged). Both body shapes share the order.
     let outcome = match &input.sig.output {
         ReturnType::Default => quote! {
             let __gw_outcome = __gw_body(&mut __gw_app);
-            guiwright_kit::TestOutcome::report(__gw_outcome, __GW_NAME);
+            let __gw_trace = __gw_app.finish();
+            guiwright_kit::TestOutcome::report_with_trace(
+                __gw_outcome,
+                __GW_NAME,
+                __gw_trace.as_deref(),
+            );
         },
         ReturnType::Type(_, _) => quote! {
             let __gw_outcome = __gw_body(&mut __gw_app);
+            let __gw_trace = __gw_app.finish();
             match __gw_outcome {
-                Ok(()) => guiwright_kit::TestOutcome::report(Ok::<(), String>(()), __GW_NAME),
-                Err(__gw_err) => guiwright_kit::TestOutcome::report(
+                Ok(()) => guiwright_kit::TestOutcome::report_with_trace(
+                    Ok::<(), String>(()),
+                    __GW_NAME,
+                    __gw_trace.as_deref(),
+                ),
+                Err(__gw_err) => guiwright_kit::TestOutcome::report_with_trace(
                     Err::<(), String>(__gw_err.to_string()),
                     __GW_NAME,
+                    __gw_trace.as_deref(),
                 ),
             }
         },
@@ -98,7 +123,6 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
             fn __gw_body(#app_arg) #output #body
             let mut __gw_app = guiwright_kit::App::launch_fixture(__GW_NAME);
             #outcome
-            __gw_app.finish();
         }
     };
     expanded.into()
